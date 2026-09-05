@@ -8,24 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN cargo install portablemc-cli --root /usr/local
 
-# Publish the API once during the image build. Runtime startup never restores or compiles source code.
-FROM debian:13@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1 AS dotnet-builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl default-jdk-headless libicu-dev maven \
- && rm -rf /var/lib/apt/lists/* \
- && curl --fail --location --silent --show-error --retry 5 --retry-all-errors https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
- && chmod +x /tmp/dotnet-install.sh \
- && /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet \
- && rm /tmp/dotnet-install.sh
-
-ENV DOTNET_ROOT=/usr/share/dotnet
-ENV PATH="${DOTNET_ROOT}:${PATH}"
-
-WORKDIR /source
-COPY . .
-RUN mvn --batch-mode --file Agent/pom.xml package
-RUN dotnet publish PortableMinecraftClient.csproj --configuration Release --output /publish /p:UseAppHost=false
-
 # Runtime stage
 FROM debian:13@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1 AS runtime
 
@@ -156,7 +138,7 @@ RUN mkdir -p "$HOME/.minecraft" && touch "$HOME/.minecraft/options.txt"
 
 WORKDIR /app
 
-COPY --chmod=0755 list-minecraft-release-versions portablemc-dry-run-with-retries java-x86_64 /usr/local/bin/
+COPY --chmod=0755 list-minecraft-release-versions portablemc-dry-run-with-retries /usr/local/bin/
 RUN ln -s /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 EXPOSE 80
@@ -166,19 +148,6 @@ ENV CURSEFORGE_API_BASE_URL=https://api.curseforge.com
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 CMD curl --fail --silent --output /dev/null http://127.0.0.1/api/health || exit 1
 ENTRYPOINT ["tini", "--", "portableminecraftclient-entrypoint"]
 
-FROM scratch AS application-files
-
-COPY --from=dotnet-builder /publish/ /app/
-COPY --from=dotnet-builder /source/Agent/target/void-client-agent.jar /opt/portableminecraftclient/void-client-agent.jar
-COPY --chmod=0755 entrypoint /usr/local/bin/portableminecraftclient-entrypoint
-COPY --chmod=0755 launch-portableminecraftclient /usr/local/bin/launch-portableminecraftclient
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY options.txt sodium-options.json splash.tcl /opt/portableminecraftclient/
-
-FROM runtime AS latest
-
-COPY --from=application-files / /
-
 FROM runtime AS offline-assets
 
 ARG FIRST_RELEASE_VERSION=1.7.2
@@ -186,15 +155,47 @@ ARG FIRST_RELEASE_VERSION=1.7.2
 # Dry-run all release versions in reverse order (from oldest to latest)
 RUN list-minecraft-release-versions "$FIRST_RELEASE_VERSION" | while IFS= read -r minecraftVersion; do portablemc-dry-run-with-retries "mojang:$minecraftVersion"; done
 
-FROM offline-assets AS offline
-
-COPY --from=application-files / /
-
 FROM runtime AS version-assets
 
 ARG MINECRAFT_VERSION
 RUN test -n "$MINECRAFT_VERSION"
 RUN portablemc-dry-run-with-retries "mojang:$MINECRAFT_VERSION"
+
+# Publish the API once during the image build. Runtime startup never restores or compiles source code.
+FROM debian:13@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1 AS dotnet-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl default-jdk-headless libicu-dev maven \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl --fail --location --silent --show-error --retry 5 --retry-all-errors https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+ && chmod +x /tmp/dotnet-install.sh \
+ && /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet \
+ && rm /tmp/dotnet-install.sh
+
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH="${DOTNET_ROOT}:${PATH}"
+
+WORKDIR /source
+COPY . .
+RUN mvn --batch-mode --file Agent/pom.xml package
+RUN dotnet publish PortableMinecraftClient.csproj --configuration Release --output /publish /p:UseAppHost=false
+
+FROM scratch AS application-files
+
+COPY --from=dotnet-builder /publish/ /app/
+COPY --from=dotnet-builder /source/Agent/target/void-client-agent.jar /opt/portableminecraftclient/void-client-agent.jar
+COPY --chmod=0755 entrypoint /usr/local/bin/portableminecraftclient-entrypoint
+COPY --chmod=0755 launch-portableminecraftclient /usr/local/bin/launch-portableminecraftclient
+COPY --chmod=0755 java-x86_64 /usr/local/bin/java-x86_64
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY options.txt sodium-options.json splash.tcl /opt/portableminecraftclient/
+
+FROM runtime AS latest
+
+COPY --from=application-files / /
+
+FROM offline-assets AS offline
+
+COPY --from=application-files / /
 
 FROM version-assets AS version
 
