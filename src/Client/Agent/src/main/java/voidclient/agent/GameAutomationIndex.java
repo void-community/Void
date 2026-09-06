@@ -115,7 +115,7 @@ final class GameAutomationIndex {
 
     private static void addType(Map<String, ClassNode> types, InputStream input) throws IOException {
         ClassNode type = new ClassNode();
-        new ClassReader(input).accept(type, 0);
+        new ClassReader(input).accept(type, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
         types.put(type.name, type);
     }
 

@@ -8,6 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN cargo install portablemc-cli --root /usr/local
 
+# Debian 12 still packages the LWJGL 2 JNI libraries used by legacy clients.
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS legacy-natives
+
+WORKDIR /native-packages
+RUN apt-get update && apt-get download liblwjgl-java-jni libjinput-jni
+
 # Runtime stage
 FROM debian:13@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1 AS runtime
 
@@ -18,6 +24,7 @@ ENV LIBGL_ALWAYS_SOFTWARE=1
 
 # Copy pre-built portablemc binary from builder
 COPY --from=builder /usr/local/bin/portablemc /usr/local/bin/portablemc
+COPY --from=legacy-natives /native-packages/ /tmp/legacy-natives/
 
 # Install only runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype6 \
     libgl1-mesa-dri \
     libicu-dev \
+    libopenal1 \
     libxcursor1 \
     libxi6 \
     libxrandr2 \
@@ -52,7 +60,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xxd \
     xvfb \
     xfwm4 \
- && rm -rf /var/lib/apt/lists/*
+    /tmp/legacy-natives/*.deb \
+ && rm -rf /var/lib/apt/lists/* /tmp/legacy-natives
 
 # Mojang does not publish ARM64 JVMs for every Java version required by older clients.
 RUN set -e; if [ "$TARGETARCH" = "arm64" ]; then \
@@ -186,6 +195,7 @@ COPY --from=dotnet-builder /source/Agent/target/void-client-agent.jar /opt/porta
 COPY --chmod=0755 entrypoint /usr/local/bin/portableminecraftclient-entrypoint
 COPY --chmod=0755 launch-portableminecraftclient /usr/local/bin/launch-portableminecraftclient
 COPY --chmod=0755 java-x86_64 /usr/local/bin/java-x86_64
+COPY --chmod=0755 java-arm64-lwjgl2 /usr/local/bin/java-arm64-lwjgl2
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY options.txt sodium-options.json splash.tcl /opt/portableminecraftclient/
 

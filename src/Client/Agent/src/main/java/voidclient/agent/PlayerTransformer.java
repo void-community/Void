@@ -3,11 +3,12 @@ package voidclient.agent;
 import java.lang.instrument.ClassFileTransformer;
 import java.security.ProtectionDomain;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
-import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -31,20 +32,21 @@ final class PlayerTransformer implements ClassFileTransformer {
     }
 
     static byte[] instrumentPlayerConstructors(byte[] classFileBuffer) {
-        ClassNode type = new ClassNode();
-        new ClassReader(classFileBuffer).accept(type, 0);
-        boolean declaresProfile = false;
-
-        for (FieldNode field : type.fields) {
-            if (GameProfileDescriptor.equals(field.desc)) {
-                declaresProfile = true;
-                break;
+        ClassReader reader = new ClassReader(classFileBuffer);
+        final boolean[] declaresProfile = {false};
+        reader.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public FieldVisitor visitField(int access, String name, String descriptor, String signature, Object value) {
+                declaresProfile[0] |= GameProfileDescriptor.equals(descriptor);
+                return null;
             }
-        }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
 
-        if (!declaresProfile)
+        if (!declaresProfile[0])
             return null;
 
+        ClassNode type = new ClassNode();
+        reader.accept(type, 0);
         boolean changed = false;
 
         for (MethodNode method : type.methods) {

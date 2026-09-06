@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+for argument in "$@"; do
+  case "$argument" in
+    -Djava.library.path=*)
+      native_library_directory="${argument#-Djava.library.path=}"
+
+      if [[ -f "$native_library_directory/liblwjgl64.so" ]]; then
+        cp /usr/lib/jni/liblwjgl.so "$native_library_directory/liblwjgl64.so"
+        cp /usr/lib/jni/libjinput.so "$native_library_directory/libjinput-linux64.so"
+        cp /usr/lib/aarch64-linux-gnu/libopenal.so.1 "$native_library_directory/libopenal64.so"
+      fi
+      ;;
+  esac
+done
+
+exec /usr/lib/jvm/zulu-8/bin/java "$@"

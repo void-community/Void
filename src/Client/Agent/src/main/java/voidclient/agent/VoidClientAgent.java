@@ -34,6 +34,7 @@ public final class VoidClientAgent {
             Tracker.initialize(instrumentation, parsedArguments.expectedName);
             GameAutomationController.initialize(instrumentation);
             instrumentation.addTransformer(new NettyReadInterestTransformer(), true);
+            instrumentation.addTransformer(new DataFixerWarmupTransformer(), true);
             instrumentation.addTransformer(new PlayerTransformer());
             instrumentation.addTransformer(new GameAutomationTransformer(), true);
 
@@ -59,7 +60,8 @@ public final class VoidClientAgent {
                 continue;
 
             try {
-                if (NettyReadInterestTransformer.ChannelName.equals(type.getName().replace('.', '/'))) {
+                String className = type.getName().replace('.', '/');
+                if (NettyReadInterestTransformer.ChannelName.equals(className) || DataFixerWarmupTransformer.BuilderName.equals(className)) {
                     instrumentation.retransformClasses(type);
                     continue;
                 }
@@ -67,7 +69,6 @@ public final class VoidClientAgent {
                 java.security.ProtectionDomain protectionDomain = type.getProtectionDomain();
                 java.security.CodeSource codeSource = protectionDomain == null ? null : protectionDomain.getCodeSource();
                 GameAutomationIndex.IndexedCode index = GameAutomationIndex.index(codeSource == null ? null : codeSource.getLocation());
-                String className = type.getName().replace('.', '/');
 
                 if (index != null && (index.plan.frame.owner.equals(className) || index.plan.rejectionCallbacks.containsKey(className)))
                     instrumentation.retransformClasses(type);

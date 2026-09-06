@@ -265,7 +265,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
         private async Task StartVanillaAsync(CancellationToken cancellationToken = default)
         {
-            var memoryMb = ProtocolVersion >= ProtocolVersion.MINECRAFT_26_1 ? 4096 : 2048;
+            var memoryMb = ProtocolVersion >= ProtocolVersion.MINECRAFT_26_1 ? 2048 : 1024;
             var request = new
             {
                 version = ProtocolVersion.FirstRelease.ToString(),
