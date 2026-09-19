@@ -65,6 +65,9 @@ jobs:
           CACHE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/portable-minecraft-client-buildcache
           MAX_ATTEMPTS: 5
           RETRY_DELAY_SECONDS: 10
+          # Fixed epoch for rewrite-timestamp: layers with unchanged content keep their digest across
+          # uncached rebuilds, so pulls do not download the multi-gigabyte asset layers again.
+          SOURCE_DATE_EPOCH: 1704067200
         run: |
           set -euo pipefail
 
@@ -77,8 +80,7 @@ jobs:
               docker buildx build
               --platform linux/amd64,linux/arm64
               --target "$target"
-              --tag "$image"
-              --push
+              --output "type=image,name=$image,push=true,rewrite-timestamp=true"
               --cache-from "type=registry,ref=$CACHE_REPOSITORY:runtime"
               --cache-from "type=registry,ref=$image"
               --cache-to type=inline
