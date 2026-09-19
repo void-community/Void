@@ -67,7 +67,7 @@ jobs:
           RETRY_DELAY_SECONDS: 10
           # Fixed epoch for rewrite-timestamp: layers with unchanged content keep their digest across
           # uncached rebuilds, so pulls do not download the multi-gigabyte asset layers again.
-          SOURCE_DATE_EPOCH: 1704067200
+          SOURCE_DATE_EPOCH: 0
         run: |
           set -euo pipefail
 
