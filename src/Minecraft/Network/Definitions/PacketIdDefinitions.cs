@@ -43,7 +43,8 @@ public static class PacketIdDefinitions
         new(0x63, ProtocolVersion.MINECRAFT_1_21_2),
         new(0x62, ProtocolVersion.MINECRAFT_1_21_5),
         new(0x67, ProtocolVersion.MINECRAFT_1_21_9),
-        new(0x69, ProtocolVersion.MINECRAFT_26_1)
+        new(0x69, ProtocolVersion.MINECRAFT_26_1),
+        new(0x6B, ProtocolVersion.MINECRAFT_26_3)
     ];
 
     /// <summary>Mappings for the serverbound set-held-item packet.</summary>
@@ -62,7 +63,8 @@ public static class PacketIdDefinitions
         new(0x31, ProtocolVersion.MINECRAFT_1_21_2),
         new(0x33, ProtocolVersion.MINECRAFT_1_21_4),
         new(0x34, ProtocolVersion.MINECRAFT_1_21_6),
-        new(0x35, ProtocolVersion.MINECRAFT_26_1)
+        new(0x35, ProtocolVersion.MINECRAFT_26_1),
+        new(0x36, ProtocolVersion.MINECRAFT_26_3)
     ];
 
     #endregion
@@ -313,7 +315,8 @@ public static class PacketIdDefinitions
         new(0x27, ProtocolVersion.MINECRAFT_1_21_2),
         new(0x26, ProtocolVersion.MINECRAFT_1_21_5),
         new(0x2B, ProtocolVersion.MINECRAFT_1_21_9),
-        new(0x2C, ProtocolVersion.MINECRAFT_26_1)
+        new(0x2C, ProtocolVersion.MINECRAFT_26_1),
+        new(0x2D, ProtocolVersion.MINECRAFT_26_3)
     ];
 
     /// <summary>Mappings for the clientbound play disconnect packet.</summary>
@@ -403,7 +406,8 @@ public static class PacketIdDefinitions
         new(0x73, ProtocolVersion.MINECRAFT_1_21_2),
         new(0x72, ProtocolVersion.MINECRAFT_1_21_5),
         new(0x77, ProtocolVersion.MINECRAFT_1_21_9),
-        new(0x79, ProtocolVersion.MINECRAFT_26_1)
+        new(0x79, ProtocolVersion.MINECRAFT_26_1),
+        new(0x7C, ProtocolVersion.MINECRAFT_26_3)
     ];
 
     /// <summary>Mappings for the clientbound start-configuration packet.</summary>
@@ -415,7 +419,8 @@ public static class PacketIdDefinitions
         new(0x70, ProtocolVersion.MINECRAFT_1_21_2),
         new(0x6F, ProtocolVersion.MINECRAFT_1_21_5),
         new(0x74, ProtocolVersion.MINECRAFT_1_21_9),
-        new(0x76, ProtocolVersion.MINECRAFT_26_1)
+        new(0x76, ProtocolVersion.MINECRAFT_26_1),
+        new(0x78, ProtocolVersion.MINECRAFT_26_3)
     ];
 
     /// <summary>Mappings for the clientbound play plugin-message packet.</summary>

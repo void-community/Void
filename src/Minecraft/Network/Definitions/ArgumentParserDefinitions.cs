@@ -425,6 +425,7 @@ public class ArgumentParserDefinitions
         ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:uuid",
             new()
             {
+                [ProtocolVersion.MINECRAFT_26_3] = 61,
                 [ProtocolVersion.MINECRAFT_1_21_6] = 56,
                 [ProtocolVersion.MINECRAFT_1_21_5] = 54,
                 [ProtocolVersion.MINECRAFT_1_20_5] = 53,
@@ -461,7 +462,33 @@ public class ArgumentParserDefinitions
         ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:dialog",
             new()
             {
+                [ProtocolVersion.MINECRAFT_26_3] = 58,
                 [ProtocolVersion.MINECRAFT_1_21_6] = 55
+            })),
+        ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:context_float_provider",
+            new()
+            {
+                [ProtocolVersion.MINECRAFT_26_3] = 55
+            })),
+        ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:context_int_provider",
+            new()
+            {
+                [ProtocolVersion.MINECRAFT_26_3] = 56
+            })),
+        ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:slot_source",
+            new()
+            {
+                [ProtocolVersion.MINECRAFT_26_3] = 57
+            })),
+        ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:feature",
+            new()
+            {
+                [ProtocolVersion.MINECRAFT_26_3] = 59
+            })),
+        ArgumentParserDefinition.From(new ArgumentSerializerMapping("minecraft:swing_animation",
+            new()
+            {
+                [ProtocolVersion.MINECRAFT_26_3] = 60
             }))
 
         #endregion
