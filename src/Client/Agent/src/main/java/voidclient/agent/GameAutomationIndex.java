@@ -52,6 +52,8 @@ final class GameAutomationIndex {
 
             return indexed;
         } catch (Throwable exception) {
+            // Remember the failure; re-reading the whole location for every loaded class stalls game startup.
+            IndexedLocations.put(key, null);
             GameAutomationController.recordIndexFailure(key, exception.getClass().getName() + ": " + exception.getMessage());
             return null;
         }

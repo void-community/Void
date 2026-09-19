@@ -46,6 +46,34 @@ public final class ClientFrameDiscoveryTest {
     }
 
     @Test
+    public void discoversSdlGraphicsLoops() {
+        for (String[] presentation : new String[][] {
+            { "org/lwjgl/sdl/SDLVideo", "SDL_GL_SwapWindow", "(J)Z" },
+            { "org/lwjgl/vulkan/KHRSwapchain", "vkQueuePresentKHR", "(Lorg/lwjgl/vulkan/VkQueue;Lorg/lwjgl/vulkan/VkPresentInfoKHR;)I" } }) {
+            Map<String, ClassNode> types = new HashMap<String, ClassNode>();
+            ClassNode client = type(types, "renamed/Client");
+            MethodNode loop = method(client, "outer", "()V");
+            LabelNode start = new LabelNode();
+            loop.instructions.add(start);
+            ClassNode events = type(types, "renamed/Events");
+            call(method(events, "poll", "()V"), "org/lwjgl/sdl/SDLEvents", "SDL_PollEvent", "(Lorg/lwjgl/sdl/SDL_Event;)Z");
+            call(loop, events.name, "poll", "()V");
+            call(loop, client.name, "frame", "(Z)V");
+            call(loop, client.name, "recover", "()V");
+            loop.instructions.add(new JumpInsnNode(Opcodes.GOTO, start));
+            MethodNode frame = method(client, "frame", "(Z)V");
+            call(frame, presentation[0], presentation[1], presentation[2]);
+            // Recovery paths also pump events and present, only further from the presentation call.
+            MethodNode recover = method(client, "recover", "()V");
+            call(recover, events.name, "poll", "()V");
+            call(recover, client.name, "frame", "(Z)V");
+            FramePlan plan = ClientFrameDiscovery.discover(types, client.name);
+            Assert.assertEquals("outer", plan.loopName);
+            Assert.assertEquals("frame", plan.frameName);
+        }
+    }
+
+    @Test
     public void findsLoopWhenScreenOwnershipIsComposed() {
         Map<String, ClassNode> types = loop();
         ClassNode screens = type(types, "renamed/Screens");

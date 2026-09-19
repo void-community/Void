@@ -21,6 +21,8 @@ ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LIBGL_ALWAYS_SOFTWARE=1
+# SDL-based clients request an sRGB framebuffer that Xvfb does not expose through GLX.
+ENV SDL_VIDEO_FORCE_EGL=1
 
 # Copy pre-built portablemc binary from builder
 COPY --from=builder /usr/local/bin/portablemc /usr/local/bin/portablemc
@@ -34,6 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     imagemagick \
     jattach \
     libasound2 \
+    libegl-mesa0 \
+    libegl1 \
     libflite1 \
     libfontconfig1 \
     libfreetype6 \

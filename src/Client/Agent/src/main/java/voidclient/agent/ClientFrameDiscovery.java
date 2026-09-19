@@ -35,6 +35,7 @@ final class ClientFrameDiscovery {
         Map<String, Set<String>> callers = new HashMap<String, Set<String>>();
         Set<String> presentation = new HashSet<String>();
         Set<String> windowClose = new HashSet<String>();
+        Set<String> eventPump = new HashSet<String>();
         Set<String> calledClientMethods = new HashSet<String>();
         for (ClassNode type : types.values()) {
             Set<String> parents = parents(types, type, new HashSet<String>());
@@ -64,17 +65,24 @@ final class ClientFrameDiscovery {
                         calledClientMethods.add(key(call.owner, call.name, call.desc));
                     // Stable graphics-library contracts; no Minecraft symbols or version tables.
                     if ("org/lwjgl/glfw/GLFW".equals(call.owner) && "glfwSwapBuffers".equals(call.name)
+                        || "org/lwjgl/sdl/SDLVideo".equals(call.owner) && "SDL_GL_SwapWindow".equals(call.name)
+                        || "org/lwjgl/vulkan/KHRSwapchain".equals(call.owner) && "vkQueuePresentKHR".equals(call.name)
                         || "org/lwjgl/opengl/Display".equals(call.owner) && "update".equals(call.name))
                         presentation.add(callee);
                     if ("org/lwjgl/glfw/GLFW".equals(call.owner) && "glfwWindowShouldClose".equals(call.name)
                         || "org/lwjgl/opengl/Display".equals(call.owner) && "isCloseRequested".equals(call.name))
                         windowClose.add(callee);
+                    if ("org/lwjgl/sdl/SDLEvents".equals(call.owner) && "SDL_PollEvent".equals(call.name))
+                        eventPump.add(callee);
                 }
             }
         }
 
         Map<String, Integer> presents = distances(callers, presentation);
         Map<String, Integer> closes = distances(callers, windowClose);
+        Map<String, Integer> pumps = distances(callers, eventPump);
+        // SDL has no close query: its loop body pumps the event queue, so the frame is the call nearest to presentation.
+        boolean closeQueried = !windowClose.isEmpty();
         List<FramePlan> candidates = new ArrayList<FramePlan>();
         int shortest = Integer.MAX_VALUE;
         for (String clientName : owners)
@@ -89,6 +97,8 @@ final class ClientFrameDiscovery {
                 JumpInsnNode jump = (JumpInsnNode) instruction;
                 int start = method.instructions.indexOf(jump.label);
                 int end = method.instructions.indexOf(jump);
+                if (!closeQueried && !reaches(method, start, end, pumps))
+                    continue;
                 for (int position = start; position < end; position++) {
                     AbstractInsnNode nested = method.instructions.get(position);
                     if (!(nested instanceof MethodInsnNode))
@@ -96,10 +106,10 @@ final class ClientFrameDiscovery {
                     MethodInsnNode call = (MethodInsnNode) nested;
                     String callee = key(call.owner, call.name, call.desc);
                     if (!clientName.equals(call.owner) || call.getOpcode() == Opcodes.INVOKESTATIC
-                        || !presents.containsKey(callee) || !closes.containsKey(callee)
+                        || !presents.containsKey(callee) || closeQueried && !closes.containsKey(callee)
                         || !found.add(callee))
                         continue;
-                    int distance = closes.get(callee).intValue();
+                    int distance = (closeQueried ? closes : presents).get(callee).intValue();
                     if (distance < shortest) {
                         candidates.clear();
                         shortest = distance;
@@ -110,6 +120,18 @@ final class ClientFrameDiscovery {
             }
         }
         return candidates;
+    }
+
+    private static boolean reaches(MethodNode method, int start, int end, Map<String, Integer> distances) {
+        for (int position = start; position < end; position++) {
+            AbstractInsnNode instruction = method.instructions.get(position);
+            if (!(instruction instanceof MethodInsnNode))
+                continue;
+            MethodInsnNode call = (MethodInsnNode) instruction;
+            if (distances.containsKey(key(call.owner, call.name, call.desc)))
+                return true;
+        }
+        return false;
     }
 
     private static Set<String> parents(Map<String, ClassNode> types, ClassNode type, Set<String> result) {
