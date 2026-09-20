@@ -3,6 +3,7 @@
   "extends": [
     "config:best-practices"
   ],
+  "commitMessageAction": "⬆️ Update",
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
