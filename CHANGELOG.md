@@ -1,5 +1,124 @@
 # Changelog
 
+## [0.6.0](https://github.com/void-community/Void/compare/v0.5.17...v0.6.0) (2026-09-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **client:** replaced legacy client endpoints with /api/game/* routes.
+
+### Features
+
+* **api:** ✨ added chat input handling and configuration options ([47f5d5f](https://github.com/void-community/Void/commit/47f5d5ff2112cf3133b35fef6a4d04c3bc34cdd4))
+* **api:** ✨ updated environment variables for PaperServer configuration ([8b612eb](https://github.com/void-community/Void/commit/8b612ebf9d9811c4e48e9d45a20593d4fd1d2de1))
+* **authentication:** ✨ added temporary dimension handling for respawn on re-authentication ([e4331ca](https://github.com/void-community/Void/commit/e4331ca72bc3e954fcddd2295cfbbaed32ceb946))
+* **client:** ✨ accepted an optional version for NeoForge launches ([072ffa6](https://github.com/void-community/Void/commit/072ffa6f79f14e7f79cd52e15cd7601837635329))
+* **client:** ✨ added asynchronous log reading and improved cancellation handling ([b6ffaca](https://github.com/void-community/Void/commit/b6ffaca2fb10f9deb79fd5106fb9c1a06de4ac0f))
+* **client:** ✨ added configurable CurseForge API base URL ([fe75964](https://github.com/void-community/Void/commit/fe7596497c5f897010f5cca174b7b23ce95a0cef))
+* **client:** ✨ added live player API ([ddb5391](https://github.com/void-community/Void/commit/ddb53913e7f0649b7b477131c0f43e8004236df8))
+* **client:** ✨ added memory-bounded launches ([bb55548](https://github.com/void-community/Void/commit/bb555481c6c9c7e3917f142ad587685108569689))
+* **client:** ✨ added player rotations ([82df245](https://github.com/void-community/Void/commit/82df2454fdd92ba8f807a312a7069aea3720c3ee))
+* **client:** ✨ added retained diagnostics and integration artifacts ([b36dd84](https://github.com/void-community/Void/commit/b36dd84af0b9124c7a4a2c3a12e012302c5a6b43))
+* **client:** ✨ moved version preparation into API ([2677a83](https://github.com/void-community/Void/commit/2677a83989a675b108eb841236d967ef838be0ae))
+* **client:** ✨ namespaced API and noVNC routes ([98e2d31](https://github.com/void-community/Void/commit/98e2d31a3ec63fa6b7b9d663d7eb62b264c007f2))
+* **client:** ✨ rebuilt the reusable game API ([7a2390e](https://github.com/void-community/Void/commit/7a2390e391d6f10e7b091676b6226d9cfb51f3dc))
+* **client:** ✨ unified API and noVNC on port 80 ([ad65100](https://github.com/void-community/Void/commit/ad65100a810df4a1d739574d3f6f0a15f6abc95d))
+* **client:** ✨ unified browser and API runtime ([ceda4d7](https://github.com/void-community/Void/commit/ceda4d76981df94043af418331b8cf95b19cd52f))
+* **docker:** ✨ added multi-architecture support and improved Java installation process ([3da610f](https://github.com/void-community/Void/commit/3da610f4ce0a04f967f3e318ebbe33dccb399a5f))
+* **java:** ✨ added script to execute Java with QEMU for i686 architecture ([37b7a84](https://github.com/void-community/Void/commit/37b7a84509fdb543040388d1748bd9d03816441f))
+* **link:** ✨ improved async connection handling ([5c3d3e9](https://github.com/void-community/Void/commit/5c3d3e95ff7b496ee1183e3b4b8ecc31509a30d9))
+* **list-minecraft-release-versions:** ✨ added support for specifying last release version ([9b968e5](https://github.com/void-community/Void/commit/9b968e5d5bd2fdda3285749da432d8ad22831797))
+* **portablemc:** ✨ added support for LWJGL fixes based on Minecraft version ([7e6588c](https://github.com/void-community/Void/commit/7e6588c4bde159e3fae00c289bdfda74b386bf1c))
+* **protocol:** ✨ added 26.2 login session IDs ([5adf839](https://github.com/void-community/Void/commit/5adf83966156069ea8ce005ebfb57afb39b7dfac))
+* **protocol:** ✨ added Minecraft 26.2 definitions ([428c9ef](https://github.com/void-community/Void/commit/428c9ef65db78a7bc59efb0270e53405f3c643a1))
+* **protocol:** ✨ added Minecraft 26.3 definitions ([cb9d74c](https://github.com/void-community/Void/commit/cb9d74cdb12e4d8ed40d4245f104e71a0dd1c8a9))
+* **uuid:** ✨ added Guid-shaped Java UUID API ([05865dd](https://github.com/void-community/Void/commit/05865ddd5e16b0a6c52d5823f4a0d9444899172d))
+
+
+### Bug Fixes
+
+* **api:** 🐛 corrected initialization and disposal of PortableMinecraftClient ([b0a49f0](https://github.com/void-community/Void/commit/b0a49f0655f95c38ba0d90f305056054da71d7ef))
+* **client:** 🐛 accelerated OCR connection handling ([2e7df89](https://github.com/void-community/Void/commit/2e7df89a94f2c3a7575868663076d9eea1efc5c3))
+* **client:** 🐛 acknowledged server address selection ([cd354c0](https://github.com/void-community/Void/commit/cd354c0dcd8de7fb3dbae4ac1b6566bbd859ecc6))
+* **client:** 🐛 added fast OCR fallback ([4245f4f](https://github.com/void-community/Void/commit/4245f4f649c3789f04716a1e79d55fb42a7995df))
+* **client:** 🐛 bounded OCR navigation loops ([f8c0770](https://github.com/void-community/Void/commit/f8c07702214d33107ec86dc1344b68e944e5b61a))
+* **client:** 🐛 cleared legacy server addresses deterministically ([5bdde8e](https://github.com/void-community/Void/commit/5bdde8e87a90c8633da1f23b2fb5a81ec8e9e3b9))
+* **client:** 🐛 corrected native automation lifecycle ([59b7719](https://github.com/void-community/Void/commit/59b77199ce389fc0cc8f9ad082df0f0874bc777a))
+* **client:** 🐛 deferred automation until overlays cleared ([f3f768d](https://github.com/void-community/Void/commit/f3f768d3d2802a4ddaeda0569d27fdde88b47986))
+* **client:** 🐛 disabled unstable oneDNN OCR inference ([3359e8f](https://github.com/void-community/Void/commit/3359e8fe95755b9875ae8dc2e267f75260aeea97))
+* **client:** 🐛 distinguished self screen transitions ([5c19054](https://github.com/void-community/Void/commit/5c19054f5cd40b92d446426ae01d8bb211007d9c))
+* **client:** 🐛 eliminated redundant image conversion ([d0f283a](https://github.com/void-community/Void/commit/d0f283a1ad646cc1595f93f6405bb9aa4f7b6f1f))
+* **client:** 🐛 excluded the launcher splash from game readiness ([2d8e436](https://github.com/void-community/Void/commit/2d8e436097011e8457de91a0ddf3ed470bef86c1))
+* **client:** 🐛 isolated chat image test seam ([16b0ec2](https://github.com/void-community/Void/commit/16b0ec25e068e09915264a88f2943aedeca6e246))
+* **client:** 🐛 made client API actions respond immediately ([c971a58](https://github.com/void-community/Void/commit/c971a58c82ceb4f51bcb0ccffb787c980b5e124a))
+* **client:** 🐛 made server connection navigation idempotent ([7f2b978](https://github.com/void-community/Void/commit/7f2b9786580a2ee58dd84d219fab686b1a5ce8b9))
+* **client:** 🐛 ordered server address replacement ([daae3f9](https://github.com/void-community/Void/commit/daae3f90cb6dccd4e18d959c7f89ea88cb064146))
+* **client:** 🐛 prevented executor dispatch re-entry ([f4e5604](https://github.com/void-community/Void/commit/f4e5604836a1f1db6c7277c8a355f518c7cf9a5a))
+* **client:** 🐛 prevented stale Netty read disables from stalling connections ([7681097](https://github.com/void-community/Void/commit/7681097ea4430109bd2f2a0ac0dab341647803ab))
+* **client:** 🐛 reduced repeated OCR scans ([462795e](https://github.com/void-community/Void/commit/462795eaa03519acc0e73a8e5b158bcc69cfd0b8))
+* **client:** 🐛 repaired dynamic multiplayer detection ([cdc4a49](https://github.com/void-community/Void/commit/cdc4a498a5fd2e72cbdbb9128607ddd182de0cbb))
+* **client:** 🐛 replaced desktop input automation ([998ca2a](https://github.com/void-community/Void/commit/998ca2a400b6871921718f68d9b1d9dc6da57c70))
+* **client:** 🐛 replaced legacy i386 emulation ([0532717](https://github.com/void-community/Void/commit/05327172ecb1bec47261c5f329c7a1b0a85a6570))
+* **client:** 🐛 replaced server address automation ([b814d0e](https://github.com/void-community/Void/commit/b814d0eefba86ebfeadafad4141927fc12695e09))
+* **client:** 🐛 resolved inherited agent methods ([267cbcb](https://github.com/void-community/Void/commit/267cbcbf988276cfbcf3b0ab39e408901a8c696f))
+* **client:** 🐛 restored legacy native installation on ARM64 ([78eab9b](https://github.com/void-community/Void/commit/78eab9b5ef7fb4e44c2dd7dd686cb6c65d416900))
+* **client:** 🐛 restored portable OCR connection handling ([ca08889](https://github.com/void-community/Void/commit/ca08889acc51d7274c136acaaf199af7f4089956))
+* **client:** 🐛 restored settings and corrected diagnostics synchronization ([f52bf25](https://github.com/void-community/Void/commit/f52bf25204651079132f2dc273f217ab802c1732))
+* **client:** 🐛 retried portablemc dry-run downloads ([acb669a](https://github.com/void-community/Void/commit/acb669a9195736b5652624edcadeb0b714256019))
+* **client:** 🐛 stabilized OCR integration navigation ([9482cbe](https://github.com/void-community/Void/commit/9482cbeb40ac1ef31791b6862a567b7820cba174))
+* **client:** 🐛 stabilized overloaded navigation ([3404064](https://github.com/void-community/Void/commit/34040644719bb755bb6cec841393e4782c0b863e))
+* **client:** 🐛 stabilized visual button retries ([6a17258](https://github.com/void-community/Void/commit/6a172589a8b192d76d3e028a5174e87094b93c11))
+* **client:** 🐛 supported SDL-based Minecraft 26.3 clients ([8e58425](https://github.com/void-community/Void/commit/8e584255bdc044a28c97b6b2993a8d9764fff8b3))
+* **client:** 🐛 surfaced and recovered client failures ([9da2751](https://github.com/void-community/Void/commit/9da27518a65fe16079f4da3a776873f74e9ed7cd))
+* **client:** 🐛 switched navigation to OCR targets ([dc060d4](https://github.com/void-community/Void/commit/dc060d4988b5ad2ad43b28dbadd96804369a64fc))
+* **client:** 🐛 updated PortableMC launch resolution ([693e16c](https://github.com/void-community/Void/commit/693e16cb58996b9620f1a03513a582c22972256a))
+* **client:** 🐛 verified pasted server addresses ([92233ea](https://github.com/void-community/Void/commit/92233eababef9b4e7b230f725f66595cf8082755))
+* **client:** 🐛 waited for client stop before restart ([fbf5d88](https://github.com/void-community/Void/commit/fbf5d885099750ec2184e7547d258b78782f913c))
+* **commands:** 🐛 lowered signed cancellation logging ([357511e](https://github.com/void-community/Void/commit/357511ee93196f8a829bdc89eb49bee68d440edc))
+* **commands:** 🐛 rejected unavailable parser mappings ([5fc0d75](https://github.com/void-community/Void/commit/5fc0d75979346930e153acad9acc721ee2b12fdd))
+* **common:** 🐛 corrected keep-alive timeout timing ([6ac879c](https://github.com/void-community/Void/commit/6ac879c67ea00b15eedfad669a21824b76baf33d))
+* **common:** 🐛 serialized keep-alive requests ([b8f4edd](https://github.com/void-community/Void/commit/b8f4edd965033e05e189bc2afe4708b2f888c011))
+* **console:** 🐛 waited for shutdown without terminal ([8454f55](https://github.com/void-community/Void/commit/8454f5533ecdd08cd1cd3e046e7f04d6c9b0155e))
+* **demo:** 🐛 repaired interactive demo startup ([3500ce5](https://github.com/void-community/Void/commit/3500ce5c18b88b7d2896741db74fa66962882905))
+* **deps:** update dependency @astrojs/starlight to ^0.40.0 ([99b7c4a](https://github.com/void-community/Void/commit/99b7c4aecb4069ced4522f66984074ec5c12748a))
+* **deps:** update dependency @astrojs/starlight to ^0.41.0 ([90c0f41](https://github.com/void-community/Void/commit/90c0f41ac785f12b23b9b1a6bdbf38afe2d40bc4))
+* **deps:** update dependency astro to v7 ([8bf9fe9](https://github.com/void-community/Void/commit/8bf9fe9491866fe6be9ff1f95037fd078f37a72f))
+* **deps:** update dependency sharp to ^0.35.0 ([14d2d10](https://github.com/void-community/Void/commit/14d2d10d3fb51f228716c32c2624e181bdc5f1ac))
+* **deps:** update dependency starlight-links-validator to ^0.25.0 ([b2a1707](https://github.com/void-community/Void/commit/b2a170738f4ef782087b2387bc387799eab2d768))
+* **docs:** 🐛 escaped closing details tag in JS template literal to fix MDX build ([9748f4a](https://github.com/void-community/Void/commit/9748f4a9c0f4cca4a7bc05fc453bbc5cb7ab2926))
+* **integration:** 🧪 added real Paper kick coverage ([a13f75a](https://github.com/void-community/Void/commit/a13f75abcfce24ba803a27e1f39b345bee220ea7))
+* **lifecycle:** 🐛 fixed legacy keep-alive ids ([c638524](https://github.com/void-community/Void/commit/c638524d5aec0482d3d74b38a1ffd56b6fd6b38b))
+* **lifecycle:** 🐛 made keep-alive redirection deterministic ([e74bc35](https://github.com/void-community/Void/commit/e74bc352dc1988c48c4f1d828de38e44ee19b0aa))
+* **lifecycle:** 🐛 paused keep-alives during redirects ([04febed](https://github.com/void-community/Void/commit/04febedaf0febe71fe4f64320171ea7f8dd6d7df))
+* **lifecycle:** 🐛 preserved keep-alives across redirects ([6a0ba59](https://github.com/void-community/Void/commit/6a0ba59ec9fcf52d46623e7aa5875aa72169ae14))
+* **lifecycle:** 🐛 reset keep-alive intervals on refresh ([9cce1a9](https://github.com/void-community/Void/commit/9cce1a926e8ff4e6d2f08d6f71d72cfb886a4187))
+* **lifecycle:** 🐛 restored minimal keep-alive tracking ([e2a0d9b](https://github.com/void-community/Void/commit/e2a0d9b95c02736f1e9a7330ee68129894897df6))
+* **link:** 🐛 changed states dictionary to concurrent implementation ([2ab72d3](https://github.com/void-community/Void/commit/2ab72d3ea6c5455bd77d236985b0ae19dea289bf))
+* **links:** 🩹 raised forced shutdown timeout logs ([938c4a1](https://github.com/void-community/Void/commit/938c4a1dab6df979e55660fabd575db55620bc98))
+* **network:** 🐛 made liveness checks non-destructive ([f3e21db](https://github.com/void-community/Void/commit/f3e21db1b2f8071e3b1f6ab331e97aa1fa4a22c6))
+* **network:** 🐛 prevented redirect shutdown races ([1c101a9](https://github.com/void-community/Void/commit/1c101a99069c1795a7f667910ffd42e69ab330df))
+* **network:** 🐛 restored raw TCP proxying ([0a0b8ae](https://github.com/void-community/Void/commit/0a0b8ae5f3147c7b70da8cd7fc1c07d61ed23e9d))
+* **protocol:** 🐛 preserved entity ids across redirects ([ccd1c2a](https://github.com/void-community/Void/commit/ccd1c2a3cf6a7d559ac01c51e3cdba762bdc8faa))
+* **protocol:** 🐛 refreshed entity ids across redirects ([e9b901d](https://github.com/void-community/Void/commit/e9b901d591959edf245183b743a505de10b40338))
+* **protocol:** 🐛 stabilized server session IDs ([cbc3e9c](https://github.com/void-community/Void/commit/cbc3e9c49fd5ad8ee81cbe145c4e0d401aa65598))
+* **registry:** 🐛 corrected packet handling for configuration phase in client and server ([868a2b4](https://github.com/void-community/Void/commit/868a2b42b3afd979532698731b128d9e65ae1d07))
+* **registry:** 🐛 deferred transformation cleanup until links stopped ([ca24a04](https://github.com/void-community/Void/commit/ca24a04670eca78f32bbdb590e9b2363a92b39ff))
+* **registry:** 🐛 preserved transformations across redirects ([b0b2a2d](https://github.com/void-community/Void/commit/b0b2a2d5e9d90261fb5d16feaf61772fee4fc2e2))
+* **registry:** 🐛 use correct server channel on login ([46abccc](https://github.com/void-community/Void/commit/46abcccb87f5ec3ac87ef589a26bb63e4ad7f98b))
+* **uuid:** 🐛 corrected Java-compatible UUID semantics ([d091405](https://github.com/void-community/Void/commit/d091405d056e416f3822fe24208bea6e3a33d96a))
+
+
+### Performance Improvements
+
+* **client:** ⚡ reduced startup memory and enabled native ARM64 legacy clients ([2274847](https://github.com/void-community/Void/commit/2274847caa40734b070b28208cf6a01c9fc5566e))
+
+
+### Reverts
+
+* **client:** ⏪ reverted OCR workflow changes ([3340b7e](https://github.com/void-community/Void/commit/3340b7e68eac334f3f0dac90f4745d604db2db5a))
+* **integration:** ⏪ reverted process-based kick test ([21cb069](https://github.com/void-community/Void/commit/21cb0698b4f607d5d4ab1a512acdd8c69a2ce687))
+* **protocol:** ⏪ reverted entity id rewriting ([ba83713](https://github.com/void-community/Void/commit/ba837137209dd2ae1533850c51d8cd9f636d3246))
+
 ## [0.5.17](https://github.com/caunt/Void/compare/v0.5.16...v0.5.17) (2026-05-31)
 
 
