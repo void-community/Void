@@ -93,7 +93,6 @@ jobs:
   nuget:
     needs: [build,version]
     uses: ./.github/workflows/publish-nuget.yml
-    secrets: inherit
     if: ${{ fromJSON(needs.version.outputs.release) }}
     with:
       dotnet-version: ${{ needs.version.outputs.dotnet-version }}
