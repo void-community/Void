@@ -6,7 +6,7 @@ internal interface IGameRuntime
 
     Task ConnectAsync(RunningGame game, string host, int port, CancellationToken cancellationToken);
 
-    Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileIdentifier, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
+    Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
 
     Task<RunningGame> LaunchNeoForgeAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
 

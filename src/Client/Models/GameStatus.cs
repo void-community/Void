@@ -1,15 +1,15 @@
 namespace Void.Client;
 
 /// <summary>
-/// Immutable coordinator snapshot. The operation identifier lets callers distinguish completion of their accepted
+/// Immutable coordinator snapshot. The operation id lets callers distinguish completion of their accepted
 /// command from a later command issued by another caller.
 /// </summary>
 internal sealed record GameStatus(
     GameState State,
-    [property: System.Text.Json.Serialization.JsonPropertyName("operationId")] long OperationIdentifier,
+    [property: System.Text.Json.Serialization.JsonPropertyName("operationId")] long OperationId,
     string? Operation,
     OperationState OperationState,
-    [property: System.Text.Json.Serialization.JsonPropertyName("processId")] int? ProcessIdentifier,
+    [property: System.Text.Json.Serialization.JsonPropertyName("processId")] int? ProcessId,
     int? ExitCode,
     ServerAddress? Server,
     string? Message,
@@ -17,5 +17,5 @@ internal sealed record GameStatus(
     ClientFailure? Failure,
     IReadOnlyList<string> Warnings,
     DateTimeOffset UpdatedAt,
-    [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid? SessionIdentifier = null
+    [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid? SessionId = null
 );

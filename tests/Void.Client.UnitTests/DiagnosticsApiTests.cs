@@ -15,13 +15,13 @@ namespace Void.Client.UnitTests;
 public class DiagnosticsApiTests
 {
     [Fact]
-    public async Task ListsAndDownloadsRetainedSessionsAndReturnsNotFoundForUnknownIdentifier()
+    public async Task ListsAndDownloadsRetainedSessionsAndReturnsNotFoundForUnknownId()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"void-api-diagnostics-{Guid.NewGuid()}");
         var diagnostics = new SessionDiagnostics(new DiagnosticsOptions { Directory = directory });
-        var identifier = await diagnostics.BeginAsync("vanilla:1.21", "", TestContext.Current.CancellationToken);
-        await diagnostics.WriteOutputAsync(identifier, "stdout", "Minecraft output", TestContext.Current.CancellationToken);
-        await diagnostics.CompleteAsync(identifier, TestContext.Current.CancellationToken);
+        var id = await diagnostics.BeginAsync("vanilla:1.21", "", TestContext.Current.CancellationToken);
+        await diagnostics.WriteOutputAsync(id, "stdout", "Minecraft output", TestContext.Current.CancellationToken);
+        await diagnostics.CompleteAsync(id, TestContext.Current.CancellationToken);
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
@@ -37,11 +37,11 @@ public class DiagnosticsApiTests
             using var client = new HttpClient { BaseAddress = new Uri(Assert.Single(addresses.Addresses)) };
             var sessions = await client.GetFromJsonAsync<DiagnosticSession[]>("/api/game/diagnostics", TestContext.Current.CancellationToken);
             Assert.NotNull(sessions);
-            Assert.Equal(identifier, Assert.Single(sessions).SessionIdentifier);
-            using var response = await client.GetAsync(sessions[0].DownloadUniformResourceLocator, TestContext.Current.CancellationToken);
+            Assert.Equal(id, Assert.Single(sessions).SessionId);
+            using var response = await client.GetAsync(sessions[0].DownloadUrl, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("application/zip", response.Content.Headers.ContentType?.MediaType);
-            Assert.Contains(identifier.ToString(), response.Content.Headers.ContentDisposition?.FileNameStar ?? "");
+            Assert.Contains(id.ToString(), response.Content.Headers.ContentDisposition?.FileNameStar ?? "");
             using var archive = new ZipArchive(new MemoryStream(await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken)));
             Assert.Contains(archive.Entries, entry => entry.FullName == "session.json");
             Assert.Contains(archive.Entries, entry => entry.FullName == "console-stdout.log");

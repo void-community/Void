@@ -7,7 +7,7 @@ internal sealed class StaleMinecraftWindowException : Exception
     }
 
     public StaleMinecraftWindowException(MinecraftWindowLease lease, Exception innerException)
-        : base($"Minecraft window lease {lease.Generation} ({lease.Identifier}) is stale", innerException)
+        : base($"Minecraft window lease {lease.Generation} ({lease.Id}) is stale", innerException)
     {
         Lease = lease;
     }

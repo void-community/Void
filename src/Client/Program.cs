@@ -5,7 +5,7 @@ using Void.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var configuredJavaScriptObjectNotationServices = builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+var configuredJsonServices = builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
 var diagnosticServices = builder.Services.AddSingleton(new SessionDiagnostics(DiagnosticsOptions.FromConfiguration(builder.Configuration)));
 var runtimeServices = builder.Services.AddSingleton<IGameRuntime, GameRuntime>();

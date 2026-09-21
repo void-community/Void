@@ -19,7 +19,7 @@ namespace Void.Client;
 internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null) : IGameRuntime
 {
     private const int CurseForgeFilesBatchSize = 50;
-    private const string DefaultCurseForgeApiBaseUniformResourceLocator = "https://api.curseforge.com";
+    private const string DefaultCurseForgeApiBaseUrl = "https://api.curseforge.com";
     private const string DefaultDisplay = ":99";
     private const string DefaultMinecraftDirectory = "/root/.minecraft";
     private const int DisplayProbeTimeoutMilliseconds = 1000;
@@ -28,7 +28,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string DisplayScreenWidth = "854";
     private const int ExternalProcessTimeoutMilliseconds = 5000;
     private const string LauncherSplashWindowTitle = "Void Client Startup";
-    private const int MinecraftGameIdentifier = 432;
+    private const int MinecraftGameId = 432;
     private const int PlayerReadTimeoutMilliseconds = 2000;
     private const string PortableMinecraftAgentPath = "/opt/portableminecraftclient/void-client-agent.jar";
     private const string PortableMinecraftArmLwjgl3Version = "3.3.3";
@@ -46,21 +46,21 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int ProcessStopTimeoutMilliseconds = 10000;
     private const int ScreenCaptureMaximumAttempts = 3;
     private const int ScreenCaptureTimeoutMilliseconds = 10000;
-    private static readonly JsonSerializerOptions CurseForgeManifestJavaScriptObjectNotationOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions CurseForgeManifestJsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false
     };
-    private static readonly JsonSerializerOptions TrackerJavaScriptObjectNotationOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AsyncLock _windowOperations = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int, Task> _outputTasks = new();
     private long _nextWindowGeneration;
-    private Guid? _windowSessionIdentifier;
+    private Guid? _windowSessionId;
 
     public async Task<byte[]> CaptureScreenshotAsync(CancellationToken cancellationToken)
     {
         using (await _windowOperations.LockAsync(cancellationToken))
         {
-            return diagnostics?.CurrentSessionIdentifier is { } sessionIdentifier && _windowSessionIdentifier != sessionIdentifier
+            return diagnostics?.CurrentSessionId is { } sessionId && _windowSessionId != sessionId
                 ? throw new InvalidOperationException(message: "No matching Minecraft session is available for a screenshot")
                 : await CaptureScreenAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
@@ -71,7 +71,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return ConnectThroughAgentAsync(game, $"{host}:{port}", cancellationToken);
     }
 
-    public async Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileIdentifier, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
+    public async Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
     {
         var apiKey = Environment.GetEnvironmentVariable(variable: "CURSEFORGE_API_KEY");
 
@@ -80,7 +80,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
         var minecraftDirectory = GetMinecraftDirectory();
 
-        var portableMinecraftVersion = await PrepareCurseForgeAsync(slug, fileIdentifier, apiKey, CreateCurseForgeApiBaseUniformResourceIdentifier(), minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var portableMinecraftVersion = await PrepareCurseForgeAsync(slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
@@ -125,12 +125,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
             using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
 
             await writer.WriteLineAsync(game.Tracker.Token.AsMemory(), linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
-            var responseJavaScriptObjectNotation = await reader.ReadLineAsync(linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
+            var responseJson = await reader.ReadLineAsync(linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
 
-            if (string.IsNullOrWhiteSpace(responseJavaScriptObjectNotation))
+            if (string.IsNullOrWhiteSpace(responseJson))
                 throw PlayersUnavailable(message: "The Minecraft player tracker returned an empty response");
 
-            var response = JsonSerializer.Deserialize<TrackerResponse>(responseJavaScriptObjectNotation, TrackerJavaScriptObjectNotationOptions)
+            var response = JsonSerializer.Deserialize<TrackerResponse>(responseJson, TrackerJsonOptions)
                            ?? throw PlayersUnavailable(message: "The Minecraft player tracker returned a malformed response");
 
             if (response.Status is "notInWorld")
@@ -180,14 +180,14 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 var launcherHasExited = game.Process.HasExited;
 
                 var terminateResult = await RunProcessTextAsync(
-                    CreateProcessStartInformation(fileName: "kill", ["-TERM", "--", $"-{game.Process.Identifier}"]),
+                    CreateProcessStartInformation(fileName: "kill", ["-TERM", "--", $"-{game.Process.Id}"]),
                     TimeSpan.FromSeconds(seconds: 5),
                     cancellationToken
                 ).ConfigureAwait(continueOnCapturedContext: false);
 
                 if (terminateResult.ExitCode is not 0)
                 {
-                    if ((launcherHasExited || game.Process.HasExited) && !IsProcessGroupRunning(game.Process.Identifier))
+                    if ((launcherHasExited || game.Process.HasExited) && !IsProcessGroupRunning(game.Process.Id))
                     {
                         await game.Process.WaitForExitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
@@ -201,20 +201,20 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
                 try
                 {
-                    await WaitForProcessGroupExitAsync(game.Process.Identifier, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    await WaitForProcessGroupExitAsync(game.Process.Id, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                 }
                 catch (TimeoutException)
                 {
                     var killResult = await RunProcessTextAsync(
-                        CreateProcessStartInformation(fileName: "kill", ["-KILL", "--", $"-{game.Process.Identifier}"]),
+                        CreateProcessStartInformation(fileName: "kill", ["-KILL", "--", $"-{game.Process.Id}"]),
                         TimeSpan.FromSeconds(seconds: 5),
                         CancellationToken.None
                     ).ConfigureAwait(continueOnCapturedContext: false);
 
-                    if (killResult.ExitCode is not 0 && IsProcessGroupRunning(game.Process.Identifier))
+                    if (killResult.ExitCode is not 0 && IsProcessGroupRunning(game.Process.Id))
                         throw new InvalidOperationException($"kill -KILL failed with code {killResult.ExitCode}: {killResult.StandardError}");
 
-                    await WaitForProcessGroupExitAsync(game.Process.Identifier, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+                    await WaitForProcessGroupExitAsync(game.Process.Id, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
                     mode = StopMode.Forced;
                 }
 
@@ -229,12 +229,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                     if (game is not null)
                         File.Delete(game.Tracker.DescriptorPath);
 
-                    if (_windowSessionIdentifier is { } sessionIdentifier)
-                        await ((diagnostics?.CollectAsync(sessionIdentifier, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+                    if (_windowSessionId is { } sessionId)
+                        await ((diagnostics?.CollectAsync(sessionId, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
                 }
                 finally
                 {
-                    _windowSessionIdentifier = null;
+                    _windowSessionId = null;
                 }
             }
         }
@@ -263,7 +263,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return $"--jvm-arg=-Xmx{memoryMb.ToString(CultureInfo.InvariantCulture)}M";
     }
 
-    internal async Task PumpOutputAsync(TextReader reader, TextWriter console, Guid? sessionIdentifier, string stream, CancellationToken cancellationToken = default)
+    internal async Task PumpOutputAsync(TextReader reader, TextWriter console, Guid? sessionId, string stream, CancellationToken cancellationToken = default)
     {
         var buffer = new char[4096];
         var pending = "";
@@ -278,12 +278,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 await console.WriteAsync(text).ConfigureAwait(continueOnCapturedContext: false);
                 pending += text;
 
-                if (sessionIdentifier is { } identifier && diagnostics is not null)
+                if (sessionId is { } id && diagnostics is not null)
                 {
                     // Keep enough overlap to redact raw or encoded agent tokens split across reads.
-                    pending = await diagnostics.RedactAsync(identifier, pending, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    pending = await diagnostics.RedactAsync(id, pending, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                     var length = Math.Max(val1: 0, pending.Length - 128);
-                    await diagnostics.WriteOutputAsync(identifier, stream, pending[..length], cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    await diagnostics.WriteOutputAsync(id, stream, pending[..length], cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                     pending = pending[length..];
                 }
                 else
@@ -296,13 +296,13 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         }
         catch (Exception exception) when (exception is IOException or ObjectDisposedException)
         {
-            if (sessionIdentifier is { } identifier)
-                await ((diagnostics?.WarnAsync(identifier, $"Console collection ended: {exception.Message}", cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+            if (sessionId is { } id)
+                await ((diagnostics?.WarnAsync(id, $"Console collection ended: {exception.Message}", cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
         }
         finally
         {
-            if (sessionIdentifier is { } identifier)
-                await ((diagnostics?.WriteOutputAsync(identifier, stream, pending, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+            if (sessionId is { } id)
+                await ((diagnostics?.WriteOutputAsync(id, stream, pending, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
         }
     }
 
@@ -313,27 +313,27 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return tracker.ExpectedName is null ? arguments : $"{arguments};name={EncodeAgentArgument(tracker.ExpectedName)}";
     }
 
-    static Uri CreateCurseForgeApiBaseUniformResourceIdentifier()
+    static Uri CreateCurseForgeApiBaseUri()
     {
-        var configuredBaseUniformResourceLocator = Environment.GetEnvironmentVariable(variable: "CURSEFORGE_API_BASE_URL");
+        var configuredBaseUrl = Environment.GetEnvironmentVariable(variable: "CURSEFORGE_API_BASE_URL");
 
-        var baseUniformResourceLocator = string.IsNullOrWhiteSpace(configuredBaseUniformResourceLocator)
-            ? DefaultCurseForgeApiBaseUniformResourceLocator
-            : configuredBaseUniformResourceLocator.Trim();
+        var baseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
+            ? DefaultCurseForgeApiBaseUrl
+            : configuredBaseUrl.Trim();
 
-        var uniformResourceIdentifierCreated = Uri.TryCreate(baseUniformResourceLocator, UriKind.Absolute, out var baseUniformResourceIdentifier);
+        var uniformResourceIdentifierCreated = Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri);
 
-        if (!uniformResourceIdentifierCreated || baseUniformResourceIdentifier is null)
+        if (!uniformResourceIdentifierCreated || baseUri is null)
             throw new InvalidOperationException(message: "CURSEFORGE_API_BASE_URL must be an absolute HTTP or HTTPS URL");
 
-        var schemeSupported = baseUniformResourceIdentifier.Scheme is "http" or "https";
+        var schemeSupported = baseUri.Scheme is "http" or "https";
 
         if (!schemeSupported)
             throw new InvalidOperationException(message: "CURSEFORGE_API_BASE_URL must use HTTP or HTTPS");
 
-        var path = baseUniformResourceIdentifier.AbsolutePath.TrimEnd(trimChar: '/');
+        var path = baseUri.AbsolutePath.TrimEnd(trimChar: '/');
 
-        return new UriBuilder(baseUniformResourceIdentifier)
+        return new UriBuilder(baseUri)
         {
             Path = string.IsNullOrEmpty(path) ? "/" : path + "/",
             Query = "",
@@ -383,16 +383,11 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 : Path.Combine(minecraftDirectory, path2: "mods");
     }
 
-    static async Task<byte[]> DownloadWithFallbackAsync(
-        HttpClient hypertextTransferProtocolClient,
-        string downloadUniformResourceLocator,
-        string apiKey,
-        CancellationToken cancellationToken
-    )
+    static async Task<byte[]> DownloadWithFallbackAsync(HttpClient hypertextTransferProtocolClient, string downloadUrl, string apiKey, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, downloadUniformResourceLocator);
+        using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
 
-        if (downloadUniformResourceLocator.Contains(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
+        if (downloadUrl.Contains(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
             ReturnedValue.Consume(request.Headers.TryAddWithoutValidation(name: "x-api-key", apiKey));
 
         using var response = await hypertextTransferProtocolClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -407,9 +402,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(value)).TrimEnd(trimChar: '=').Replace(oldChar: '+', newChar: '-').Replace(oldChar: '/', newChar: '_');
     }
 
-    private static int? FindJavaProcessIdentifier(int rootProcessIdentifier)
+    private static int? FindJavaProcessId(int rootProcessId)
     {
-        var descendants = new HashSet<int> { rootProcessIdentifier };
+        var descendants = new HashSet<int> { rootProcessId };
 
         var processDirectories = Directory.EnumerateDirectories(path: "/proc")
             .Select(path => (Path: path, Name: Path.GetFileName(path)))
@@ -424,31 +419,31 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
             foreach (var (path, name) in processDirectories)
             {
-                var processIdentifier = int.Parse(name, CultureInfo.InvariantCulture);
+                var processId = int.Parse(name, CultureInfo.InvariantCulture);
 
-                var parentProcessFound = TryReadParentProcessIdentifier(path, out var parentProcessIdentifier);
-                var processIsNewDescendant = !descendants.Contains(processIdentifier) && parentProcessFound && descendants.Contains(parentProcessIdentifier);
+                var parentProcessFound = TryReadParentProcessId(path, out var parentProcessId);
+                var processIsNewDescendant = !descendants.Contains(processId) && parentProcessFound && descendants.Contains(parentProcessId);
 
                 if (!processIsNewDescendant)
                     continue;
 
-                var descendantAdded = descendants.Add(processIdentifier);
+                var descendantAdded = descendants.Add(processId);
                 changed = true;
             }
         }
 
-        foreach (var processIdentifier in descendants.OrderDescending())
+        foreach (var processId in descendants.OrderDescending())
         {
             try
             {
-                var arguments = File.ReadAllText($"/proc/{processIdentifier}/cmdline").Split(separator: '\0', StringSplitOptions.RemoveEmptyEntries);
+                var arguments = File.ReadAllText($"/proc/{processId}/cmdline").Split(separator: '\0', StringSplitOptions.RemoveEmptyEntries);
 
                 if (arguments.Any(argument => Path.GetFileName(argument) is "java" or "java-x86_64"))
-                    return processIdentifier;
+                    return processId;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                Console.Error.WriteLine($"Process {processIdentifier} ended during command-line inspection: {exception.Message}");
+                Console.Error.WriteLine($"Process {processId} ended during command-line inspection: {exception.Message}");
             }
         }
 

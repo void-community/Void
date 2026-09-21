@@ -11,7 +11,7 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
 
     public bool HasExited => process.HasExited;
 
-    public int Identifier => process.Id;
+    public int Id => process.Id;
 
     public int? MemoryMb { get; } = memoryMb;
 

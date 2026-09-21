@@ -94,7 +94,7 @@ public class SessionDiagnosticsTests : IDisposable
         await diagnostics.WriteOutputAsync(second, "stdout", "new", TestContext.Current.CancellationToken);
         await diagnostics.CompleteAsync(second, TestContext.Current.CancellationToken);
         Assert.Null(await diagnostics.DownloadAsync(first, CancellationToken.None));
-        Assert.Equal(second, Assert.Single((await diagnostics.ListAsync(TestContext.Current.CancellationToken))).SessionIdentifier);
+        Assert.Equal(second, Assert.Single((await diagnostics.ListAsync(TestContext.Current.CancellationToken))).SessionId);
         var reloaded = Create(maximumSessions: 1);
         Assert.Equal("new", (await ReadArchiveAsync(reloaded, second))["console-stdout.log"]);
     }
@@ -106,9 +106,9 @@ public class SessionDiagnosticsTests : IDisposable
         var blockedDirectory = Path.Combine(_directory, "file");
         await File.WriteAllTextAsync(blockedDirectory, "not a directory", TestContext.Current.CancellationToken);
         var diagnostics = new SessionDiagnostics(new DiagnosticsOptions { Directory = blockedDirectory });
-        var sessionIdentifier = await diagnostics.BeginAsync("failed preparation", "", TestContext.Current.CancellationToken);
-        await diagnostics.WriteOutputAsync(sessionIdentifier, "stderr", "failure", TestContext.Current.CancellationToken);
-        var files = await ReadArchiveAsync(diagnostics, sessionIdentifier);
+        var sessionId = await diagnostics.BeginAsync("failed preparation", "", TestContext.Current.CancellationToken);
+        await diagnostics.WriteOutputAsync(sessionId, "stderr", "failure", TestContext.Current.CancellationToken);
+        var files = await ReadArchiveAsync(diagnostics, sessionId);
         Assert.Contains("Could not store", files["session.json"]);
     }
 
@@ -116,10 +116,10 @@ public class SessionDiagnosticsTests : IDisposable
     public async Task OversizedOutputIsBoundedAndDescribedInManifest()
     {
         var diagnostics = Create(maximumSessionMb: 1, maximumTotalMb: 1);
-        var sessionIdentifier = await diagnostics.BeginAsync("noisy client", "", TestContext.Current.CancellationToken);
+        var sessionId = await diagnostics.BeginAsync("noisy client", "", TestContext.Current.CancellationToken);
         for (var index = 0; index < 32; index++)
-            await diagnostics.WriteOutputAsync(sessionIdentifier, "stderr", new string('x', 65536), TestContext.Current.CancellationToken);
-        var files = await ReadArchiveAsync(diagnostics, sessionIdentifier);
+            await diagnostics.WriteOutputAsync(sessionId, "stderr", new string('x', 65536), TestContext.Current.CancellationToken);
+        var files = await ReadArchiveAsync(diagnostics, sessionId);
         Assert.Contains("size limit reached", files["session.json"]);
         Assert.True(Directory.EnumerateFiles(Path.Combine(_directory, "evidence"), "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length) <= 1024 * 1024);
     }
@@ -130,16 +130,16 @@ public class SessionDiagnosticsTests : IDisposable
         var gameDirectory = Path.Combine(_directory, "minecraft");
         Directory.CreateDirectory(Path.Combine(gameDirectory, "debug"));
         var diagnostics = Create();
-        var identifier = await diagnostics.BeginAsync("test", gameDirectory, TestContext.Current.CancellationToken);
-        using (diagnostics.Enter(identifier))
+        var id = await diagnostics.BeginAsync("test", gameDirectory, TestContext.Current.CancellationToken);
+        using (diagnostics.Enter(id))
             await diagnostics.RegisterSecretAsync("private-agent-token", TestContext.Current.CancellationToken);
-        await diagnostics.WriteOutputAsync(identifier, "stdout", "token=private-agent-token", TestContext.Current.CancellationToken);
+        await diagnostics.WriteOutputAsync(id, "stdout", "token=private-agent-token", TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(Path.Combine(gameDirectory, "debug", "disconnect-real.txt"), "private-agent-token", TestContext.Current.CancellationToken);
         var secretFile = Path.Combine(_directory, "credentials.txt");
         await File.WriteAllTextAsync(secretFile, "private credentials", TestContext.Current.CancellationToken);
         if (!OperatingSystem.IsWindows())
             File.CreateSymbolicLink(Path.Combine(gameDirectory, "debug", "disconnect-link.txt"), secretFile);
-        var files = await ReadArchiveAsync(diagnostics, identifier);
+        var files = await ReadArchiveAsync(diagnostics, id);
         Assert.DoesNotContain("debug-disconnect-link.txt", files.Keys);
         Assert.All(files.Values, value => Assert.DoesNotContain("private-agent-token", value));
         Assert.Equal("[redacted]", files["debug-disconnect-real.txt"]);
@@ -149,13 +149,13 @@ public class SessionDiagnosticsTests : IDisposable
     public async Task ParallelDownloadsAndOutputRemainReadable()
     {
         var diagnostics = Create();
-        var identifier = await diagnostics.BeginAsync("test", "", TestContext.Current.CancellationToken);
+        var id = await diagnostics.BeginAsync("test", "", TestContext.Current.CancellationToken);
         await Task.WhenAll(Enumerable.Range(0, 12).Select(async index =>
         {
-            await diagnostics.WriteOutputAsync(identifier, "stdout", $"line {index}\n", TestContext.Current.CancellationToken);
-            var files = await ReadArchiveAsync(diagnostics, identifier);
+            await diagnostics.WriteOutputAsync(id, "stdout", $"line {index}\n", TestContext.Current.CancellationToken);
+            var files = await ReadArchiveAsync(diagnostics, id);
             using var manifest = JsonDocument.Parse(files["session.json"]);
-            Assert.Equal(identifier, manifest.RootElement.GetProperty("sessionId").GetGuid());
+            Assert.Equal(id, manifest.RootElement.GetProperty("sessionId").GetGuid());
         }));
     }
 
@@ -163,10 +163,10 @@ public class SessionDiagnosticsTests : IDisposable
     public async Task OutputPumpRedactsTokensAcrossReadsAndPreservesConsoleOutput()
     {
         var diagnostics = Create();
-        var identifier = await diagnostics.BeginAsync("test", "", TestContext.Current.CancellationToken);
+        var id = await diagnostics.BeginAsync("test", "", TestContext.Current.CancellationToken);
         var token = new string('a', 64);
         var encodedToken = Convert.ToBase64String(Encoding.UTF8.GetBytes(token));
-        using (diagnostics.Enter(identifier))
+        using (diagnostics.Enter(id))
         {
             await diagnostics.RegisterSecretAsync(token, TestContext.Current.CancellationToken);
             await diagnostics.RegisterSecretAsync(encodedToken, TestContext.Current.CancellationToken);
@@ -175,9 +175,9 @@ public class SessionDiagnosticsTests : IDisposable
         using var reader = new ChunkedReader(text);
         using var console = new StringWriter();
         var runtime = new GameRuntime(diagnostics);
-        await runtime.PumpOutputAsync(reader, console, identifier, "stderr", TestContext.Current.CancellationToken);
+        await runtime.PumpOutputAsync(reader, console, id, "stderr", TestContext.Current.CancellationToken);
         Assert.Equal(text, console.ToString());
-        var retained = (await ReadArchiveAsync(diagnostics, identifier))["console-stderr.log"];
+        var retained = (await ReadArchiveAsync(diagnostics, id))["console-stderr.log"];
         Assert.DoesNotContain(token, retained);
         Assert.DoesNotContain(encodedToken, retained);
         Assert.EndsWith("[redacted] [redacted] end", retained);
@@ -199,7 +199,7 @@ public class SessionDiagnosticsTests : IDisposable
         await diagnostics.CollectAsync(first, TestContext.Current.CancellationToken);
         await diagnostics.CompleteAsync(first, TestContext.Current.CancellationToken);
         Assert.Equal("first report", (await ReadArchiveAsync(diagnostics, first))["debug-disconnect-test.txt"]);
-        Assert.Equal(endedAt, (await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionIdentifier == first).EndedAt);
+        Assert.Equal(endedAt, (await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionId == first).EndedAt);
     }
 
     [Fact]
@@ -231,10 +231,10 @@ public class SessionDiagnosticsTests : IDisposable
         var diagnostics = Create(maximumSessionMb: 1, maximumTotalMb: 1);
         var first = await diagnostics.BeginAsync("first", "", TestContext.Current.CancellationToken);
         var second = await diagnostics.BeginAsync("second", "", TestContext.Current.CancellationToken);
-        await Task.WhenAll(new[] { first, second }.Select(async identifier =>
+        await Task.WhenAll(new[] { first, second }.Select(async id =>
         {
             for (var index = 0; index < 32; index++)
-                await diagnostics.WriteOutputAsync(identifier, "stdout", new string('x', 65536), TestContext.Current.CancellationToken);
+                await diagnostics.WriteOutputAsync(id, "stdout", new string('x', 65536), TestContext.Current.CancellationToken);
         })).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.True(Directory.EnumerateFiles(Path.Combine(_directory, "evidence"), "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length) <= 1024 * 1024);
         Assert.Contains(await diagnostics.ListAsync(TestContext.Current.CancellationToken), session => session.Warnings.Any(warning => warning.Contains("size limit", StringComparison.Ordinal)));
@@ -261,12 +261,12 @@ public class SessionDiagnosticsTests : IDisposable
         await diagnostics.CompleteAsync(second, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
     }
 
-    private static AsyncLock GetSessionLock(SessionDiagnostics diagnostics, Guid identifier)
+    private static AsyncLock GetSessionLock(SessionDiagnostics diagnostics, Guid id)
     {
         var field = typeof(SessionDiagnostics).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(field);
         var sessions = Assert.IsAssignableFrom<IDictionary>(field.GetValue(diagnostics));
-        var session = sessions[identifier];
+        var session = sessions[id];
         Assert.NotNull(session);
         var property = session.GetType().GetProperty("Lock");
         Assert.NotNull(property);
@@ -278,9 +278,9 @@ public class SessionDiagnosticsTests : IDisposable
         public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default) => base.ReadAsync(buffer[..Math.Min(buffer.Length, 47)], cancellationToken);
     }
 
-    private static async Task<Dictionary<string, string>> ReadArchiveAsync(SessionDiagnostics diagnostics, Guid identifier)
+    private static async Task<Dictionary<string, string>> ReadArchiveAsync(SessionDiagnostics diagnostics, Guid id)
     {
-        var bytes = await diagnostics.DownloadAsync(identifier, CancellationToken.None);
+        var bytes = await diagnostics.DownloadAsync(id, CancellationToken.None);
         Assert.NotNull(bytes);
         using var archive = new ZipArchive(new MemoryStream(bytes));
         var files = new Dictionary<string, string>();

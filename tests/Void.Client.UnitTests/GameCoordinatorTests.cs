@@ -15,7 +15,7 @@ public sealed class GameCoordinatorTests
 
         var firstLaunch = await coordinator.StartVanillaAsync(new("1.21.1", []), CancellationToken.None);
         Assert.Equal(GameState.Starting, firstLaunch.State);
-        Assert.True(firstLaunch.OperationIdentifier > 0);
+        Assert.True(firstLaunch.OperationId > 0);
 
         runtime.CompleteLaunch();
         await WaitForStateAsync(coordinator, GameState.Ready);
@@ -24,7 +24,7 @@ public sealed class GameCoordinatorTests
         Assert.Equal(GameState.Idle, firstStop.Status.State);
 
         var secondLaunch = await coordinator.StartVanillaAsync(new("1.20.1", []), CancellationToken.None);
-        Assert.True(secondLaunch.OperationIdentifier > firstLaunch.OperationIdentifier);
+        Assert.True(secondLaunch.OperationId > firstLaunch.OperationId);
         runtime.CompleteLaunch();
         await WaitForStateAsync(coordinator, GameState.Ready);
 
@@ -181,7 +181,7 @@ public sealed class GameCoordinatorTests
         var acceptedLaunch = await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
         runtime.CompleteLaunch();
         await WaitForStateAsync(coordinator, GameState.Ready);
-        var operationIdentifier = coordinator.Status.OperationIdentifier;
+        var operationId = coordinator.Status.OperationId;
 
         var players = await coordinator.GetPlayersAsync(CancellationToken.None);
 
@@ -192,8 +192,8 @@ public sealed class GameCoordinatorTests
         Assert.Equal(new Position(4, 6, 3), remote.Position);
         Assert.Equal(new BodyRotation(20), remote.Body);
         Assert.Equal(new HeadRotation(25, 5), remote.Head);
-        Assert.Equal(acceptedLaunch.OperationIdentifier, operationIdentifier);
-        Assert.Equal(operationIdentifier, coordinator.Status.OperationIdentifier);
+        Assert.Equal(acceptedLaunch.OperationId, operationId);
+        Assert.Equal(operationId, coordinator.Status.OperationId);
 
         await coordinator.StopGameAsync(CancellationToken.None);
         await coordinator.StopAsync(CancellationToken.None);
@@ -416,7 +416,7 @@ public sealed class GameCoordinatorTests
             using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance, diagnostics);
             await coordinator.StartAsync(CancellationToken.None);
             var first = await coordinator.StartVanillaAsync(new("1.21", []), CancellationToken.None);
-            Assert.NotNull(first.SessionIdentifier);
+            Assert.NotNull(first.SessionId);
             runtime.CompleteLaunch();
             await WaitForStateAsync(coordinator, GameState.Ready);
             var connect = coordinator.ConnectAsync(new("limbo", 25565), CancellationToken.None);
@@ -424,11 +424,11 @@ public sealed class GameCoordinatorTests
             runtime.FailConnect(new GameClientException("client.connect.rejected", "connect", "connection.rejected", "seven extra bytes"));
             await Assert.ThrowsAsync<GameClientException>(() => connect);
             var stopped = await coordinator.StopGameAsync(CancellationToken.None);
-            Assert.Equal(first.SessionIdentifier, stopped.Status.SessionIdentifier);
+            Assert.Equal(first.SessionId, stopped.Status.SessionId);
             var second = await coordinator.StartVanillaAsync(new("1.21.1", []), CancellationToken.None);
-            Assert.NotEqual(first.SessionIdentifier, second.SessionIdentifier);
-            Assert.Equal("client.connect.rejected", (await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionIdentifier == first.SessionIdentifier).LastFailure?.Code);
-            Assert.NotEmpty((await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionIdentifier == first.SessionIdentifier).Warnings);
+            Assert.NotEqual(first.SessionId, second.SessionId);
+            Assert.Equal("client.connect.rejected", (await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionId == first.SessionId).LastFailure?.Code);
+            Assert.NotEmpty((await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionId == first.SessionId).Warnings);
             await coordinator.StopGameAsync(CancellationToken.None);
             await coordinator.StopAsync(CancellationToken.None);
         }
@@ -461,7 +461,7 @@ public sealed class GameCoordinatorTests
             }
             await WaitForStateAsync(coordinator, GameState.Failed);
             var session = Assert.Single((await diagnostics.ListAsync(TestContext.Current.CancellationToken)));
-            Assert.Equal(launch.SessionIdentifier, session.SessionIdentifier);
+            Assert.Equal(launch.SessionId, session.SessionId);
             Assert.NotNull(session.LastFailure);
             Assert.NotNull(session.EndedAt);
             await coordinator.StopAsync(CancellationToken.None);
@@ -561,7 +561,7 @@ public sealed class GameCoordinatorTests
             return BeginLaunch(cancellationToken);
         }
 
-        public Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileIdentifier, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
+        public Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
         {
             LastMemoryMb = memoryMb;
             return BeginLaunch(cancellationToken);
@@ -630,7 +630,7 @@ public sealed class GameCoordinatorTests
     {
         private readonly TaskCompletionSource _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int Identifier { get; } = id;
+        public int Id { get; } = id;
         public bool HasExited { get; private set; }
         public int? ExitCode { get; private set; }
         public int? MemoryMb { get; } = memoryMb;

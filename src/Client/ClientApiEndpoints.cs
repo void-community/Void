@@ -31,12 +31,12 @@ internal static class ClientApiEndpoints
             .WithSummary(summary: "Lists retained Minecraft sessions and diagnostic download URLs.");
 
         var diagnosticsDownloadEndpoint = api.MapGet(
-            pattern: "/game/diagnostics/{sessionIdentifier:guid}",
-            async Task<IResult> (Guid sessionIdentifier, SessionDiagnostics diagnostics, CancellationToken cancellationToken) =>
+            pattern: "/game/diagnostics/{sessionId:guid}",
+            async Task<IResult> (Guid sessionId, SessionDiagnostics diagnostics, CancellationToken cancellationToken) =>
         {
-            var archive = await diagnostics.DownloadAsync(sessionIdentifier, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            var archive = await diagnostics.DownloadAsync(sessionId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-            return archive is null ? Results.NotFound() : Results.File(archive, contentType: "application/zip", $"client-diagnostics-{sessionIdentifier}.zip");
+            return archive is null ? Results.NotFound() : Results.File(archive, contentType: "application/zip", $"client-diagnostics-{sessionId}.zip");
         }
         )
             .WithName(endpointName: "DownloadGameDiagnostics")

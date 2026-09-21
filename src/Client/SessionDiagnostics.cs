@@ -13,7 +13,7 @@ internal sealed class SessionDiagnostics
 {
     private const int ManifestReserveBytes = 256 * 1024;
     private const int MaximumFileBytes = 2 * 1024 * 1024;
-    private static readonly JsonSerializerOptions JavaScriptObjectNotationOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
@@ -32,49 +32,41 @@ internal sealed class SessionDiagnostics
         _options = options;
     }
 
-    public Guid? CurrentSessionIdentifier => _context.Value;
+    public Guid? CurrentSessionId => _context.Value;
 
     public async Task<Guid> BeginAsync(string launch, string minecraftDirectory, CancellationToken cancellationToken = default)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         // Retention always acquires its lock before any session lock. Session operations never acquire it.
         await PruneAsync((long)_options.MaximumSessionMb * 1024 * 1024, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        var identifier = Guid.NewGuid();
+        var id = Guid.NewGuid();
 
         var session = new Session(
-            new(
-                identifier,
-                Limit(launch, maximumCharacters: 1024) ?? "",
-                DateTimeOffset.UtcNow,
-                EndedAt: null,
-                Status: null,
-                LastFailure: null,
-                []
-            ),
-            Path.Combine(_options.Directory, identifier.ToString()),
+            new(id, Limit(launch, maximumCharacters: 1024) ?? "", DateTimeOffset.UtcNow, EndedAt: null, Status: null, LastFailure: null, []),
+            Path.Combine(_options.Directory, id.ToString()),
             minecraftDirectory
         );
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            var sessionAdded = _sessions.TryAdd(identifier, session);
+            var sessionAdded = _sessions.TryAdd(id, session);
             await CollectReportsAsync(session, baseline: true, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             await SaveManifestAsync(session, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
 
         await PruneAsync(reserveBytes: 0, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        return identifier;
+        return id;
     }
 
-    public async Task CollectAsync(Guid identifier, CancellationToken cancellationToken = default)
+    public async Task CollectAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        if (!_sessions.TryGetValue(identifier, out var session))
+        if (!_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return;
 
             if (session.Metadata.EndedAt is null)
@@ -84,14 +76,14 @@ internal sealed class SessionDiagnostics
         }
     }
 
-    public async Task CompleteAsync(Guid identifier, CancellationToken cancellationToken = default)
+    public async Task CompleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        if (!_sessions.TryGetValue(identifier, out var session))
+        if (!_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return;
 
             if (session.Metadata.EndedAt is null)
@@ -104,18 +96,18 @@ internal sealed class SessionDiagnostics
         await PruneAsync(reserveBytes: 0, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public async Task<byte[]?> DownloadAsync(Guid identifier, CancellationToken cancellationToken)
+    public async Task<byte[]?> DownloadAsync(Guid id, CancellationToken cancellationToken)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        if (!_sessions.TryGetValue(identifier, out var session))
+        if (!_sessions.TryGetValue(id, out var session))
             return null;
 
         Dictionary<string, byte[]> files = [];
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return null;
 
             if (session.Metadata.EndedAt is null)
@@ -141,7 +133,7 @@ internal sealed class SessionDiagnostics
                 AddWarning(session, $"Some evidence could not be read: {exception.Message}");
             }
 
-            files[key: "session.json"] = Encoding.UTF8.GetBytes(Redact(session, JsonSerializer.Serialize(session.Metadata, JavaScriptObjectNotationOptions)));
+            files[key: "session.json"] = Encoding.UTF8.GetBytes(Redact(session, JsonSerializer.Serialize(session.Metadata, JsonOptions)));
         }
 
         using var output = new MemoryStream();
@@ -159,10 +151,10 @@ internal sealed class SessionDiagnostics
         return output.ToArray();
     }
 
-    public IDisposable Enter(Guid? identifier)
+    public IDisposable Enter(Guid? id)
     {
         var previous = _context.Value;
-        _context.Value = identifier;
+        _context.Value = id;
 
         return new ContextScope(() => _context.Value = previous);
     }
@@ -178,12 +170,12 @@ internal sealed class SessionDiagnostics
 
     public async Task RecordAsync(GameStatus status, CancellationToken cancellationToken = default)
     {
-        if (status.SessionIdentifier is not { } identifier || !_sessions.TryGetValue(identifier, out var session))
+        if (status.SessionId is not { } id || !_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return;
 
             var original = status;
@@ -198,12 +190,12 @@ internal sealed class SessionDiagnostics
             if (original.Error != status.Error || original.Failure?.StackTrace != status.Failure?.StackTrace)
                 AddWarning(session, warning: "Long failure details were truncated in retained metadata");
 
-            status = JsonSerializer.Deserialize<GameStatus>(Redact(session, JsonSerializer.Serialize(status, JavaScriptObjectNotationOptions)), JavaScriptObjectNotationOptions) ?? status;
+            status = JsonSerializer.Deserialize<GameStatus>(Redact(session, JsonSerializer.Serialize(status, JsonOptions)), JsonOptions) ?? status;
             session.Metadata = session.Metadata with { Status = status, LastFailure = status.Failure ?? session.Metadata.LastFailure };
             await WriteFileAsync(
                 session,
                 name: "operations.jsonl",
-                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(status, JavaScriptObjectNotationOptions) + "\n"),
+                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(status, JsonOptions) + "\n"),
                 append: true,
                 cancellationToken
             ).ConfigureAwait(continueOnCapturedContext: false);
@@ -211,9 +203,9 @@ internal sealed class SessionDiagnostics
         }
     }
 
-    public async Task<string> RedactAsync(Guid identifier, string value, CancellationToken cancellationToken = default)
+    public async Task<string> RedactAsync(Guid id, string value, CancellationToken cancellationToken = default)
     {
-        if (!_sessions.TryGetValue(identifier, out var session))
+        if (!_sessions.TryGetValue(id, out var session))
             return value;
 
         using (await session.Lock.LockAsync(cancellationToken))
@@ -222,36 +214,36 @@ internal sealed class SessionDiagnostics
 
     public async Task RegisterSecretAsync(string secret, CancellationToken cancellationToken = default)
     {
-        if (CurrentSessionIdentifier is not { } identifier || !_sessions.TryGetValue(identifier, out var session))
+        if (CurrentSessionId is not { } id || !_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
             session.Secrets.Add(secret);
     }
 
-    public async Task SaveScreenshotAsync(Guid identifier, long operationIdentifier, byte[] screenshot, CancellationToken cancellationToken = default)
+    public async Task SaveScreenshotAsync(Guid id, long operationId, byte[] screenshot, CancellationToken cancellationToken = default)
     {
-        if (!_sessions.TryGetValue(identifier, out var session))
+        if (!_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return;
 
-            await WriteFileAsync(session, $"failure-{operationIdentifier}.png", screenshot, append: false, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await WriteFileAsync(session, $"failure-{operationId}.png", screenshot, append: false, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             await SaveManifestAsync(session, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
     }
 
-    public async Task WarnAsync(Guid identifier, string warning, CancellationToken cancellationToken = default)
+    public async Task WarnAsync(Guid id, string warning, CancellationToken cancellationToken = default)
     {
-        if (!_sessions.TryGetValue(identifier, out var session))
+        if (!_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return;
 
             AddWarning(session, warning);
@@ -259,14 +251,14 @@ internal sealed class SessionDiagnostics
         }
     }
 
-    public async Task WriteOutputAsync(Guid identifier, string stream, string text, CancellationToken cancellationToken = default)
+    public async Task WriteOutputAsync(Guid id, string stream, string text, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(text) || !_sessions.TryGetValue(identifier, out var session))
+        if (string.IsNullOrEmpty(text) || !_sessions.TryGetValue(id, out var session))
             return;
 
         using (await session.Lock.LockAsync(cancellationToken))
         {
-            if (!_sessions.ContainsKey(identifier))
+            if (!_sessions.ContainsKey(id))
                 return;
 
             await WriteFileAsync(session, $"console-{stream}.log", Encoding.UTF8.GetBytes(Redact(session, text)), append: true, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -403,7 +395,7 @@ internal sealed class SessionDiagnostics
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        if (!Guid.TryParse(Path.GetFileName(directory), out var identifier) || IsLink(directory) || _sessions.ContainsKey(identifier))
+                        if (!Guid.TryParse(Path.GetFileName(directory), out var id) || IsLink(directory) || _sessions.ContainsKey(id))
                             continue;
 
                         try
@@ -413,12 +405,9 @@ internal sealed class SessionDiagnostics
                             if (IsLink(manifest))
                                 continue;
 
-                            var metadata = JsonSerializer.Deserialize<DiagnosticSession>(
-                                await File.ReadAllTextAsync(manifest, cancellationToken).ConfigureAwait(continueOnCapturedContext: false),
-                                JavaScriptObjectNotationOptions
-                            );
+                            var metadata = JsonSerializer.Deserialize<DiagnosticSession>(await File.ReadAllTextAsync(manifest, cancellationToken).ConfigureAwait(continueOnCapturedContext: false), JsonOptions);
 
-                            if (metadata is null || metadata.SessionIdentifier != identifier)
+                            if (metadata is null || metadata.SessionId != id)
                                 continue;
 
                             var session = new Session(metadata with { EndedAt = metadata.EndedAt ?? DateTimeOffset.UtcNow }, directory, minecraftDirectory: "");
@@ -431,12 +420,12 @@ internal sealed class SessionDiagnostics
 
                             session.StoredBytes = session.FileSizes.Values.Sum();
 
-                            if (_sessions.TryAdd(identifier, session))
+                            if (_sessions.TryAdd(id, session))
                                 AddStoredBytes(session.StoredBytes);
                         }
                         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
                         {
-                            await Console.Error.WriteLineAsync($"Could not load diagnostic session {identifier}: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
+                            await Console.Error.WriteLineAsync($"Could not load diagnostic session {id}: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
                         }
                     }
                 }
@@ -486,7 +475,7 @@ internal sealed class SessionDiagnostics
                         if (Directory.Exists(session.Directory) && !IsLink(session.Directory))
                             Directory.Delete(session.Directory);
 
-                        if (_sessions.TryRemove(session.Metadata.SessionIdentifier, out var removedSession))
+                        if (_sessions.TryRemove(session.Metadata.SessionId, out var removedSession))
                         {
                             GC.KeepAlive(removedSession);
                             AddStoredBytes(-session.StoredBytes);
@@ -521,7 +510,7 @@ internal sealed class SessionDiagnostics
     private Task SaveManifestAsync(Session session, CancellationToken cancellationToken) => WriteFileAsync(
         session,
         name: "session.json",
-        Encoding.UTF8.GetBytes(Redact(session, JsonSerializer.Serialize(session.Metadata, JavaScriptObjectNotationOptions))),
+        Encoding.UTF8.GetBytes(Redact(session, JsonSerializer.Serialize(session.Metadata, JsonOptions))),
         append: false,
         cancellationToken
     );

@@ -1,7 +1,7 @@
 namespace Void.Client;
 
 internal sealed record DiagnosticSession(
-    [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid SessionIdentifier,
+    [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid SessionId,
     string Launch,
     DateTimeOffset StartedAt,
     DateTimeOffset? EndedAt,
@@ -11,5 +11,5 @@ internal sealed record DiagnosticSession(
 )
 {
     [System.Text.Json.Serialization.JsonPropertyName("downloadUrl")]
-    public string DownloadUniformResourceLocator => $"/api/game/diagnostics/{SessionIdentifier}";
+    public string DownloadUrl => $"/api/game/diagnostics/{SessionId}";
 }
