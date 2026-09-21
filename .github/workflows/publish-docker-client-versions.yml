@@ -6,7 +6,7 @@ on:
       shard-count:
         type: number
         required: false
-        default: 64
+        default: 32
 
 permissions:
   packages: write
