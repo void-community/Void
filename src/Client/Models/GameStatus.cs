@@ -1,4 +1,6 @@
-namespace Void.Client;
+using Void.Client.States;
+
+namespace Void.Client.Models;
 
 /// <summary>
 /// Immutable coordinator snapshot. The operation id lets callers distinguish completion of their accepted

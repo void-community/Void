@@ -1,5 +1,12 @@
 using System.Threading.Channels;
 
+using Void.Client.Abstractions;
+using Void.Client.Failures;
+using Void.Client.Models;
+using Void.Client.Requests;
+using Void.Client.States;
+using Void.Client.Utilities;
+
 namespace Void.Client;
 
 /// <summary>
@@ -72,7 +79,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     public async Task SendChatAsync(SendChatRequest request, CancellationToken cancellationToken)
     {
-        var chatSent = await EnqueueAsync<bool>(completion => new SendChatMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        bool chatSent = await EnqueueAsync<bool>(completion => new SendChatMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<GameStatus> StartCurseForgeAsync(StartCurseForgeGameRequest request, CancellationToken cancellationToken)
@@ -101,12 +108,12 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     public async Task<StopGameResponse> StopGameAsync(CancellationToken cancellationToken)
     {
-        return await EnqueueAsync<StopGameResponse>(completion => new StopMessage(completion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await EnqueueAsync<StopGameResponse>(static completion => new StopMessage(completion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task WriteOptionsAsync(string options, CancellationToken cancellationToken)
     {
-        var optionsWritten = await EnqueueAsync<bool>(completion => new OptionsMessage(options, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        bool optionsWritten = await EnqueueAsync<bool>(completion => new OptionsMessage(options, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -150,13 +157,19 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             await Task.WhenAll(_ownedTasks).ConfigureAwait(continueOnCapturedContext: false);
 
             if (_sessionId is { } sessionId)
-                await ((diagnostics?.CompleteAsync(sessionId, CancellationToken.None) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+                await (diagnostics?.CompleteAsync(sessionId, CancellationToken.None) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
         }
     }
 
-    private static GameCommandException BadRequest(string message) => new(StatusCodes.Status400BadRequest, message);
+    private static GameCommandException BadRequest(string message)
+    {
+        return new(StatusCodes.Status400BadRequest, message);
+    }
 
-    private static GameCommandException Conflict(string message) => new(StatusCodes.Status409Conflict, message);
+    private static GameCommandException Conflict(string message)
+    {
+        return new(StatusCodes.Status409Conflict, message);
+    }
 
     private static ClientFailure FailureFor(Exception exception, string operation, string stage = "coordinator")
     {
@@ -180,7 +193,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
         if (operation.IsCompletedSuccessfully)
         {
-            var completionSet = completion.TrySetResult(await operation.ConfigureAwait(continueOnCapturedContext: false));
+            bool completionSet = completion.TrySetResult(await operation.ConfigureAwait(continueOnCapturedContext: false));
             ReturnedValue.Consume(completionSet);
         }
         else
@@ -194,7 +207,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         var registration = message.RequestCancellation.Register(
             () =>
         {
-            var cancellationMessageWritten = _messages.Writer.TryWrite(new ConnectWaiterCanceled(message.Completion, message.RequestCancellation));
+            bool cancellationMessageWritten = _messages.Writer.TryWrite(new ConnectWaiterCanceled(message.Completion, message.RequestCancellation));
         }
         );
 
@@ -203,8 +216,8 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private async Task<(long OperationId, CancellationTokenSource Cancellation)> BeginConfirmedOperationAsync(string operation, CancellationToken requestCancellation)
     {
-        var operationId = ++_nextOperationId;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken, requestCancellation);
+        long operationId = ++_nextOperationId;
+        CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken, requestCancellation);
         _activeCancellation = cancellation;
         await PublishAsync(
             Status with { OperationId = operationId, Operation = operation, OperationState = OperationState.Running, Message = $"{operation} running", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
@@ -231,7 +244,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         if (diagnostics?.CurrentSessionId is not { } sessionId)
             return;
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds: 3));
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(seconds: 3));
 
         var evidenceTask = CaptureFailureEvidenceAsync(diagnostics, sessionId, operationId, timeout.Token);
         await evidenceTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
@@ -244,7 +257,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private async Task CaptureFailureEvidenceAsync(SessionDiagnostics sessionDiagnostics, Guid sessionId, long operationId, CancellationToken cancellationToken)
     {
-        var screenshot = await runtime.CaptureScreenshotAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        byte[] screenshot = await runtime.CaptureScreenshotAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         await sessionDiagnostics.SaveScreenshotAsync(sessionId, operationId, screenshot, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
@@ -281,7 +294,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         }
 
         var operationState = canceled ? OperationState.Canceled : OperationState.Failed;
-        var operationStateDescription = canceled ? "canceled" : "failed";
+        string operationStateDescription = canceled ? "canceled" : "failed";
         await PublishAsync(
             Status with { OperationState = operationState, Message = $"{operation} {operationStateDescription}", Error = canceled ? null : error.Message, Failure = canceled ? null : FailureFor(error, operation), UpdatedAt = DateTimeOffset.UtcNow }
         ).ConfigureAwait(continueOnCapturedContext: false);
@@ -296,7 +309,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private async Task<TResult> EnqueueAsync<TResult>(Func<TaskCompletionSource<TResult>, Message> createMessage, CancellationToken cancellationToken)
     {
-        var completion = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<TResult> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         await _messages.Writer.WriteAsync(createMessage(completion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -412,7 +425,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private async Task HandleConnectAsync(ConnectMessage message)
     {
-        var host = message.Request.Host?.Trim();
+        string? host = message.Request.Host?.Trim();
 
         if (string.IsNullOrWhiteSpace(host) || message.Request.Port is < 1 or > 65535)
         {
@@ -421,7 +434,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        var server = new ServerAddress(host, message.Request.Port);
+        ServerAddress server = new(host, message.Request.Port);
 
         if (_game is null)
         {
@@ -464,8 +477,8 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        var operationId = ++_nextOperationId;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
+        long operationId = ++_nextOperationId;
+        CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
         _activeCancellation = cancellation;
         _connectingServer = server;
         _connectOperationId = operationId;
@@ -507,7 +520,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         if (completed.Error is not null)
         {
             var operationState = completed.Canceled ? OperationState.Canceled : OperationState.Failed;
-            var operationStateDescription = completed.Canceled ? "canceled" : "failed";
+            string operationStateDescription = completed.Canceled ? "canceled" : "failed";
             await PublishAsync(
                 Status with { OperationState = operationState, Message = $"connect {operationStateDescription}", Error = completed.Canceled ? null : completed.Error.Message, Failure = completed.Canceled ? null : FailureFor(completed.Error, operation: "connect"), UpdatedAt = DateTimeOffset.UtcNow }
             ).ConfigureAwait(continueOnCapturedContext: false);
@@ -540,8 +553,8 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
 
         waiter.CancellationRegistration.Dispose();
-        var waiterRemoved = _connectWaiters.Remove(waiter);
-        var completionCanceled = waiter.Completion.TrySetCanceled(message.CancellationToken);
+        bool waiterRemoved = _connectWaiters.Remove(waiter);
+        bool completionCanceled = waiter.Completion.TrySetCanceled(message.CancellationToken);
 
         // The accepted connection intent outlives individual HTTP waiters. Stop and process-exit paths still own
         // cancellation of the background operation.
@@ -587,7 +600,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        var processExitedDuringOperation = _activeCancellation is not null || _connectWaiters.Count is not 0;
+        bool processExitedDuringOperation = _activeCancellation is not null || _connectWaiters.Count is not 0;
 
         var processFailure = exited.ExitCode is not 0 || processExitedDuringOperation
             ? new GameProcessExitException(exited.ExitCode, exited.WasOutOfMemoryKilled, exited.MemoryMb)
@@ -623,7 +636,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         if (_sessionId is { } sessionId)
-            await ((diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+            await (diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private async Task HandleScreenshotAsync(ScreenshotMessage message)
@@ -650,7 +663,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     {
         completed.Cancellation.Dispose();
 
-        var operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationId, operation: "screenshot", completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
+        bool operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationId, operation: "screenshot", completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
 
         if (!operationCompleted)
             return;
@@ -660,7 +673,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private async Task HandleSendChatAsync(SendChatMessage message)
     {
-        var text = message.Request.Message;
+        string? text = message.Request.Message;
 
         if (_game is null || Status.State is not GameState.Connected)
         {
@@ -698,11 +711,11 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        var version = message.Request?.Version?.Trim();
-        var neoForgeVersion = message.NeoForgeRequest?.Version?.Trim();
-        var slug = message.CurseForgeRequest?.Slug?.Trim();
-        var arguments = message.Request?.Arguments ?? message.NeoForgeRequest?.Arguments ?? message.CurseForgeRequest?.Arguments ?? [];
-        var memoryMb = message.Request?.MemoryMb ?? message.NeoForgeRequest?.MemoryMb ?? message.CurseForgeRequest?.MemoryMb;
+        string? version = message.Request?.Version?.Trim();
+        string? neoForgeVersion = message.NeoForgeRequest?.Version?.Trim();
+        string? slug = message.CurseForgeRequest?.Slug?.Trim();
+        string[] arguments = message.Request?.Arguments ?? message.NeoForgeRequest?.Arguments ?? message.CurseForgeRequest?.Arguments ?? [];
+        int? memoryMb = message.Request?.MemoryMb ?? message.NeoForgeRequest?.MemoryMb ?? message.CurseForgeRequest?.MemoryMb;
 
         if (message.Kind is "start-vanilla" && string.IsNullOrWhiteSpace(version))
         {
@@ -733,7 +746,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         }
 
         if (_sessionId is { } previousSession)
-            await ((diagnostics?.CompleteAsync(previousSession, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+            await (diagnostics?.CompleteAsync(previousSession, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
 
         _sessionId = diagnostics is null ? null : await diagnostics.BeginAsync(
             $"{message.Kind}:{version ?? neoForgeVersion ?? slug}:{message.CurseForgeRequest?.FileId}",
@@ -743,8 +756,8 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
         using var diagnosticContext = diagnostics?.Enter(_sessionId);
 
-        var operationId = ++_nextOperationId;
-        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
+        long operationId = ++_nextOperationId;
+        CancellationTokenSource operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
         _activeCancellation = operationCancellation;
         _connectedResponse = null;
         _processExitFailure = null;
@@ -821,7 +834,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             ).ConfigureAwait(continueOnCapturedContext: false);
 
             if (_sessionId is { } sessionId)
-                await ((diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+                await (diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
 
             return;
         }
@@ -856,8 +869,8 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
 
         CancelConnectWaiters();
-        var operationId = ++_nextOperationId;
-        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
+        long operationId = ++_nextOperationId;
+        CancellationTokenSource operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
         _activeCancellation = operationCancellation;
         await PublishAsync(
             Status with
@@ -895,7 +908,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        var exitCode = _game?.Process.ExitCode;
+        int? exitCode = _game?.Process.ExitCode;
         _game?.Dispose();
         _game = null;
         _connectedResponse = null;
@@ -917,7 +930,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         if (_sessionId is { } sessionId)
-            await ((diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+            await (diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
 
         completed.Completion.SetResult(new(completed.Mode, Status));
     }
@@ -926,7 +939,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     {
         completed.Cancellation.Dispose();
 
-        var operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationId, completed.Kind, completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
+        bool operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationId, completed.Kind, completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
 
         if (!operationCompleted)
             return;

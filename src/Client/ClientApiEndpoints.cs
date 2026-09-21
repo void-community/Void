@@ -1,3 +1,7 @@
+using Void.Client.Failures;
+using Void.Client.Models;
+using Void.Client.Requests;
+
 namespace Void.Client;
 
 /// <summary>Defines the complete external HTTP contract for the reusable game container.</summary>
@@ -34,7 +38,7 @@ internal static class ClientApiEndpoints
             pattern: "/game/diagnostics/{sessionId:guid}",
             async Task<IResult> (Guid sessionId, SessionDiagnostics diagnostics, CancellationToken cancellationToken) =>
         {
-            var archive = await diagnostics.DownloadAsync(sessionId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            byte[]? archive = await diagnostics.DownloadAsync(sessionId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             return archive is null ? Results.NotFound() : Results.File(archive, contentType: "application/zip", $"client-diagnostics-{sessionId}.zip");
         }
@@ -62,9 +66,9 @@ internal static class ClientApiEndpoints
                 operation: "options",
                 async () =>
             {
-                using var reader = new StreamReader(request.Body);
+                using StreamReader reader = new(request.Body);
 
-                var options = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                string options = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                 await coordinator.WriteOptionsAsync(options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
                 return Results.NoContent();
@@ -222,7 +226,7 @@ internal static class ClientApiEndpoints
         if (statusCode >= StatusCodes.Status500InternalServerError)
             LogClientOperationFailure(loggerFactory.CreateLogger(categoryName: "ClientApi"), operation, exception);
 
-        var problem = new ClientProblemDetails(Type: "about:blank", $"Client {operation} failed", statusCode, exception.Message, failure);
+        ClientProblemDetails problem = new(Type: "about:blank", $"Client {operation} failed", statusCode, exception.Message, failure);
 
         return Results.Json(problem, statusCode: statusCode, contentType: "application/problem+json");
     }

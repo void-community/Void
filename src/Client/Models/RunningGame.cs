@@ -1,6 +1,8 @@
 using System.Diagnostics;
 
-namespace Void.Client;
+using Void.Client.Abstractions;
+
+namespace Void.Client.Models;
 
 internal sealed record RunningGame : IDisposable
 {

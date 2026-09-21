@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Failures;
 
 internal sealed class ExternalProcessException : Exception
 {
@@ -24,7 +24,7 @@ internal sealed class ExternalProcessException : Exception
     {
     }
 
-    public IReadOnlyList<string> Arguments { get; } = Array.Empty<string>();
+    public IReadOnlyList<string> Arguments { get; } = [];
 
     public int ExitCode { get; }
 

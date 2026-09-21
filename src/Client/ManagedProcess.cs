@@ -1,5 +1,7 @@
 using System.Diagnostics;
 
+using Void.Client.Abstractions;
+
 namespace Void.Client;
 
 /// <summary>Adapts <see cref="Process"/> into the lifecycle surface owned by the coordinator.</summary>
@@ -15,15 +17,9 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
 
     public int? MemoryMb { get; } = memoryMb;
 
-    public bool WasOutOfMemoryKilled
-    {
-        get
-        {
-            return process.HasExited && process.ExitCode is 137 && (_wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
+    public bool WasOutOfMemoryKilled => process.HasExited && process.ExitCode is 137 && (_wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
                                                && CgroupMemoryEvents.ReadOutOfMemoryKillCount() is { } currentCount
                                                && currentCount > initialCount);
-        }
-    }
 
     public void Dispose()
     {

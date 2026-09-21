@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Requests;
 
 internal sealed record StartCurseForgeGameRequest(
     string? Slug,

@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Abstractions;
 
 internal interface IManagedProcess : IDisposable
 {

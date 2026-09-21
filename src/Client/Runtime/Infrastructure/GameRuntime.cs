@@ -6,17 +6,20 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 
+using Void.Client.Failures;
+using Void.Client.Models;
+
 using File = System.IO.File;
 
 namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
-    static async Task<string> InstallModpack(string slug, int fileId, string apiKey, Uri apiBaseUri, string minecraftDirectory, CancellationToken cancellationToken)
+    private static async Task<string> InstallModpack(string slug, int fileId, string apiKey, Uri apiBaseUri, string minecraftDirectory, CancellationToken cancellationToken)
     {
-        using var hypertextTransferProtocolClient = new HttpClient();
+        using HttpClient hypertextTransferProtocolClient = new();
 
-        var curseForgeClient = new CurseForgeApiClient(hypertextTransferProtocolClient, apiBaseUri, apiKey);
+        CurseForgeApiClient curseForgeClient = new(hypertextTransferProtocolClient, apiBaseUri, apiKey);
 
         await Console.Error.WriteLineAsync(value: "Resolving CurseForge project").ConfigureAwait(continueOnCapturedContext: false);
         var searchResult = await curseForgeClient.SearchModsAsync(MinecraftGameId, slug, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -26,12 +29,12 @@ internal sealed partial class GameRuntime
                       ?? throw new InvalidOperationException($"modpack not found: {slug}");
 
         await Console.Error.WriteLineAsync(value: "Downloading modpack archive").ConfigureAwait(continueOnCapturedContext: false);
-        var archiveDownloadUrl = await ResolveDownloadUrlAsync(curseForgeClient, project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        var archiveBytes = await DownloadWithFallbackAsync(hypertextTransferProtocolClient, archiveDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string archiveDownloadUrl = await ResolveDownloadUrlAsync(curseForgeClient, project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        byte[] archiveBytes = await DownloadWithFallbackAsync(hypertextTransferProtocolClient, archiveDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         await Console.Error.WriteLineAsync(value: "Reading modpack manifest").ConfigureAwait(continueOnCapturedContext: false);
 
-        using var archive = new ZipArchive(new MemoryStream(archiveBytes), ZipArchiveMode.Read);
+        using ZipArchive archive = new(new MemoryStream(archiveBytes), ZipArchiveMode.Read);
 
         var manifestEntry = archive.GetEntry(entryName: "manifest.json")
                             ?? throw new InvalidOperationException(message: "manifest.json not found");
@@ -53,7 +56,7 @@ internal sealed partial class GameRuntime
 
         await Console.Error.WriteLineAsync($"Prepared Minecraft directory: {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
 
-        var overridesFolder = manifest.Overrides ?? "overrides";
+        string overridesFolder = manifest.Overrides ?? "overrides";
 
         if (archive.Entries.Any(entry => entry.FullName.StartsWith(overridesFolder + "/", StringComparison.Ordinal)))
         {
@@ -63,14 +66,14 @@ internal sealed partial class GameRuntime
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var entryIsOverride = entry.FullName.StartsWith(overridesFolder + "/", StringComparison.Ordinal)
+                bool entryIsOverride = entry.FullName.StartsWith(overridesFolder + "/", StringComparison.Ordinal)
                                       && entry.FullName.Length > overridesFolder.Length + 1;
 
                 if (!entryIsOverride)
                     continue;
 
-                var targetPath = Path.GetFullPath(Path.Combine(minecraftDirectory, entry.FullName[(overridesFolder.Length + 1)..]));
-                var targetWithinMinecraftDirectory = targetPath.StartsWith(Path.GetFullPath(minecraftDirectory) + Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal);
+                string targetPath = Path.GetFullPath(Path.Combine(minecraftDirectory, entry.FullName[(overridesFolder.Length + 1)..]));
+                bool targetWithinMinecraftDirectory = targetPath.StartsWith(Path.GetFullPath(minecraftDirectory) + Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal);
 
                 if (!targetWithinMinecraftDirectory)
                     throw new InvalidDataException($"Modpack override escapes the Minecraft directory: {entry.FullName}");
@@ -94,14 +97,14 @@ internal sealed partial class GameRuntime
 
         if (manifest.Files is { Count: > 0 })
         {
-            var requiredFileIds = new List<int>();
+            List<int> requiredFileIds = [];
 
             foreach (var file in manifest.Files)
             {
                 if (file.Required is false)
                     continue;
 
-                var resolvedFileId = file.FileId;
+                int? resolvedFileId = file.FileId;
 
                 if (resolvedFileId is > 0)
                     requiredFileIds.Add(resolvedFileId.Value);
@@ -111,19 +114,19 @@ internal sealed partial class GameRuntime
             {
                 await Console.Error.WriteLineAsync($"Resolving {requiredFileIds.Count} CurseForge files").ConfigureAwait(continueOnCapturedContext: false);
 
-                var allFileMetadata = new List<CurseForgeFile>();
+                List<CurseForgeFile> allFileMetadata = [];
 
-                for (var batchStart = 0; batchStart < requiredFileIds.Count; batchStart += CurseForgeFilesBatchSize)
+                for (int batchStart = 0; batchStart < requiredFileIds.Count; batchStart += CurseForgeFilesBatchSize)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    var batch = requiredFileIds.Skip(batchStart).Take(CurseForgeFilesBatchSize).ToList();
+                    List<int> batch = [.. requiredFileIds.Skip(batchStart).Take(CurseForgeFilesBatchSize)];
                     var files = await curseForgeClient.GetFilesAsync(batch, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                     allFileMetadata.AddRange(files);
                 }
 
-                var totalFileCount = allFileMetadata.Count;
-                var downloadIndex = 0;
+                int totalFileCount = allFileMetadata.Count;
+                int downloadIndex = 0;
 
                 foreach (var fileMeta in allFileMetadata)
                 {
@@ -132,9 +135,9 @@ internal sealed partial class GameRuntime
                     downloadIndex++;
                     ValidateFileName(fileMeta.FileName, fileMeta.ModId, fileMeta.Id);
 
-                    var targetDirectory = DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory);
+                    string targetDirectory = DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory);
                     var targetDirectoryInformation = Directory.CreateDirectory(targetDirectory);
-                    var destinationPath = Path.Combine(targetDirectory, fileMeta.FileName);
+                    string destinationPath = Path.Combine(targetDirectory, fileMeta.FileName);
 
                     if (File.Exists(destinationPath))
                     {
@@ -145,8 +148,8 @@ internal sealed partial class GameRuntime
 
                     await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
 
-                    var fileDownloadUrl = await ResolveModFileDownloadUrlAsync(curseForgeClient, fileMeta.ModId, fileMeta.Id, fileMeta.DownloadUrl, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                    var fileBytes = await DownloadWithFallbackAsync(hypertextTransferProtocolClient, fileDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    string fileDownloadUrl = await ResolveModFileDownloadUrlAsync(curseForgeClient, fileMeta.ModId, fileMeta.Id, fileMeta.DownloadUrl, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    byte[] fileBytes = await DownloadWithFallbackAsync(hypertextTransferProtocolClient, fileDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
                     await File.WriteAllBytesAsync(destinationPath, fileBytes, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                 }
@@ -163,10 +166,10 @@ internal sealed partial class GameRuntime
 
         await Console.Error.WriteLineAsync(value: "Resolving PortableMC version").ConfigureAwait(continueOnCapturedContext: false);
 
-        var minecraftVersion = manifest.Minecraft?.Version
+        string minecraftVersion = manifest.Minecraft?.Version
                                ?? throw new InvalidOperationException(message: "minecraft.version missing");
 
-        var portablemcVersion = $"mojang:{minecraftVersion}";
+        string portablemcVersion = $"mojang:{minecraftVersion}";
 
         if (manifest.Minecraft.ModLoaders is not null)
         {
@@ -175,7 +178,7 @@ internal sealed partial class GameRuntime
                 if (loader.Primary != true)
                     continue;
 
-                var loaderId = loader.Id ?? "";
+                string loaderId = loader.Id ?? "";
 
                 if (loaderId.StartsWith(value: "neoforge-", StringComparison.Ordinal))
                 {
@@ -183,7 +186,7 @@ internal sealed partial class GameRuntime
                 }
                 else if (loaderId.StartsWith(value: "forge-", StringComparison.Ordinal))
                 {
-                    var forgeVersion = loaderId["forge-".Length..];
+                    string forgeVersion = loaderId["forge-".Length..];
                     portablemcVersion = forgeVersion.StartsWith($"{minecraftVersion}-", StringComparison.Ordinal)
                         ? $"forge::{forgeVersion}"
                         : $"forge::{minecraftVersion}-{forgeVersion}";
@@ -204,25 +207,25 @@ internal sealed partial class GameRuntime
         return portablemcVersion;
     }
 
-    static async Task InstallSodiumAsync(string modsDirectory, string portableMinecraftVersion, string minecraftVersion, CancellationToken cancellationToken)
+    private static async Task InstallSodiumAsync(string modsDirectory, string portableMinecraftVersion, string minecraftVersion, CancellationToken cancellationToken)
     {
-        var sodiumPath = Path.Combine(modsDirectory, path2: "sodium.jar");
-        var temporarySodiumPath = Path.Combine(modsDirectory, $".sodium.jar.{Guid.NewGuid():N}");
-        var separatorIndex = portableMinecraftVersion.IndexOf(value: ':', StringComparison.Ordinal);
-        var loader = separatorIndex < 0 ? "mojang" : portableMinecraftVersion[..separatorIndex];
-        var loaders = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { loader }));
-        var gameVersions = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { minecraftVersion }));
+        string sodiumPath = Path.Combine(modsDirectory, path2: "sodium.jar");
+        string temporarySodiumPath = Path.Combine(modsDirectory, $".sodium.jar.{Guid.NewGuid():N}");
+        int separatorIndex = portableMinecraftVersion.IndexOf(value: ':', StringComparison.Ordinal);
+        string loader = separatorIndex < 0 ? "mojang" : portableMinecraftVersion[..separatorIndex];
+        string loaders = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { loader }));
+        string gameVersions = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { minecraftVersion }));
         string? sodiumUrl = null;
 
         File.Delete(sodiumPath);
 
         try
         {
-            using var hypertextTransferProtocolClient = new HttpClient();
+            using HttpClient hypertextTransferProtocolClient = new();
 
             hypertextTransferProtocolClient.DefaultRequestHeaders.UserAgent.ParseAdd(input: "caunt/Void");
 
-            var versionsUri = new Uri($"https://api.modrinth.com/v2/project/AANobbMI/version?loaders={loaders}&game_versions={gameVersions}", UriKind.Absolute);
+            Uri versionsUri = new($"https://api.modrinth.com/v2/project/AANobbMI/version?loaders={loaders}&game_versions={gameVersions}", UriKind.Absolute);
 
             using var versionsResponse = await hypertextTransferProtocolClient.GetAsync(versionsUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
@@ -239,8 +242,8 @@ internal sealed partial class GameRuntime
 
                 foreach (var file in files.EnumerateArray())
                 {
-                    var primaryFound = file.TryGetProperty(propertyName: "primary", out var primary);
-                    var uniformResourceLocatorFound = file.TryGetProperty(propertyName: "url", out var uniformResourceLocator);
+                    bool primaryFound = file.TryGetProperty(propertyName: "primary", out var primary);
+                    bool uniformResourceLocatorFound = file.TryGetProperty(propertyName: "url", out var uniformResourceLocator);
 
                     if (primaryFound && primary.GetBoolean() && uniformResourceLocatorFound)
                     {
@@ -261,7 +264,7 @@ internal sealed partial class GameRuntime
                 return;
             }
 
-            var sodiumUri = new Uri(sodiumUrl, UriKind.Absolute);
+            Uri sodiumUri = new(sodiumUrl, UriKind.Absolute);
 
             using var sodiumResponse = await hypertextTransferProtocolClient.GetAsync(sodiumUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
@@ -288,20 +291,20 @@ internal sealed partial class GameRuntime
 
     private static bool IsProcessGroupRunning(int processGroupId)
     {
-        foreach (var processDirectory in Directory.EnumerateDirectories(path: "/proc"))
+        foreach (string processDirectory in Directory.EnumerateDirectories(path: "/proc"))
         {
             try
             {
-                var status = File.ReadAllText(Path.Combine(processDirectory, path2: "stat"));
-                var commandEnd = status.LastIndexOf(value: ')');
+                string status = File.ReadAllText(Path.Combine(processDirectory, path2: "stat"));
+                int commandEnd = status.LastIndexOf(value: ')');
 
                 if (commandEnd < 0)
                     continue;
 
-                var fields = status[(commandEnd + 1)..].Split(separator: ' ', StringSplitOptions.RemoveEmptyEntries);
-                var candidateProcessGroupId = 0;
+                string[] fields = status[(commandEnd + 1)..].Split(separator: ' ', StringSplitOptions.RemoveEmptyEntries);
+                int candidateProcessGroupId = 0;
 
-                var candidateParsed = fields.Length > 2
+                bool candidateParsed = fields.Length > 2
                                       && fields[0] is not "Z"
                                       && int.TryParse(fields[2], NumberStyles.None, CultureInfo.InvariantCulture, out candidateProcessGroupId);
 
@@ -317,7 +320,7 @@ internal sealed partial class GameRuntime
         return false;
     }
 
-    static void KillProcess(Process process)
+    private static void KillProcess(Process process)
     {
         try
         {
@@ -335,7 +338,7 @@ internal sealed partial class GameRuntime
         return new(StatusCodes.Status503ServiceUnavailable, code: "client.players.unavailable", stage, message, innerException);
     }
 
-    static async Task<string> PrepareCurseForgeAsync(
+    private static async Task<string> PrepareCurseForgeAsync(
         string slug,
         int fileId,
         string curseForgeApiKey,
@@ -346,10 +349,10 @@ internal sealed partial class GameRuntime
     {
         GC.KeepAlive(Directory.CreateDirectory(minecraftDirectory));
 
-        var markerFile = Path.Combine(minecraftDirectory, path2: ".curseforge-modpack");
-        var versionFile = Path.Combine(minecraftDirectory, path2: ".curseforge-portablemc-version");
-        var marker = $"{slug} {fileId}";
-        var existingMarker = File.Exists(markerFile) ? (await File.ReadAllTextAsync(markerFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim() : "";
+        string markerFile = Path.Combine(minecraftDirectory, path2: ".curseforge-modpack");
+        string versionFile = Path.Combine(minecraftDirectory, path2: ".curseforge-portablemc-version");
+        string marker = $"{slug} {fileId}";
+        string existingMarker = File.Exists(markerFile) ? (await File.ReadAllTextAsync(markerFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim() : "";
         string portablemcVersion;
 
         await Console.Error.WriteLineAsync($"Starting CurseForge modpack '{slug}' file '{fileId}'").ConfigureAwait(continueOnCapturedContext: false);
@@ -376,7 +379,7 @@ internal sealed partial class GameRuntime
         return portablemcVersion;
     }
 
-    static async Task<string> ResolveDownloadUrlAsync(CurseForgeApiClient curseForgeClient, int projectId, int modFileId, CancellationToken cancellationToken)
+    private static async Task<string> ResolveDownloadUrlAsync(CurseForgeApiClient curseForgeClient, int projectId, int modFileId, CancellationToken cancellationToken)
     {
         var file = await curseForgeClient.GetModFileAsync(projectId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         cancellationToken.ThrowIfCancellationRequested();
@@ -384,7 +387,7 @@ internal sealed partial class GameRuntime
         if (!string.IsNullOrEmpty(file.DownloadUrl))
             return file.DownloadUrl;
 
-        var downloadUrl = await curseForgeClient.GetModFileDownloadUrlAsync(projectId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string? downloadUrl = await curseForgeClient.GetModFileDownloadUrlAsync(projectId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         cancellationToken.ThrowIfCancellationRequested();
 
         return !string.IsNullOrEmpty(downloadUrl)
@@ -392,7 +395,7 @@ internal sealed partial class GameRuntime
             : $"https://www.curseforge.com/api/v1/mods/{projectId}/files/{modFileId}/download";
     }
 
-    static async Task<string> ResolveModFileDownloadUrlAsync(
+    private static async Task<string> ResolveModFileDownloadUrlAsync(
         CurseForgeApiClient curseForgeClient,
         int modId,
         int modFileId,
@@ -403,7 +406,7 @@ internal sealed partial class GameRuntime
         if (!string.IsNullOrEmpty(softwareDevelopmentKitDownloadUrl))
             return softwareDevelopmentKitDownloadUrl;
 
-        var downloadUrl = await curseForgeClient.GetModFileDownloadUrlAsync(modId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string? downloadUrl = await curseForgeClient.GetModFileDownloadUrlAsync(modId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         cancellationToken.ThrowIfCancellationRequested();
 
         return !string.IsNullOrEmpty(downloadUrl)
@@ -411,12 +414,12 @@ internal sealed partial class GameRuntime
             : $"https://www.curseforge.com/api/v1/mods/{modId}/files/{modFileId}/download";
     }
 
-    static async Task<ProcessBytesResult> RunProcessBytesAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)
+    private static async Task<ProcessBytesResult> RunProcessBytesAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var process = Process.Start(processStartInformation)
                       ?? throw new InvalidOperationException($"failed to start {processStartInformation.FileName}");
 
-        var standardOutput = new MemoryStream();
+        MemoryStream standardOutput = new();
 
         var standardOutputTask = process.StandardOutput.BaseStream.CopyToAsync(standardOutput, cancellationToken);
         var standardErrorTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -437,17 +440,17 @@ internal sealed partial class GameRuntime
         }
     }
 
-    static async Task TryCancelAgentCommandAsync(GameTrackerConnection tracker, int port, string requestId)
+    private static async Task TryCancelAgentCommandAsync(GameTrackerConnection tracker, int port, string requestId)
     {
         try
         {
-            using var client = new TcpClient();
+            using TcpClient client = new();
 
             await client.ConnectAsync(IPAddress.Loopback, port, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
 
             using var stream = client.GetStream();
 
-            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true) { AutoFlush = true };
+            using StreamWriter writer = new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true) { AutoFlush = true };
 
             await writer.WriteLineAsync($"{tracker.Token}\tcancel\t{requestId}".AsMemory(), CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
         }
@@ -463,7 +466,7 @@ internal sealed partial class GameRuntime
 
         try
         {
-            foreach (var line in File.ReadLines(Path.Combine(processDirectory, path2: "status")))
+            foreach (string line in File.ReadLines(Path.Combine(processDirectory, path2: "status")))
             {
                 if (!line.StartsWith(value: "PPid:", StringComparison.Ordinal))
                     continue;
@@ -479,22 +482,22 @@ internal sealed partial class GameRuntime
         return false;
     }
 
-    static bool UsesLegacyLwjgl(string version)
+    private static bool UsesLegacyLwjgl(string version)
     {
-        var versionComponents = version["mojang:".Length..].Split(separator: '.');
+        string[] versionComponents = version["mojang:".Length..].Split(separator: '.');
 
         return versionComponents.Length >= 2
-            && int.TryParse(versionComponents[0], out var majorVersion)
-            && int.TryParse(versionComponents[1], out var minorVersion)
+            && int.TryParse(versionComponents[0], out int majorVersion)
+            && int.TryParse(versionComponents[1], out int minorVersion)
             && majorVersion == 1
             && minorVersion <= 12;
     }
 
-    static void ValidateFileName(string fileName, int modId, int modFileId)
+    private static void ValidateFileName(string fileName, int modId, int modFileId)
     {
-        var safeName = Path.GetFileName(fileName);
+        string safeName = Path.GetFileName(fileName);
 
-        var fileNameIsSafe = safeName == fileName
+        bool fileNameIsSafe = safeName == fileName
                              && !string.IsNullOrEmpty(safeName)
                              && safeName is not "." and not ".."
                              && !safeName.Contains(value: '/', StringComparison.Ordinal)
@@ -507,7 +510,7 @@ internal sealed partial class GameRuntime
 
     private static void ValidatePlayer(GamePlayer player)
     {
-        var positionIsFinite = double.IsFinite(player.Position.XCoordinate)
+        bool positionIsFinite = double.IsFinite(player.Position.XCoordinate)
                                && double.IsFinite(player.Position.YCoordinate)
                                && double.IsFinite(player.Position.ZCoordinate);
 
@@ -519,7 +522,7 @@ internal sealed partial class GameRuntime
 
     private static void ValidatePlayer(RemoteGamePlayer player)
     {
-        var positionIsFinite = double.IsFinite(player.Position.XCoordinate)
+        bool positionIsFinite = double.IsFinite(player.Position.XCoordinate)
                                && double.IsFinite(player.Position.YCoordinate)
                                && double.IsFinite(player.Position.ZCoordinate);
 
@@ -538,17 +541,17 @@ internal sealed partial class GameRuntime
             throw PlayersUnavailable(message: "The Minecraft player tracker returned a non-finite player rotation");
     }
 
-    static async Task WaitForKilledProcessAsync(Process process)
+    private static async Task WaitForKilledProcessAsync(Process process)
     {
         var waitTask = process.WaitForExitAsync(CancellationToken.None);
         await waitTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
 
-    static async Task WaitForProcessExitAsync(Process process, string processName, TimeSpan timeout, CancellationToken cancellationToken, bool killOnTimeout = true)
+    private static async Task WaitForProcessExitAsync(Process process, string processName, TimeSpan timeout, CancellationToken cancellationToken, bool killOnTimeout = true)
     {
-        using var timeoutSource = new CancellationTokenSource(timeout);
+        using CancellationTokenSource timeoutSource = new(timeout);
 
-        using var linkedCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        using CancellationTokenSource linkedCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
 
         try
         {
@@ -575,7 +578,7 @@ internal sealed partial class GameRuntime
 
     private static async Task WaitForProcessGroupExitAsync(int processGroupId, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
         while (IsProcessGroupRunning(processGroupId))
         {

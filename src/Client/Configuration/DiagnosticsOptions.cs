@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Configuration;
 
 internal sealed class DiagnosticsOptions
 {
@@ -9,7 +9,7 @@ internal sealed class DiagnosticsOptions
 
     public static DiagnosticsOptions FromConfiguration(IConfiguration configuration)
     {
-        var defaults = new DiagnosticsOptions();
+        DiagnosticsOptions defaults = new();
 
         return new DiagnosticsOptions
         {

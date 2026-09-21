@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Models;
 
 internal sealed record Position(
     [property: System.Text.Json.Serialization.JsonPropertyName("x")] double XCoordinate,

@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Failures;
 
 internal static class X11FailureClassifier
 {

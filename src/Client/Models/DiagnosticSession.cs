@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Models;
 
 internal sealed record DiagnosticSession(
     [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid SessionId,

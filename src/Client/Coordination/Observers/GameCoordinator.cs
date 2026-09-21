@@ -1,3 +1,6 @@
+using Void.Client.Models;
+using Void.Client.States;
+
 namespace Void.Client;
 
 internal sealed partial class GameCoordinator
@@ -41,7 +44,7 @@ internal sealed partial class GameCoordinator
 
         if (operation.IsCompletedSuccessfully)
         {
-            var image = await operation.ConfigureAwait(continueOnCapturedContext: false);
+            byte[] image = await operation.ConfigureAwait(continueOnCapturedContext: false);
             await WriteCompletionAsync(new ScreenshotCompleted(operationId, image, Error: null, Canceled: false, cancellation, completion)).ConfigureAwait(continueOnCapturedContext: false);
 
             return;
@@ -129,14 +132,14 @@ internal sealed partial class GameCoordinator
     private async Task PublishAsync(GameStatus status)
     {
         status = status with { SessionId = _sessionId };
-        await ((diagnostics?.RecordAsync(status, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+        await (diagnostics?.RecordAsync(status, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
         Volatile.Write(ref _status, status);
     }
 
     private async Task WriteCompletionAsync(Message message)
     {
-        var canWrite = await _messages.Writer.WaitToWriteAsync(CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
-        var messageWritten = canWrite && _messages.Writer.TryWrite(message);
+        bool canWrite = await _messages.Writer.WaitToWriteAsync(CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+        bool messageWritten = canWrite && _messages.Writer.TryWrite(message);
 
         if (!messageWritten)
             LogRejectedMessage(logger, message.GetType().Name, arg3: null);

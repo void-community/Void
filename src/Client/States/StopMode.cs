@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.States;
 
 internal enum StopMode
 {

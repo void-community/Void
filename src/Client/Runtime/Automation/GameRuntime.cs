@@ -5,18 +5,21 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 
+using Void.Client.Failures;
+using Void.Client.Models;
+
 using File = System.IO.File;
 
 namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
-    async Task<MinecraftWindowLease> AcquirePreparedWindowLeaseAsync(string display, CancellationToken cancellationToken)
+    private async Task<MinecraftWindowLease> AcquirePreparedWindowLeaseAsync(string display, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var windowId = await WaitForLargestWindowAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            var lease = new MinecraftWindowLease(windowId, Interlocked.Increment(ref _nextWindowGeneration));
+            string windowId = await WaitForLargestWindowAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            MinecraftWindowLease lease = new(windowId, Interlocked.Increment(ref _nextWindowGeneration));
 
             try
             {
@@ -51,8 +54,8 @@ internal sealed partial class GameRuntime
 
     private async Task AttachAgentAsync(RunningGame game, CancellationToken cancellationToken)
     {
-        var javaProcessId = FindJavaProcessId(game.Process.Id) ?? throw new InvalidOperationException(message: "The running Minecraft JVM could not be found");
-        var agentPathAndArguments = $"{PortableMinecraftAgentPath}={CreateAgentArguments(game.Tracker)}";
+        int javaProcessId = FindJavaProcessId(game.Process.Id) ?? throw new InvalidOperationException(message: "The running Minecraft JVM could not be found");
+        string agentPathAndArguments = $"{PortableMinecraftAgentPath}={CreateAgentArguments(game.Tracker)}";
 
         var result = await RunProcessTextAsync(
             CreateProcessStartInformation(
@@ -67,10 +70,10 @@ internal sealed partial class GameRuntime
             throw new InvalidOperationException($"The Minecraft agent could not attach: {result.StandardError}");
     }
 
-    async Task<byte[]> CaptureScreenAsync(CancellationToken cancellationToken)
+    private async Task<byte[]> CaptureScreenAsync(CancellationToken cancellationToken)
     {
-        var display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
-        var windowId = await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false) ?? throw new InvalidOperationException(message: "no visible window found");
+        string display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
+        string windowId = await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false) ?? throw new InvalidOperationException(message: "no visible window found");
         await ResizeWindowToDisplayAsync(windowId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         var captureResult = await RunScreenCaptureBytesAsync(
@@ -85,7 +88,7 @@ internal sealed partial class GameRuntime
             : captureResult.StandardOutput;
     }
 
-    async Task ConnectThroughAgentAsync(RunningGame game, string serverAddress, CancellationToken cancellationToken)
+    private async Task ConnectThroughAgentAsync(RunningGame game, string serverAddress, CancellationToken cancellationToken)
     {
         var response = await SendAgentCommandAsync(game, command: "connect", serverAddress, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
@@ -123,14 +126,14 @@ internal sealed partial class GameRuntime
         }
     }
 
-    async Task EnsureDisplay(CancellationToken cancellationToken = default)
+    private async Task EnsureDisplay(CancellationToken cancellationToken = default)
     {
-        var display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
+        string display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
         Environment.SetEnvironmentVariable(variable: "DISPLAY", display);
         await WaitForDisplayReadyAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    async Task<string?> FindLargestWindow(string display, CancellationToken cancellationToken = default)
+    private async Task<string?> FindLargestWindow(string display, CancellationToken cancellationToken = default)
     {
         var searchProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["search", "--onlyvisible", "--name", ".*"], display);
         var searchResult = await RunProcessTextAsync(searchProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -141,13 +144,13 @@ internal sealed partial class GameRuntime
         string? largestWindowId = null;
         long largestArea = 0;
 
-        foreach (var candidateWindowId in searchResult.StandardOutput.Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries))
+        foreach (string candidateWindowId in searchResult.StandardOutput.Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries))
         {
-            var trimmedCandidateId = candidateWindowId.Trim();
+            string trimmedCandidateId = candidateWindowId.Trim();
             var nameProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["getwindowname", trimmedCandidateId], display);
             var nameResult = await RunProcessTextAsync(nameProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-            var windowNameAccepted = nameResult.ExitCode is 0
+            bool windowNameAccepted = nameResult.ExitCode is 0
                                      && !string.IsNullOrWhiteSpace(nameResult.StandardOutput)
                                      && nameResult.StandardOutput.Trim() != LauncherSplashWindowTitle;
 
@@ -162,11 +165,11 @@ internal sealed partial class GameRuntime
 
             int width = 0, height = 0;
 
-            foreach (var line in geometryResult.StandardOutput.Split(separator: '\n'))
+            foreach (string line in geometryResult.StandardOutput.Split(separator: '\n'))
             {
-                if (line.StartsWith(value: "WIDTH=", StringComparison.Ordinal) && int.TryParse(line["WIDTH=".Length..], out var widthValue))
+                if (line.StartsWith(value: "WIDTH=", StringComparison.Ordinal) && int.TryParse(line["WIDTH=".Length..], out int widthValue))
                     width = widthValue;
-                else if (line.StartsWith(value: "HEIGHT=", StringComparison.Ordinal) && int.TryParse(line["HEIGHT=".Length..], out var heightValue))
+                else if (line.StartsWith(value: "HEIGHT=", StringComparison.Ordinal) && int.TryParse(line["HEIGHT=".Length..], out int heightValue))
                     height = heightValue;
             }
 
@@ -180,7 +183,7 @@ internal sealed partial class GameRuntime
         return largestWindowId;
     }
 
-    async Task<StaleMinecraftWindowException?> GetStaleWindowFailureAsync(MinecraftWindowLease lease, string display, Exception exception, CancellationToken cancellationToken)
+    private async Task<StaleMinecraftWindowException?> GetStaleWindowFailureAsync(MinecraftWindowLease lease, string display, Exception exception, CancellationToken cancellationToken)
     {
         if (exception is ExternalProcessException processException && X11FailureClassifier.IsExplicitStaleWindow(processException))
             return new(lease, exception);
@@ -204,7 +207,7 @@ internal sealed partial class GameRuntime
         }
     }
 
-    async Task<bool> IsDisplayReadyAsync(string display, CancellationToken cancellationToken)
+    private async Task<bool> IsDisplayReadyAsync(string display, CancellationToken cancellationToken)
     {
         try
         {
@@ -233,14 +236,14 @@ internal sealed partial class GameRuntime
             await PrepareDisplayAndWindowAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             await Console.Error.WriteLineAsync($"Launching Minecraft with PortableMC version: {portableMinecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
             var tracker = CreateTrackerConnection(FindUsername(arguments));
-            await ((diagnostics?.RegisterSecretAsync(tracker.Token, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
-            await ((diagnostics?.RegisterSecretAsync(EncodeAgentArgument(tracker.Token), cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+            await (diagnostics?.RegisterSecretAsync(tracker.Token, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
+            await (diagnostics?.RegisterSecretAsync(EncodeAgentArgument(tracker.Token), cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
 
-            var launchArguments = memoryMb is { } value
-                ? arguments.Append(CreateMaximumHeapArgument(value)).Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>().ToArray()
+            string?[] launchArguments = memoryMb is { } value
+                ? [.. arguments.Append(CreateMaximumHeapArgument(value)).Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>()]
                 : [.. arguments.Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>()];
 
-            var initialOutOfMemoryKillCount = CgroupMemoryEvents.ReadOutOfMemoryKillCount();
+            long? initialOutOfMemoryKillCount = CgroupMemoryEvents.ReadOutOfMemoryKillCount();
             Process process;
 
             try
@@ -269,7 +272,7 @@ internal sealed partial class GameRuntime
                 );
                 var managedProcess = runningGame.Process;
 
-                using var windowCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using CancellationTokenSource windowCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
                 var windowTask = WaitForPreparedLargestWindowAsync(Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay, windowCancellationTokenSource.Token);
                 var processExitTask = managedProcess.WaitForExitAsync(CancellationToken.None);
@@ -282,7 +285,7 @@ internal sealed partial class GameRuntime
                     throw new GameProcessExitException(process.ExitCode, managedProcess.WasOutOfMemoryKilled, memoryMb);
                 }
 
-                var preparedWindowLease = await windowTask.ConfigureAwait(continueOnCapturedContext: false);
+                string preparedWindowLease = await windowTask.ConfigureAwait(continueOnCapturedContext: false);
 
                 var result = runningGame;
                 runningGame = null;
@@ -311,17 +314,17 @@ internal sealed partial class GameRuntime
 
     private async Task<RunningGame> LaunchPortableAsync(string portableMinecraftVersion, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
     {
-        var minecraftDirectory = GetMinecraftDirectory();
+        string minecraftDirectory = GetMinecraftDirectory();
         await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    Process LaunchPortableMinecraftClient(string directory, string version, string?[]? portableMinecraftArguments = null, CancellationToken cancellationToken = default)
+    private Process LaunchPortableMinecraftClient(string directory, string version, string?[]? portableMinecraftArguments = null, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         portableMinecraftArguments ??= [];
-        var requestedPortableMinecraftArguments = portableMinecraftArguments.OfType<string>().ToArray();
+        string[] requestedPortableMinecraftArguments = [.. portableMinecraftArguments.OfType<string>()];
 
         var process = StartGameProcess(
             processStartInformation =>
@@ -339,9 +342,9 @@ internal sealed partial class GameRuntime
 
             if (File.Exists(PortableMinecraftLegacyJvmExecutablePath))
             {
-                var isMojangVersion = version.StartsWith(value: "mojang:", StringComparison.Ordinal);
-                var usesLegacyLwjgl = isMojangVersion && UsesLegacyLwjgl(version);
-                var armLwjglVersion = isMojangVersion ? GetArmLwjglVersion(version) : PortableMinecraftArmLwjgl4Version;
+                bool isMojangVersion = version.StartsWith(value: "mojang:", StringComparison.Ordinal);
+                bool usesLegacyLwjgl = isMojangVersion && UsesLegacyLwjgl(version);
+                string armLwjglVersion = isMojangVersion ? GetArmLwjglVersion(version) : PortableMinecraftArmLwjgl4Version;
 
                 if (usesLegacyLwjgl && !HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--jvm"))
                 {
@@ -362,7 +365,7 @@ internal sealed partial class GameRuntime
                     }
                 }
 
-                var vulkanLibraryRequired = armLwjglVersion == PortableMinecraftArmLwjgl4Version
+                bool vulkanLibraryRequired = armLwjglVersion == PortableMinecraftArmLwjgl4Version
                                             && !HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--exclude-lib");
 
                 if (vulkanLibraryRequired)
@@ -372,7 +375,7 @@ internal sealed partial class GameRuntime
                 }
             }
 
-            foreach (var argument in requestedPortableMinecraftArguments)
+            foreach (string? argument in requestedPortableMinecraftArguments)
                 processStartInformation.ArgumentList.Add(argument);
         }
         );
@@ -380,12 +383,12 @@ internal sealed partial class GameRuntime
         return process;
     }
 
-    async Task PrepareDisplayAndWindowAsync(CancellationToken cancellationToken)
+    private async Task PrepareDisplayAndWindowAsync(CancellationToken cancellationToken)
     {
         await EnsureDisplay(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         await RunOrThrow(cancellationToken, command: ["xset", "r", "off"]).ConfigureAwait(continueOnCapturedContext: false);
 
-        var display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
+        string display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
         var deadline = DateTimeOffset.UtcNow.AddSeconds(seconds: 10);
 
         while (DateTimeOffset.UtcNow < deadline)
@@ -399,13 +402,13 @@ internal sealed partial class GameRuntime
         throw new TimeoutException(message: "A previous Minecraft window did not close before the next launch");
     }
 
-    async Task PreparePortableMinecraftClientAsync(string minecraftDirectory, string portableMinecraftVersion, CancellationToken cancellationToken)
+    private async Task PreparePortableMinecraftClientAsync(string minecraftDirectory, string portableMinecraftVersion, CancellationToken cancellationToken)
     {
-        var configurationDirectory = Path.Combine(minecraftDirectory, path2: "config");
-        var modsDirectory = Path.Combine(minecraftDirectory, path2: "mods");
-        var optionsPath = Path.Combine(minecraftDirectory, path2: "options.txt");
-        var sodiumOptionsPath = Path.Combine(configurationDirectory, path2: "sodium-options.json");
-        var serversPath = Path.Combine(minecraftDirectory, path2: "servers.dat");
+        string configurationDirectory = Path.Combine(minecraftDirectory, path2: "config");
+        string modsDirectory = Path.Combine(minecraftDirectory, path2: "mods");
+        string optionsPath = Path.Combine(minecraftDirectory, path2: "options.txt");
+        string sodiumOptionsPath = Path.Combine(configurationDirectory, path2: "sodium-options.json");
+        string serversPath = Path.Combine(minecraftDirectory, path2: "servers.dat");
         var configurationDirectoryInformation = Directory.CreateDirectory(configurationDirectory);
         var modsDirectoryInformation = Directory.CreateDirectory(modsDirectory);
 
@@ -426,9 +429,9 @@ internal sealed partial class GameRuntime
             ).ConfigureAwait(continueOnCapturedContext: false);
         }
 
-        var portableMinecraftArguments = new List<string> { portableMinecraftVersion, "--demo", "--main-dir", minecraftDirectory, "--output", "machine" };
+        List<string> portableMinecraftArguments = [portableMinecraftVersion, "--demo", "--main-dir", minecraftDirectory, "--output", "machine"];
 
-        var legacyJavaRequired = File.Exists(PortableMinecraftLegacyJvmExecutablePath)
+        bool legacyJavaRequired = File.Exists(PortableMinecraftLegacyJvmExecutablePath)
                                  && !portableMinecraftVersion.StartsWith(value: "mojang:", StringComparison.Ordinal);
 
         if (legacyJavaRequired)
@@ -451,11 +454,11 @@ internal sealed partial class GameRuntime
         if (preparationResult.ExitCode != 0)
             throw new InvalidOperationException($"Portable Minecraft preparation exited with code {preparationResult.ExitCode}: {preparationResult.StandardError}");
 
-        var minecraftVersion = preparationResult.StandardOutput
+        string? minecraftVersion = preparationResult.StandardOutput
             .Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.TrimEnd(trimChar: '\r').Split(separator: '\t'))
-            .Where(fields => fields.Length > 1 && fields[0] == "loaded_hierarchy")
-            .Select(fields => fields[^1])
+            .Select(static line => line.TrimEnd(trimChar: '\r').Split(separator: '\t'))
+            .Where(static fields => fields.Length > 1 && fields[0] == "loaded_hierarchy")
+            .Select(static fields => fields[^1])
             .LastOrDefault();
 
         if (string.IsNullOrWhiteSpace(minecraftVersion))
@@ -464,13 +467,13 @@ internal sealed partial class GameRuntime
         await InstallSodiumAsync(modsDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    async Task ResizeWindowToDisplayAsync(string windowId, CancellationToken cancellationToken = default)
+    private async Task ResizeWindowToDisplayAsync(string windowId, CancellationToken cancellationToken = default)
     {
         await RunOrThrow(cancellationToken, command: ["xdotool", "windowmove", "--sync", windowId, "0", "0"]).ConfigureAwait(continueOnCapturedContext: false);
         await RunOrThrow(cancellationToken, command: ["xdotool", "windowsize", "--sync", windowId, DisplayScreenWidth, DisplayScreenHeight]).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    async Task RunOrThrow(CancellationToken cancellationToken, params string[] command)
+    private async Task RunOrThrow(CancellationToken cancellationToken, params string[] command)
     {
         var processStartInformation = CreateProcessStartInformation(command[0], command[1..]);
         var result = await RunProcessTextAsync(processStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -479,7 +482,7 @@ internal sealed partial class GameRuntime
             throw new ExternalProcessException(command[0], command[1..], result.ExitCode, result.StandardOutput, result.StandardError);
     }
 
-    async Task<ProcessTextResult> RunProcessTextAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task<ProcessTextResult> RunProcessTextAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)
     {
         using var process = Process.Start(processStartInformation)
                             ?? throw new InvalidOperationException($"failed to start {processStartInformation.FileName}");
@@ -498,7 +501,7 @@ internal sealed partial class GameRuntime
 
             if (diagnostics?.CurrentSessionId is { } failedSession)
             {
-                using var diagnosticTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds: 3));
+                using CancellationTokenSource diagnosticTimeout = new(TimeSpan.FromSeconds(seconds: 3));
 
                 try
                 {
@@ -531,8 +534,8 @@ internal sealed partial class GameRuntime
             throw;
         }
 
-        var standardOutput = await standardOutputTask.ConfigureAwait(continueOnCapturedContext: false);
-        var standardError = await standardErrorTask.ConfigureAwait(continueOnCapturedContext: false);
+        string standardOutput = await standardOutputTask.ConfigureAwait(continueOnCapturedContext: false);
+        string standardError = await standardErrorTask.ConfigureAwait(continueOnCapturedContext: false);
 
         if (diagnostics?.CurrentSessionId is { } sessionId)
         {
@@ -543,14 +546,14 @@ internal sealed partial class GameRuntime
         return new ProcessTextResult(process.ExitCode, standardOutput, standardError);
     }
 
-    async Task<ProcessBytesResult> RunScreenCaptureBytesAsync(
+    private async Task<ProcessBytesResult> RunScreenCaptureBytesAsync(
         Func<string, ProcessStartInfo> createProcessStartInformation,
         string windowId,
         string display,
         CancellationToken cancellationToken
     )
     {
-        for (var attempt = 1; attempt <= ScreenCaptureMaximumAttempts; attempt++)
+        for (int attempt = 1; attempt <= ScreenCaptureMaximumAttempts; attempt++)
         {
             try
             {
@@ -566,7 +569,7 @@ internal sealed partial class GameRuntime
         throw new InvalidOperationException(message: "Screen capture attempts were exhausted");
     }
 
-    async Task<TrackerResponse> SendAgentCommandAsync(RunningGame game, string command, string value, CancellationToken cancellationToken)
+    private async Task<TrackerResponse> SendAgentCommandAsync(RunningGame game, string command, string value, CancellationToken cancellationToken)
     {
         if (!File.Exists(game.Tracker.DescriptorPath))
             await AttachAgentAsync(game, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -574,28 +577,28 @@ internal sealed partial class GameRuntime
         if (!File.Exists(game.Tracker.DescriptorPath))
             throw new InvalidOperationException(message: "The Minecraft agent is not ready");
 
-        var descriptor = await File.ReadAllTextAsync(game.Tracker.DescriptorPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string descriptor = await File.ReadAllTextAsync(game.Tracker.DescriptorPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        if (!int.TryParse(descriptor, NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
+        if (!int.TryParse(descriptor, NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
             throw new InvalidOperationException(message: "The Minecraft agent published an invalid endpoint");
 
-        var requestId = Guid.NewGuid().ToString(format: "N", CultureInfo.InvariantCulture);
-        var encodedValue = Convert.ToBase64String(Encoding.UTF8.GetBytes(value)).TrimEnd(trimChar: '=').Replace(oldChar: '+', newChar: '-').Replace(oldChar: '/', newChar: '_');
+        string requestId = Guid.NewGuid().ToString(format: "N", CultureInfo.InvariantCulture);
+        string encodedValue = Convert.ToBase64String(Encoding.UTF8.GetBytes(value)).TrimEnd(trimChar: '=').Replace(oldChar: '+', newChar: '-').Replace(oldChar: '/', newChar: '_');
 
         try
         {
-            using var client = new TcpClient();
+            using TcpClient client = new();
 
             await client.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             using var stream = client.GetStream();
 
-            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true) { AutoFlush = true };
+            using StreamWriter writer = new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true) { AutoFlush = true };
 
-            using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+            using StreamReader reader = new(stream, Encoding.UTF8, leaveOpen: true);
 
             await writer.WriteLineAsync($"{game.Tracker.Token}\t{command}\t{requestId}\t{encodedValue}".AsMemory(), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            var responseJson = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            string? responseJson = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             return string.IsNullOrWhiteSpace(responseJson)
                 ? throw new InvalidOperationException(message: "The Minecraft agent returned an empty response")
@@ -610,7 +613,7 @@ internal sealed partial class GameRuntime
         }
     }
 
-    async Task SendChatThroughAgentAsync(RunningGame game, string message, CancellationToken cancellationToken)
+    private async Task SendChatThroughAgentAsync(RunningGame game, string message, CancellationToken cancellationToken)
     {
         var response = await SendAgentCommandAsync(game, command: "chat", message, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
@@ -637,9 +640,9 @@ internal sealed partial class GameRuntime
         await Console.Error.WriteLineAsync($"Minecraft agent submitted the exact chat input through Minecraft's UI handler: {JsonSerializer.Serialize(message)}").ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    Process StartGameProcess(Action<ProcessStartInfo> configure)
+    private Process StartGameProcess(Action<ProcessStartInfo> configure)
     {
-        var processStartInformation = new ProcessStartInfo(fileName: "setsid")
+        ProcessStartInfo processStartInformation = new(fileName: "setsid")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -661,7 +664,7 @@ internal sealed partial class GameRuntime
         return process;
     }
 
-    async Task WaitForDisplayReadyAsync(string display, CancellationToken cancellationToken)
+    private async Task WaitForDisplayReadyAsync(string display, CancellationToken cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow.AddSeconds(seconds: 10);
 
@@ -676,13 +679,13 @@ internal sealed partial class GameRuntime
         throw new TimeoutException($"Display {display} did not become ready within 10 seconds");
     }
 
-    async Task<string> WaitForLargestWindowAsync(string display, CancellationToken cancellationToken)
+    private async Task<string> WaitForLargestWindowAsync(string display, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var windowId = await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            string? windowId = await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             if (windowId is not null)
                 return windowId;
@@ -691,16 +694,16 @@ internal sealed partial class GameRuntime
         throw new OperationCanceledException(cancellationToken);
     }
 
-    async Task<string> WaitForPreparedLargestWindowAsync(string display, CancellationToken cancellationToken)
+    private async Task<string> WaitForPreparedLargestWindowAsync(string display, CancellationToken cancellationToken)
     {
         return (await AcquirePreparedWindowLeaseAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Id;
     }
 
-    record ProcessBytesResult(int ExitCode, byte[] StandardOutput, string StandardError);
+    private record ProcessBytesResult(int ExitCode, byte[] StandardOutput, string StandardError);
 
 
 
-    record ProcessTextResult(int ExitCode, string StandardOutput, string StandardError);
+    private record ProcessTextResult(int ExitCode, string StandardOutput, string StandardError);
 
     private sealed record TrackerResponse(string? Status, string? Stage, string? Message, string? Value, GamePlayer? Local, RemoteGamePlayer[]? Remote);
 }

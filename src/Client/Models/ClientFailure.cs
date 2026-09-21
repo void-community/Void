@@ -1,4 +1,6 @@
-namespace Void.Client;
+using Void.Client.Failures;
+
+namespace Void.Client.Models;
 
 internal sealed record ClientFailure(string Code, string Operation, string Stage, string Message, string ExceptionType, string StackTrace)
 {

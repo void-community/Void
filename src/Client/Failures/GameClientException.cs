@@ -1,4 +1,6 @@
-namespace Void.Client;
+using Void.Client.Models;
+
+namespace Void.Client.Failures;
 
 internal class GameClientException : Exception
 {

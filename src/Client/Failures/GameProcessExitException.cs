@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Failures;
 
 internal sealed class GameProcessExitException : GameClientException
 {
@@ -28,7 +28,7 @@ internal sealed class GameProcessExitException : GameClientException
         if (!wasOutOfMemoryKilled)
             return $"Minecraft exited unexpectedly with exit code {exitCode}";
 
-        var memoryDescription = memoryMb is { } value ? $" with a configured maximum heap of {value} MiB" : "";
+        string memoryDescription = memoryMb is { } value ? $" with a configured maximum heap of {value} MiB" : "";
 
         return $"Minecraft was killed by the operating system out-of-memory killer with exit code {exitCode}{memoryDescription}";
     }

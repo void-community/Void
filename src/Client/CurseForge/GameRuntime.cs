@@ -1,11 +1,13 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using Void.Client.Utilities;
+
 namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
-    sealed class CurseForgeApiClient(HttpClient hypertextTransferProtocolClient, Uri baseUri, string apiKey)
+    private sealed class CurseForgeApiClient(HttpClient hypertextTransferProtocolClient, Uri baseUri, string apiKey)
     {
         private readonly string _apiKey = apiKey;
         private readonly Uri _baseUri = baseUri;
@@ -35,7 +37,7 @@ internal sealed partial class GameRuntime
 
         public async Task<List<CurseForgeProject>> SearchModsAsync(int gameId, string slug, CancellationToken cancellationToken)
         {
-            var slugQuery = Uri.EscapeDataString(slug);
+            string slugQuery = Uri.EscapeDataString(slug);
             var response = await GetAsync<CurseForgeApiListResponse<CurseForgeProject>>($"v1/mods/search?gameId={gameId}&slug={slugQuery}", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             return response.Data ?? [];
@@ -43,14 +45,14 @@ internal sealed partial class GameRuntime
 
         private async Task<TResponse> GetAsync<TResponse>(string relativeUrl, CancellationToken cancellationToken)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_baseUri, relativeUrl));
+            using HttpRequestMessage request = new(HttpMethod.Get, new Uri(_baseUri, relativeUrl));
 
             return await SendAsync<TResponse>(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
 
         private async Task<TResponse> PostAsync<TResponse>(string relativeUrl, CurseForgeFilesRequest body, CancellationToken cancellationToken)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_baseUri, relativeUrl))
+            using HttpRequestMessage request = new(HttpMethod.Post, new Uri(_baseUri, relativeUrl))
             {
                 Content = JsonContent.Create(body, options: _javaScriptObjectNotationOptions)
             };
@@ -71,26 +73,26 @@ internal sealed partial class GameRuntime
         }
     }
 
-    record CurseForgeApiListResponse<TResponse>(List<TResponse>? Data);
+    private record CurseForgeApiListResponse<TResponse>(List<TResponse>? Data);
 
-    record CurseForgeApiResponse<TResponse>(TResponse? Data);
+    private record CurseForgeApiResponse<TResponse>(TResponse? Data);
 
-    record CurseForgeFile(
+    private record CurseForgeFile(
         [property: JsonPropertyName("id")] int Id,
         [property: JsonPropertyName("modId")] int ModId,
         string FileName,
         [property: JsonPropertyName("downloadUrl")] string? DownloadUrl
     );
 
-    record CurseForgeFilesRequest([property: JsonPropertyName("fileIds")] List<int> FileIds);
+    private record CurseForgeFilesRequest([property: JsonPropertyName("fileIds")] List<int> FileIds);
 
-    record CurseForgeManifest(CurseForgeMinecraft? Minecraft, string? Overrides, List<CurseForgeManifestFile>? Files);
+    private record CurseForgeManifest(CurseForgeMinecraft? Minecraft, string? Overrides, List<CurseForgeManifestFile>? Files);
 
-    record CurseForgeManifestFile([property: JsonPropertyName("fileID")] int? FileId, bool? Required);
+    private record CurseForgeManifestFile([property: JsonPropertyName("fileID")] int? FileId, bool? Required);
 
-    record CurseForgeMinecraft(string? Version, List<CurseForgeModLoader>? ModLoaders);
+    private record CurseForgeMinecraft(string? Version, List<CurseForgeModLoader>? ModLoaders);
 
-    record CurseForgeModLoader([property: JsonPropertyName("id")] string? Id, bool? Primary);
+    private record CurseForgeModLoader([property: JsonPropertyName("id")] string? Id, bool? Primary);
 
-    record CurseForgeProject([property: JsonPropertyName("id")] int Id, string? Slug);
+    private record CurseForgeProject([property: JsonPropertyName("id")] int Id, string? Slug);
 }

@@ -1,4 +1,6 @@
-namespace Void.Client;
+using Void.Client.States;
+
+namespace Void.Client.Utilities;
 
 internal static class ReturnedValue
 {

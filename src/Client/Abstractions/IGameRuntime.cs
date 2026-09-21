@@ -1,4 +1,7 @@
-namespace Void.Client;
+using Void.Client.Models;
+using Void.Client.States;
+
+namespace Void.Client.Abstractions;
 
 internal interface IGameRuntime
 {

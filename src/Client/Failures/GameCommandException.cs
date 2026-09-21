@@ -1,4 +1,4 @@
-namespace Void.Client;
+namespace Void.Client.Failures;
 
 internal sealed class GameCommandException : Exception
 {
