@@ -20,9 +20,9 @@ internal static class CgroupMemoryEvents
 
     internal static long? ParseOutOfMemoryKillCount(string content)
     {
-        foreach (var line in content.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var line in content.Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var parts = line.Split(separator: ' ', StringSplitOptions.RemoveEmptyEntries);
 
             if (parts is ["oom_kill", var value] && long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var count))
                 return count;

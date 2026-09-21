@@ -7,11 +7,11 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
 {
     private bool? _wasOutOfMemoryKilled;
 
-    public int Id => process.Id;
+    public int? ExitCode => process.HasExited ? process.ExitCode : null;
 
     public bool HasExited => process.HasExited;
 
-    public int? ExitCode => process.HasExited ? process.ExitCode : null;
+    public int Identifier => process.Id;
 
     public int? MemoryMb { get; } = memoryMb;
 
@@ -19,20 +19,15 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
     {
         get
         {
-            if (!process.HasExited || process.ExitCode is not 137)
-                return false;
-
-            return _wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
+            return process.HasExited && process.ExitCode is 137 && (_wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
                                                && CgroupMemoryEvents.ReadOutOfMemoryKillCount() is { } currentCount
-                                               && currentCount > initialCount;
+                                               && currentCount > initialCount);
         }
     }
 
-    public async Task WaitForExitAsync(CancellationToken cancellationToken)
+    public void Dispose()
     {
-        await process.WaitForExitAsync(cancellationToken);
-        if (outputCompletion is not null)
-            await outputCompletion.WaitAsync(cancellationToken);
+        process.Dispose();
     }
 
     public void KillTree()
@@ -41,8 +36,11 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
             process.Kill(entireProcessTree: true);
     }
 
-    public void Dispose()
+    public async Task WaitForExitAsync(CancellationToken cancellationToken)
     {
-        process.Dispose();
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (outputCompletion is not null)
+            await outputCompletion.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 }

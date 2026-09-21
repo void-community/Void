@@ -94,7 +94,7 @@ public class SessionDiagnosticsTests : IDisposable
         await diagnostics.WriteOutputAsync(second, "stdout", "new", TestContext.Current.CancellationToken);
         await diagnostics.CompleteAsync(second, TestContext.Current.CancellationToken);
         Assert.Null(await diagnostics.DownloadAsync(first, CancellationToken.None));
-        Assert.Equal(second, Assert.Single((await diagnostics.ListAsync(TestContext.Current.CancellationToken))).SessionId);
+        Assert.Equal(second, Assert.Single((await diagnostics.ListAsync(TestContext.Current.CancellationToken))).SessionIdentifier);
         var reloaded = Create(maximumSessions: 1);
         Assert.Equal("new", (await ReadArchiveAsync(reloaded, second))["console-stdout.log"]);
     }
@@ -106,9 +106,9 @@ public class SessionDiagnosticsTests : IDisposable
         var blockedDirectory = Path.Combine(_directory, "file");
         await File.WriteAllTextAsync(blockedDirectory, "not a directory", TestContext.Current.CancellationToken);
         var diagnostics = new SessionDiagnostics(new DiagnosticsOptions { Directory = blockedDirectory });
-        var sessionId = await diagnostics.BeginAsync("failed preparation", "", TestContext.Current.CancellationToken);
-        await diagnostics.WriteOutputAsync(sessionId, "stderr", "failure", TestContext.Current.CancellationToken);
-        var files = await ReadArchiveAsync(diagnostics, sessionId);
+        var sessionIdentifier = await diagnostics.BeginAsync("failed preparation", "", TestContext.Current.CancellationToken);
+        await diagnostics.WriteOutputAsync(sessionIdentifier, "stderr", "failure", TestContext.Current.CancellationToken);
+        var files = await ReadArchiveAsync(diagnostics, sessionIdentifier);
         Assert.Contains("Could not store", files["session.json"]);
     }
 
@@ -116,10 +116,10 @@ public class SessionDiagnosticsTests : IDisposable
     public async Task OversizedOutputIsBoundedAndDescribedInManifest()
     {
         var diagnostics = Create(maximumSessionMb: 1, maximumTotalMb: 1);
-        var sessionId = await diagnostics.BeginAsync("noisy client", "", TestContext.Current.CancellationToken);
+        var sessionIdentifier = await diagnostics.BeginAsync("noisy client", "", TestContext.Current.CancellationToken);
         for (var index = 0; index < 32; index++)
-            await diagnostics.WriteOutputAsync(sessionId, "stderr", new string('x', 65536), TestContext.Current.CancellationToken);
-        var files = await ReadArchiveAsync(diagnostics, sessionId);
+            await diagnostics.WriteOutputAsync(sessionIdentifier, "stderr", new string('x', 65536), TestContext.Current.CancellationToken);
+        var files = await ReadArchiveAsync(diagnostics, sessionIdentifier);
         Assert.Contains("size limit reached", files["session.json"]);
         Assert.True(Directory.EnumerateFiles(Path.Combine(_directory, "evidence"), "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length) <= 1024 * 1024);
     }
@@ -199,7 +199,7 @@ public class SessionDiagnosticsTests : IDisposable
         await diagnostics.CollectAsync(first, TestContext.Current.CancellationToken);
         await diagnostics.CompleteAsync(first, TestContext.Current.CancellationToken);
         Assert.Equal("first report", (await ReadArchiveAsync(diagnostics, first))["debug-disconnect-test.txt"]);
-        Assert.Equal(endedAt, (await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionId == first).EndedAt);
+        Assert.Equal(endedAt, (await diagnostics.ListAsync(TestContext.Current.CancellationToken)).Single(session => session.SessionIdentifier == first).EndedAt);
     }
 
     [Fact]

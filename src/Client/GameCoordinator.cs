@@ -6,172 +6,703 @@ namespace Void.Client;
 /// Serializes all lifecycle and X11 mutations through one channel. Status reads are lock-free because only the
 /// channel reader publishes immutable snapshots.
 /// </summary>
-internal sealed class GameCoordinator(IGameRuntime runtime, ILogger<GameCoordinator> logger, SessionDiagnostics? diagnostics = null) : BackgroundService
+internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<GameCoordinator> logger, SessionDiagnostics? diagnostics = null) : BackgroundService
 {
-    private readonly Channel<Message> _messages = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions
-    {
-        SingleReader = true,
-        SingleWriter = false,
-        AllowSynchronousContinuations = false
-    });
+    private static readonly Action<ILogger, Exception?> LogGameStopFailure = LoggerMessage.Define(LogLevel.Error, new EventId(id: 1003, nameof(LogGameStopFailure)), formatString: "Game stop failed");
+    private static readonly Action<ILogger, string, Exception?> LogOperationFailure = LoggerMessage.Define<string>(LogLevel.Error, new EventId(id: 1002, nameof(LogOperationFailure)), formatString: "{Operation} failed");
+    private static readonly Action<ILogger, string, Exception?> LogRejectedMessage = LoggerMessage.Define<string>(
+        LogLevel.Error,
+        new EventId(id: 1004, nameof(LogRejectedMessage)),
+        formatString: "Coordinator stopped before it could record {MessageType}"
+    );
+    private static readonly Action<ILogger, Exception?> LogShutdownFailure = LoggerMessage.Define(LogLevel.Error, new EventId(id: 1001, nameof(LogShutdownFailure)), formatString: "Failed to stop Minecraft during API shutdown");
+    private readonly Channel<Message> _messages = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
     private readonly List<Task> _ownedTasks = [];
     private readonly List<ConnectWaiter> _connectWaiters = [];
-    private GameStatus _status = new(GameState.Idle, 0, null, OperationState.None, null, null, null, null, null, null, [], DateTimeOffset.UtcNow);
-    private RunningGame? _game;
-    private Guid? _sessionId;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (Task<RunningGame> Operation, CancellationTokenSource Cancellation, IDisposable? DiagnosticContext)> _startObservations = new();
     private CancellationTokenSource? _activeCancellation;
-    private ServerAddress? _connectingServer;
+    private long? _connectOperationIdentifier;
     private ConnectGameResponse? _connectedResponse;
+    private ServerAddress? _connectingServer;
+    private RunningGame? _game;
+    private long _nextOperationIdentifier;
     private GameProcessExitException? _processExitFailure;
-    private long? _connectOperationId;
-    private long _nextOperationId;
-    private CancellationToken _stoppingToken;
+    private Guid? _sessionIdentifier;
     private int _started;
-
-    public GameStatus Status => Volatile.Read(ref _status);
+    private GameStatus _status = new(
+        GameState.Idle,
+        OperationIdentifier: 0,
+        Operation: null,
+        OperationState.None,
+        ProcessIdentifier: null,
+        ExitCode: null,
+        Server: null,
+        Message: null,
+        Error: null,
+        Failure: null,
+        [],
+        DateTimeOffset.UtcNow
+    );
+    private CancellationToken _stoppingToken;
 
     public bool IsHealthy => Volatile.Read(ref _started) is 1;
 
-    public async Task<GameStatus> StartVanillaAsync(StartGameRequest request, CancellationToken cancellationToken)
-    {
-        return await EnqueueAsync<GameStatus>(completion => new StartMessage("start-vanilla", request, null, null, completion), cancellationToken);
-    }
+    public GameStatus Status => Volatile.Read(ref _status);
 
-    public async Task<GameStatus> StartNeoForgeAsync(StartNeoForgeGameRequest request, CancellationToken cancellationToken)
+    public async Task<byte[]> CaptureScreenshotAsync(CancellationToken cancellationToken)
     {
-        return await EnqueueAsync<GameStatus>(completion => new StartMessage("start-neoforge", null, request, null, completion), cancellationToken);
-    }
-
-    public async Task<GameStatus> StartCurseForgeAsync(StartCurseForgeGameRequest request, CancellationToken cancellationToken)
-    {
-        return await EnqueueAsync<GameStatus>(completion => new StartMessage("start-curseforge", null, null, request, completion), cancellationToken);
-    }
-
-    public async Task<StopGameResponse> StopGameAsync(CancellationToken cancellationToken)
-    {
-        return await EnqueueAsync<StopGameResponse>(completion => new StopMessage(completion), cancellationToken);
+        return await EnqueueAsync<byte[]>(completion => new ScreenshotMessage(completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<ConnectGameResponse> ConnectAsync(ConnectGameRequest request, CancellationToken cancellationToken)
     {
-        return await EnqueueAsync<ConnectGameResponse>(completion => new ConnectMessage(request, completion, cancellationToken), cancellationToken);
+        return await EnqueueAsync<ConnectGameResponse>(completion => new ConnectMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public async Task SendChatAsync(SendChatRequest request, CancellationToken cancellationToken)
+    public override void Dispose()
     {
-        await EnqueueAsync<bool>(completion => new SendChatMessage(request, completion, cancellationToken), cancellationToken);
-    }
-
-    public async Task<byte[]> CaptureScreenshotAsync(CancellationToken cancellationToken)
-    {
-        return await EnqueueAsync<byte[]>(completion => new ScreenshotMessage(completion, cancellationToken), cancellationToken);
+        _activeCancellation?.Dispose();
+        base.Dispose();
     }
 
     public async Task<GamePlayers> GetPlayersAsync(CancellationToken cancellationToken)
     {
-        return await EnqueueAsync<GamePlayers>(completion => new PlayersMessage(completion, cancellationToken), cancellationToken);
+        return await EnqueueAsync<GamePlayers>(completion => new PlayersMessage(completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    public async Task SendChatAsync(SendChatRequest request, CancellationToken cancellationToken)
+    {
+        var chatSent = await EnqueueAsync<bool>(completion => new SendChatMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    public async Task<GameStatus> StartCurseForgeAsync(StartCurseForgeGameRequest request, CancellationToken cancellationToken)
+    {
+        return await EnqueueAsync<GameStatus>(
+            completion => new StartMessage(Kind: "start-curseforge", Request: null, NeoForgeRequest: null, request, completion),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    public async Task<GameStatus> StartNeoForgeAsync(StartNeoForgeGameRequest request, CancellationToken cancellationToken)
+    {
+        return await EnqueueAsync<GameStatus>(
+            completion => new StartMessage(Kind: "start-neoforge", Request: null, request, CurseForgeRequest: null, completion),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    public async Task<GameStatus> StartVanillaAsync(StartGameRequest request, CancellationToken cancellationToken)
+    {
+        return await EnqueueAsync<GameStatus>(
+            completion => new StartMessage(Kind: "start-vanilla", request, NeoForgeRequest: null, CurseForgeRequest: null, completion),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    public async Task<StopGameResponse> StopGameAsync(CancellationToken cancellationToken)
+    {
+        return await EnqueueAsync<StopGameResponse>(completion => new StopMessage(completion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task WriteOptionsAsync(string options, CancellationToken cancellationToken)
     {
-        await EnqueueAsync<bool>(completion => new OptionsMessage(options, completion, cancellationToken), cancellationToken);
+        var optionsWritten = await EnqueueAsync<bool>(completion => new OptionsMessage(options, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _stoppingToken = stoppingToken;
-        Volatile.Write(ref _started, 1);
+        Volatile.Write(ref _started, value: 1);
 
         try
         {
-            await foreach (var message in _messages.Reader.ReadAllAsync(stoppingToken))
-                await HandleAsync(message);
+            await foreach (var message in _messages.Reader.ReadAllAsync(stoppingToken).ConfigureAwait(continueOnCapturedContext: false))
+                await HandleAsync(message).ConfigureAwait(continueOnCapturedContext: false);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Host shutdown owns cancellation and cleanup below.
+            return;
         }
         finally
         {
-            Volatile.Write(ref _started, 0);
-            _messages.Writer.TryComplete();
-            _activeCancellation?.Cancel();
+            Volatile.Write(ref _started, value: 0);
+            ReturnedValue.Consume(_messages.Writer.TryComplete());
+
+            if (_activeCancellation is not null)
+                await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
 
             if (_game is not null)
             {
-                try
+                var stopTask = runtime.StopAsync(_game, CancellationToken.None);
+                await ((Task)stopTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+                if (stopTask.IsCompletedSuccessfully)
                 {
-                    await runtime.StopAsync(_game, CancellationToken.None);
+                    var stopMode = await stopTask.ConfigureAwait(continueOnCapturedContext: false);
+                    ReturnedValue.Consume(stopMode);
                 }
-                catch (Exception exception)
+                else
                 {
-                    logger.LogError(exception, "Failed to stop Minecraft during API shutdown");
+                    LogShutdownFailure(logger, GetTaskException(stopTask));
                 }
             }
 
-            await Task.WhenAll(_ownedTasks);
-            if (_sessionId is { } sessionId)
-                await (diagnostics?.CompleteAsync(sessionId, CancellationToken.None) ?? Task.CompletedTask);
+            await Task.WhenAll(_ownedTasks).ConfigureAwait(continueOnCapturedContext: false);
+
+            if (_sessionIdentifier is { } sessionIdentifier)
+                await ((diagnostics?.CompleteAsync(sessionIdentifier, CancellationToken.None) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
         }
+    }
+
+    private static GameCommandException BadRequest(string message) => new(StatusCodes.Status400BadRequest, message);
+
+    private static GameCommandException Conflict(string message) => new(StatusCodes.Status409Conflict, message);
+
+    private static ClientFailure FailureFor(Exception exception, string operation, string stage = "coordinator")
+    {
+        return ClientFailure.FromException(code: "client.operation.failed", operation, stage, exception);
+    }
+
+    private static Exception GetTaskException(Task task)
+    {
+        return task.Exception?.GetBaseException() ?? new TaskCanceledException(task);
+    }
+
+    private static bool IsMaximumHeapArgument(string argument)
+    {
+        return argument.StartsWith(value: "-Xmx", StringComparison.Ordinal)
+               || argument.StartsWith(value: "--jvm-arg=-Xmx", StringComparison.Ordinal);
+    }
+
+    private static async Task ObservePlayersAsync(Task<GamePlayers> operation, TaskCompletionSource<GamePlayers> completion)
+    {
+        await ((Task)operation).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        if (operation.IsCompletedSuccessfully)
+        {
+            var completionSet = completion.TrySetResult(await operation.ConfigureAwait(continueOnCapturedContext: false));
+            ReturnedValue.Consume(completionSet);
+        }
+        else
+        {
+            ReturnedValue.Consume(completion.TrySetException(GetTaskException(operation)));
+        }
+    }
+
+    private void AddConnectWaiter(ConnectMessage message)
+    {
+        var registration = message.RequestCancellation.Register(
+            () =>
+        {
+            var cancellationMessageWritten = _messages.Writer.TryWrite(new ConnectWaiterCanceled(message.Completion, message.RequestCancellation));
+        }
+        );
+
+        _connectWaiters.Add(new(message.Completion, registration));
+    }
+
+    private async Task<(long OperationIdentifier, CancellationTokenSource Cancellation)> BeginConfirmedOperationAsync(string operation, CancellationToken requestCancellation)
+    {
+        var operationIdentifier = ++_nextOperationIdentifier;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken, requestCancellation);
+        _activeCancellation = cancellation;
+        await PublishAsync(
+            Status with { OperationIdentifier = operationIdentifier, Operation = operation, OperationState = OperationState.Running, Message = $"{operation} running", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        return (operationIdentifier, cancellation);
+    }
+
+    private void CancelConnectWaiters()
+    {
+        foreach (var waiter in _connectWaiters)
+        {
+            waiter.CancellationRegistration.Dispose();
+            ReturnedValue.Consume(waiter.Completion.TrySetCanceled());
+        }
+
+        _connectWaiters.Clear();
+        _connectingServer = null;
+        _connectOperationIdentifier = null;
+    }
+
+    private async Task CaptureFailureAsync(long operationIdentifier)
+    {
+        if (diagnostics?.CurrentSessionIdentifier is not { } sessionIdentifier)
+            return;
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds: 3));
+
+        var evidenceTask = CaptureFailureEvidenceAsync(diagnostics, sessionIdentifier, operationIdentifier, timeout.Token);
+        await evidenceTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        if (!evidenceTask.IsCompletedSuccessfully)
+            await diagnostics.WarnAsync(sessionIdentifier, $"Failure screenshot unavailable: {GetTaskException(evidenceTask).Message}", _stoppingToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        await diagnostics.CollectAsync(sessionIdentifier, _stoppingToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    private async Task CaptureFailureEvidenceAsync(SessionDiagnostics sessionDiagnostics, Guid sessionIdentifier, long operationIdentifier, CancellationToken cancellationToken)
+    {
+        var screenshot = await runtime.CaptureScreenshotAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await sessionDiagnostics.SaveScreenshotAsync(sessionIdentifier, operationIdentifier, screenshot, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    private async Task CleanupSupersededGameAsync(RunningGame game)
+    {
+        try
+        {
+            var stopMode = await runtime.StopAsync(game, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        finally
+        {
+            game.Dispose();
+        }
+    }
+
+    private async Task<bool> CompleteConfirmedOperationAsync<TResult>(long operationIdentifier, string operation, Exception? error, bool canceled, TaskCompletionSource<TResult> completion)
+    {
+        if (operationIdentifier != Status.OperationIdentifier)
+        {
+            ReturnedValue.Consume(completion.TrySetException(Conflict($"{operation} was superseded by operation {Status.OperationIdentifier}")));
+
+            return false;
+        }
+
+        _activeCancellation = null;
+
+        if (error is null)
+        {
+            await PublishAsync(
+                Status with { OperationState = OperationState.Succeeded, Message = $"{operation} succeeded", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
+            ).ConfigureAwait(continueOnCapturedContext: false);
+
+            return true;
+        }
+
+        var operationState = canceled ? OperationState.Canceled : OperationState.Failed;
+        var operationStateDescription = canceled ? "canceled" : "failed";
+        await PublishAsync(
+            Status with { OperationState = operationState, Message = $"{operation} {operationStateDescription}", Error = canceled ? null : error.Message, Failure = canceled ? null : FailureFor(error, operation), UpdatedAt = DateTimeOffset.UtcNow }
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (canceled)
+            completion.SetCanceled();
+        else
+            completion.SetException(error);
+
+        return false;
+    }
+
+    private async Task<TResult> EnqueueAsync<TResult>(Func<TaskCompletionSource<TResult>, Message> createMessage, CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await _messages.Writer.WriteAsync(createMessage(completion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    private void FailConnectWaiters(Exception exception)
+    {
+        foreach (var waiter in _connectWaiters)
+        {
+            waiter.CancellationRegistration.Dispose();
+            ReturnedValue.Consume(waiter.Completion.TrySetException(exception));
+        }
+
+        _connectWaiters.Clear();
+        _connectingServer = null;
+        _connectOperationIdentifier = null;
     }
 
     private async Task HandleAsync(Message message)
     {
-        using var diagnosticContext = diagnostics?.Enter(_sessionId);
+        using var diagnosticContext = message is StartMessage ? null : diagnostics?.Enter(_sessionIdentifier);
+
         switch (message)
         {
             case StartMessage start:
-                await HandleStartAsync(start);
-                break;
+                {
+                    await HandleStartAsync(start).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case StopMessage stop:
-                await HandleStopAsync(stop);
-                break;
+                {
+                    await HandleStopAsync(stop).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case ConnectMessage connect:
-                await HandleConnectAsync(connect);
-                break;
+                {
+                    await HandleConnectAsync(connect).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case ConnectWaiterCanceled canceled:
-                HandleConnectWaiterCanceled(canceled);
-                break;
+                {
+                    HandleConnectWaiterCanceled(canceled);
+
+                    break;
+                }
             case SendChatMessage chat:
-                await HandleSendChatAsync(chat);
-                break;
+                {
+                    await HandleSendChatAsync(chat).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case ScreenshotMessage screenshot:
-                await HandleScreenshotAsync(screenshot);
-                break;
+                {
+                    await HandleScreenshotAsync(screenshot).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case PlayersMessage players:
-                HandlePlayers(players);
-                break;
+                {
+                    HandlePlayers(players);
+
+                    break;
+                }
             case OptionsMessage options:
-                await HandleOptionsAsync(options);
-                break;
+                {
+                    await HandleOptionsAsync(options).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case StartCompleted completed:
-                await HandleStartCompletedAsync(completed);
-                break;
+                {
+                    await HandleStartCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case StopCompleted completed:
-                await HandleStopCompletedAsync(completed);
-                break;
+                {
+                    await HandleStopCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case ConnectCompleted completed:
-                await HandleConnectCompletedAsync(completed);
-                break;
+                {
+                    await HandleConnectCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case VoidOperationCompleted completed:
-                await HandleVoidOperationCompletedAsync(completed);
-                break;
+                {
+                    await HandleVoidOperationCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case ScreenshotCompleted completed:
-                await HandleScreenshotCompletedAsync(completed);
-                break;
+                {
+                    await HandleScreenshotCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case ProcessExited exited:
-                await HandleProcessExitedAsync(exited);
-                break;
+                {
+                    await HandleProcessExitedAsync(exited).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             default:
                 throw new InvalidOperationException($"Unknown coordinator message type {message.GetType().Name}");
         }
+    }
+
+    private async Task HandleConnectAsync(ConnectMessage message)
+    {
+        var host = message.Request.Host?.Trim();
+
+        if (string.IsNullOrWhiteSpace(host) || message.Request.Port is < 1 or > 65535)
+        {
+            message.Completion.SetException(BadRequest(message: "host and a port between 1 and 65535 are required"));
+
+            return;
+        }
+
+        var server = new ServerAddress(host, message.Request.Port);
+
+        if (_game is null)
+        {
+            message.Completion.SetException(Conflict(message: "A running game is required before connecting"));
+
+            return;
+        }
+
+        if (Status.State is GameState.Connected)
+        {
+            if (_connectedResponse?.Server == server)
+                message.Completion.SetResult(_connectedResponse);
+            else
+                message.Completion.SetException(Conflict(message: "The game is already connected to a different server"));
+
+            return;
+        }
+
+        if (Status.State is not GameState.Ready)
+        {
+            message.Completion.SetException(Conflict(message: "A ready game is required before connecting"));
+
+            return;
+        }
+
+        if (_connectingServer is not null)
+        {
+            if (_connectingServer == server)
+                AddConnectWaiter(message);
+            else
+                message.Completion.SetException(Conflict(message: "A connection to a different server is already in progress"));
+
+            return;
+        }
+
+        if (_activeCancellation is not null)
+        {
+            message.Completion.SetException(Conflict(message: "Another game operation is running"));
+
+            return;
+        }
+
+        var operationIdentifier = ++_nextOperationIdentifier;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
+        _activeCancellation = cancellation;
+        _connectingServer = server;
+        _connectOperationIdentifier = operationIdentifier;
+        AddConnectWaiter(message);
+        await PublishAsync(
+            Status with { OperationIdentifier = operationIdentifier, Operation = "connect", OperationState = OperationState.Running, Message = "connect running", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
+        ).ConfigureAwait(continueOnCapturedContext: false);
+        Own(
+            ObserveConnectAsync(operationIdentifier, server, runtime.ConnectAsync(_game, host, message.Request.Port, cancellation.Token), cancellation)
+        );
+    }
+
+    private async Task HandleConnectCompletedAsync(ConnectCompleted completed)
+    {
+        completed.Cancellation.Dispose();
+
+        if (_connectOperationIdentifier != completed.OperationIdentifier)
+            return;
+
+        var waiters = _connectWaiters.ToArray();
+        _connectWaiters.Clear();
+
+        foreach (var waiter in waiters)
+            await waiter.CancellationRegistration.DisposeAsync().ConfigureAwait(continueOnCapturedContext: false);
+
+        _connectingServer = null;
+        _connectOperationIdentifier = null;
+
+        if (completed.OperationIdentifier != Status.OperationIdentifier)
+        {
+            foreach (var waiter in waiters)
+                ReturnedValue.Consume(waiter.Completion.TrySetException(Conflict($"connect was superseded by operation {Status.OperationIdentifier}")));
+
+            return;
+        }
+
+        _activeCancellation = null;
+
+        if (completed.Error is not null)
+        {
+            var operationState = completed.Canceled ? OperationState.Canceled : OperationState.Failed;
+            var operationStateDescription = completed.Canceled ? "canceled" : "failed";
+            await PublishAsync(
+                Status with { OperationState = operationState, Message = $"connect {operationStateDescription}", Error = completed.Canceled ? null : completed.Error.Message, Failure = completed.Canceled ? null : FailureFor(completed.Error, operation: "connect"), UpdatedAt = DateTimeOffset.UtcNow }
+            ).ConfigureAwait(continueOnCapturedContext: false);
+
+            foreach (var waiter in waiters)
+            {
+                if (completed.Canceled)
+                    ReturnedValue.Consume(waiter.Completion.TrySetCanceled());
+                else
+                    ReturnedValue.Consume(waiter.Completion.TrySetException(completed.Error));
+            }
+
+            return;
+        }
+
+        _connectedResponse = new(completed.Server, DateTimeOffset.UtcNow);
+        await PublishAsync(
+            Status with { State = GameState.Connected, Server = completed.Server, OperationState = OperationState.Succeeded, Message = "Interactive game connection confirmed", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        foreach (var waiter in waiters)
+            ReturnedValue.Consume(waiter.Completion.TrySetResult(_connectedResponse));
+    }
+
+    private void HandleConnectWaiterCanceled(ConnectWaiterCanceled message)
+    {
+        var waiter = _connectWaiters.FirstOrDefault(waiter => waiter.Completion == message.Completion);
+
+        if (waiter is null)
+            return;
+
+        waiter.CancellationRegistration.Dispose();
+        var waiterRemoved = _connectWaiters.Remove(waiter);
+        var completionCanceled = waiter.Completion.TrySetCanceled(message.CancellationToken);
+
+        // The accepted connection intent outlives individual HTTP waiters. Stop and process-exit paths still own
+        // cancellation of the background operation.
+    }
+
+    private async Task HandleOptionsAsync(OptionsMessage message)
+    {
+        if (_activeCancellation is not null)
+        {
+            message.Completion.SetException(Conflict(message: "Options cannot change while another game operation is running"));
+
+            return;
+        }
+
+        var (operationIdentifier, cancellation) = await BeginConfirmedOperationAsync(operation: "options", message.RequestCancellation).ConfigureAwait(continueOnCapturedContext: false);
+        Own(
+            ObserveVoidOperationAsync(
+                operationIdentifier,
+                kind: "options",
+                runtime.WriteOptionsAsync(message.Options, cancellation.Token),
+                cancellation,
+                message.Completion
+            )
+        );
+    }
+
+    private void HandlePlayers(PlayersMessage message)
+    {
+        if (_game is null || Status.State is not (GameState.Ready or GameState.Connected))
+        {
+            message.Completion.SetException(Conflict(message: "A running game is required before reading its players"));
+
+            return;
+        }
+
+        Own(ObservePlayersAsync(runtime.ReadPlayersAsync(_game, message.RequestCancellation), message.Completion));
+    }
+
+    private async Task HandleProcessExitedAsync(ProcessExited exited)
+    {
+        if (_game?.Process.Identifier != exited.ProcessIdentifier)
+            return;
+
+        // Stop completion owns final state and disposal so an expected exit cannot race it into a false failure.
+        if (Status.State is GameState.Stopping)
+        {
+            await PublishAsync(Status with { ProcessIdentifier = null, ExitCode = exited.ExitCode, UpdatedAt = DateTimeOffset.UtcNow }).ConfigureAwait(continueOnCapturedContext: false);
+
+            return;
+        }
+
+        var processExitedDuringOperation = _activeCancellation is not null || _connectWaiters.Count is not 0;
+
+        var processFailure = exited.ExitCode is not 0 || processExitedDuringOperation
+            ? new GameProcessExitException(exited.ExitCode, exited.WasOutOfMemoryKilled, exited.MemoryMb)
+            : null;
+
+        _game.Dispose();
+        _game = null;
+        _connectedResponse = null;
+        Volatile.Write(ref _processExitFailure, processFailure);
+
+        if (_activeCancellation is not null)
+            await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
+
+        if (processFailure is null)
+            CancelConnectWaiters();
+        else
+            FailConnectWaiters(processFailure);
+
+        _activeCancellation = null;
+        await PublishAsync(
+            Status with
+            {
+                State = processFailure is null ? GameState.Idle : GameState.Failed,
+                OperationState = processFailure is null ? OperationState.Succeeded : OperationState.Failed,
+                ProcessIdentifier = null,
+                ExitCode = exited.ExitCode,
+                Server = null,
+                Message = processFailure is null ? "Game exited" : "Game exited unexpectedly",
+                Error = processFailure?.Message,
+                Failure = processFailure?.Failure,
+                UpdatedAt = DateTimeOffset.UtcNow
+            }
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (_sessionIdentifier is { } sessionIdentifier)
+            await ((diagnostics?.CompleteAsync(sessionIdentifier, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+    }
+
+    private async Task HandleScreenshotAsync(ScreenshotMessage message)
+    {
+        if (_game is null || Status.State is not (GameState.Ready or GameState.Connected))
+        {
+            message.Completion.SetException(Conflict(message: "A running game is required before taking a screenshot"));
+
+            return;
+        }
+
+        if (_activeCancellation is not null)
+        {
+            message.Completion.SetException(Conflict(message: "Another game operation is running"));
+
+            return;
+        }
+
+        var (operationIdentifier, cancellation) = await BeginConfirmedOperationAsync(operation: "screenshot", message.RequestCancellation).ConfigureAwait(continueOnCapturedContext: false);
+        Own(
+            ObserveScreenshotAsync(operationIdentifier, runtime.CaptureScreenshotAsync(cancellation.Token), cancellation, message.Completion)
+        );
+    }
+
+    private async Task HandleScreenshotCompletedAsync(ScreenshotCompleted completed)
+    {
+        completed.Cancellation.Dispose();
+
+        var operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationIdentifier, operation: "screenshot", completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (!operationCompleted)
+            return;
+
+        completed.Completion.SetResult(completed.Image ?? throw new InvalidOperationException(message: "Screen capture returned no image"));
+    }
+
+    private async Task HandleSendChatAsync(SendChatMessage message)
+    {
+        var text = message.Request.Message;
+
+        if (_game is null || Status.State is not GameState.Connected)
+        {
+            message.Completion.SetException(Conflict(message: "A connected game is required before sending chat"));
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            message.Completion.SetException(BadRequest(message: "message is required"));
+
+            return;
+        }
+
+        if (_activeCancellation is not null)
+        {
+            message.Completion.SetException(Conflict(message: "Another game operation is running"));
+
+            return;
+        }
+
+        var (operationIdentifier, cancellation) = await BeginConfirmedOperationAsync(operation: "send-chat", message.RequestCancellation).ConfigureAwait(continueOnCapturedContext: false);
+        Own(
+            ObserveVoidOperationAsync(operationIdentifier, kind: "send-chat", runtime.SendChatAsync(_game, text, cancellation.Token), cancellation, message.Completion)
+        );
     }
 
     private async Task HandleStartAsync(StartMessage message)
     {
         if (_activeCancellation is not null || _game is not null || Status.State is not (GameState.Idle or GameState.Failed))
         {
-            message.Completion.SetException(Conflict("A game is already running or changing state"));
+            message.Completion.SetException(Conflict(message: "A game is already running or changing state"));
+
             return;
         }
 
@@ -183,231 +714,96 @@ internal sealed class GameCoordinator(IGameRuntime runtime, ILogger<GameCoordina
 
         if (message.Kind is "start-vanilla" && string.IsNullOrWhiteSpace(version))
         {
-            message.Completion.SetException(BadRequest("version is required"));
+            message.Completion.SetException(BadRequest(message: "version is required"));
+
             return;
         }
 
-        if (message.Kind is "start-curseforge" && (string.IsNullOrWhiteSpace(slug) || message.CurseForgeRequest?.FileId <= 0))
+        if (message.Kind is "start-curseforge" && (string.IsNullOrWhiteSpace(slug) || message.CurseForgeRequest?.FileIdentifier <= 0))
         {
-            message.Completion.SetException(BadRequest("slug and a positive fileId are required"));
+            message.Completion.SetException(BadRequest(message: "slug and a positive fileIdentifier are required"));
+
             return;
         }
 
         if (memoryMb is <= 0)
         {
-            message.Completion.SetException(BadRequest("memoryMb must be a positive integer"));
+            message.Completion.SetException(BadRequest(message: "memoryMb must be a positive integer"));
+
             return;
         }
 
         if (memoryMb is not null && arguments.Any(IsMaximumHeapArgument))
         {
-            message.Completion.SetException(BadRequest("memoryMb cannot be combined with an -Xmx JVM argument"));
+            message.Completion.SetException(BadRequest(message: "memoryMb cannot be combined with an -Xmx JVM argument"));
+
             return;
         }
 
-        if (_sessionId is { } previousSession)
-            await (diagnostics?.CompleteAsync(previousSession, _stoppingToken) ?? Task.CompletedTask);
-        _sessionId = diagnostics is null ? null : await diagnostics.BeginAsync($"{message.Kind}:{version ?? neoForgeVersion ?? slug}:{message.CurseForgeRequest?.FileId}", Environment.GetEnvironmentVariable("MINECRAFT_DIRECTORY") ?? "/root/.minecraft", _stoppingToken);
-        using var diagnosticContext = diagnostics?.Enter(_sessionId);
-        var operationId = ++_nextOperationId;
+        if (_sessionIdentifier is { } previousSession)
+            await ((diagnostics?.CompleteAsync(previousSession, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+
+        _sessionIdentifier = diagnostics is null ? null : await diagnostics.BeginAsync(
+            $"{message.Kind}:{version ?? neoForgeVersion ?? slug}:{message.CurseForgeRequest?.FileIdentifier}",
+            Environment.GetEnvironmentVariable(variable: "MINECRAFT_DIRECTORY") ?? "/root/.minecraft",
+            _stoppingToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        using var diagnosticContext = diagnostics?.Enter(_sessionIdentifier);
+
+        var operationIdentifier = ++_nextOperationIdentifier;
         var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
         _activeCancellation = operationCancellation;
         _connectedResponse = null;
         _processExitFailure = null;
-        await PublishAsync(new(GameState.Starting, operationId, message.Kind, OperationState.Running, null, null, null, "Game launch accepted", null, null, [], DateTimeOffset.UtcNow));
+        await PublishAsync(
+            new(
+                GameState.Starting,
+                operationIdentifier,
+                message.Kind,
+                OperationState.Running,
+                ProcessIdentifier: null,
+                ExitCode: null,
+                Server: null,
+                Message: "Game launch accepted",
+                Error: null,
+                Failure: null,
+                [],
+                DateTimeOffset.UtcNow
+            )
+        ).ConfigureAwait(continueOnCapturedContext: false);
 
-        Task<RunningGame> operation = message.Kind switch
+        IDisposable? operationDiagnosticContext = diagnostics?.Enter(_sessionIdentifier);
+
+        try
         {
-            "start-vanilla" => runtime.LaunchVanillaAsync(version ?? "", arguments, memoryMb, operationCancellation.Token),
-            "start-neoforge" => runtime.LaunchNeoForgeAsync(neoForgeVersion ?? "", arguments, memoryMb, operationCancellation.Token),
-            "start-curseforge" => runtime.LaunchCurseForgeAsync(slug ?? "", message.CurseForgeRequest?.FileId ?? 0, arguments, memoryMb, operationCancellation.Token),
-            _ => throw new InvalidOperationException($"Unknown launch kind {message.Kind}")
-        };
+            Task<RunningGame> operation = message.Kind switch
+            {
+                "start-vanilla" => runtime.LaunchVanillaAsync(version ?? "", arguments, memoryMb, operationCancellation.Token),
+                "start-neoforge" => runtime.LaunchNeoForgeAsync(neoForgeVersion ?? "", arguments, memoryMb, operationCancellation.Token),
+                "start-curseforge" => runtime.LaunchCurseForgeAsync(slug ?? "", message.CurseForgeRequest?.FileIdentifier ?? 0, arguments, memoryMb, operationCancellation.Token),
+                _ => throw new InvalidOperationException($"Unknown launch kind {message.Kind}")
+            };
 
-        Own(ObserveStartAsync(operationId, message.Kind, operation, operationCancellation));
+            if (!_startObservations.TryAdd(operationIdentifier, (operation, operationCancellation, operationDiagnosticContext)))
+                throw new InvalidOperationException($"Start observation {operationIdentifier} is already registered");
+
+            operationDiagnosticContext = null;
+            Own(ObserveStartAsync(operationIdentifier, message.Kind));
+        }
+        finally
+        {
+            operationDiagnosticContext?.Dispose();
+        }
+
         message.Completion.SetResult(Status);
-    }
-
-    private async Task HandleStopAsync(StopMessage message)
-    {
-        if (Status.State is GameState.Stopping)
-        {
-            message.Completion.SetException(Conflict("The game is already stopping"));
-            return;
-        }
-
-        _activeCancellation?.Cancel();
-        CancelConnectWaiters();
-        var operationId = ++_nextOperationId;
-        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
-        _activeCancellation = operationCancellation;
-        await PublishAsync(Status with
-        {
-            State = GameState.Stopping,
-            OperationId = operationId,
-            Operation = "stop",
-            OperationState = OperationState.Running,
-            Message = "Stopping game",
-            Error = null,
-            Failure = null,
-            UpdatedAt = DateTimeOffset.UtcNow
-        });
-        Own(ObserveStopAsync(operationId, runtime.StopAsync(_game, operationCancellation.Token), operationCancellation, message.Completion));
-    }
-
-    private async Task HandleConnectAsync(ConnectMessage message)
-    {
-        var host = message.Request.Host?.Trim();
-
-        if (string.IsNullOrWhiteSpace(host) || message.Request.Port is < 1 or > 65535)
-        {
-            message.Completion.SetException(BadRequest("host and a port between 1 and 65535 are required"));
-            return;
-        }
-
-        var server = new ServerAddress(host, message.Request.Port);
-
-        if (_game is null)
-        {
-            message.Completion.SetException(Conflict("A running game is required before connecting"));
-            return;
-        }
-
-        if (Status.State is GameState.Connected)
-        {
-            if (_connectedResponse?.Server == server)
-                message.Completion.SetResult(_connectedResponse);
-            else
-                message.Completion.SetException(Conflict("The game is already connected to a different server"));
-
-            return;
-        }
-
-        if (Status.State is not GameState.Ready)
-        {
-            message.Completion.SetException(Conflict("A ready game is required before connecting"));
-            return;
-        }
-
-        if (_connectingServer is not null)
-        {
-            if (_connectingServer == server)
-                AddConnectWaiter(message);
-            else
-                message.Completion.SetException(Conflict("A connection to a different server is already in progress"));
-
-            return;
-        }
-
-        if (_activeCancellation is not null)
-        {
-            message.Completion.SetException(Conflict("Another game operation is running"));
-            return;
-        }
-
-        var operationId = ++_nextOperationId;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
-        _activeCancellation = cancellation;
-        _connectingServer = server;
-        _connectOperationId = operationId;
-        AddConnectWaiter(message);
-        await PublishAsync(Status with { OperationId = operationId, Operation = "connect", OperationState = OperationState.Running, Message = "connect running", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow });
-        Own(ObserveConnectAsync(operationId, server, runtime.ConnectAsync(_game, host, message.Request.Port, cancellation.Token), cancellation));
-    }
-
-    private void AddConnectWaiter(ConnectMessage message)
-    {
-        var registration = message.RequestCancellation.Register(() => _messages.Writer.TryWrite(new ConnectWaiterCanceled(message.Completion, message.RequestCancellation)));
-        _connectWaiters.Add(new(message.Completion, registration));
-    }
-
-    private void HandleConnectWaiterCanceled(ConnectWaiterCanceled message)
-    {
-        var waiter = _connectWaiters.FirstOrDefault(waiter => waiter.Completion == message.Completion);
-
-        if (waiter is null)
-            return;
-
-        waiter.CancellationRegistration.Dispose();
-        _connectWaiters.Remove(waiter);
-        waiter.Completion.TrySetCanceled(message.CancellationToken);
-
-        // The accepted connection intent outlives individual HTTP waiters. Stop and process-exit paths still own
-        // cancellation of the background operation.
-    }
-
-    private async Task HandleSendChatAsync(SendChatMessage message)
-    {
-        var text = message.Request.Message;
-
-        if (_game is null || Status.State is not GameState.Connected)
-        {
-            message.Completion.SetException(Conflict("A connected game is required before sending chat"));
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            message.Completion.SetException(BadRequest("message is required"));
-            return;
-        }
-
-        if (_activeCancellation is not null)
-        {
-            message.Completion.SetException(Conflict("Another game operation is running"));
-            return;
-        }
-
-        var (operationId, cancellation) = await BeginConfirmedOperationAsync("send-chat", message.RequestCancellation);
-        Own(ObserveVoidOperationAsync(operationId, "send-chat", runtime.SendChatAsync(_game, text, cancellation.Token), cancellation, message.Completion));
-    }
-
-    private async Task HandleScreenshotAsync(ScreenshotMessage message)
-    {
-        if (_game is null || Status.State is not (GameState.Ready or GameState.Connected))
-        {
-            message.Completion.SetException(Conflict("A running game is required before taking a screenshot"));
-            return;
-        }
-
-        if (_activeCancellation is not null)
-        {
-            message.Completion.SetException(Conflict("Another game operation is running"));
-            return;
-        }
-
-        var (operationId, cancellation) = await BeginConfirmedOperationAsync("screenshot", message.RequestCancellation);
-        Own(ObserveScreenshotAsync(operationId, runtime.CaptureScreenshotAsync(cancellation.Token), cancellation, message.Completion));
-    }
-
-    private void HandlePlayers(PlayersMessage message)
-    {
-        if (_game is null || Status.State is not (GameState.Ready or GameState.Connected))
-        {
-            message.Completion.SetException(Conflict("A running game is required before reading its players"));
-            return;
-        }
-
-        Own(ObservePlayersAsync(runtime.ReadPlayersAsync(_game, message.RequestCancellation), message.Completion));
-    }
-
-    private async Task HandleOptionsAsync(OptionsMessage message)
-    {
-        if (_activeCancellation is not null)
-        {
-            message.Completion.SetException(Conflict("Options cannot change while another game operation is running"));
-            return;
-        }
-
-        var (operationId, cancellation) = await BeginConfirmedOperationAsync("options", message.RequestCancellation);
-        Own(ObserveVoidOperationAsync(operationId, "options", runtime.WriteOptionsAsync(message.Options, cancellation.Token), cancellation, message.Completion));
     }
 
     private async Task HandleStartCompletedAsync(StartCompleted completed)
     {
         completed.Cancellation.Dispose();
 
-        if (completed.OperationId != Status.OperationId || Status.Operation is "stop")
+        if (completed.OperationIdentifier != Status.OperationIdentifier || Status.Operation is "stop")
         {
             if (completed.Game is not null)
                 Own(CleanupSupersededGameAsync(completed.Game));
@@ -419,423 +815,132 @@ internal sealed class GameCoordinator(IGameRuntime runtime, ILogger<GameCoordina
 
         if (completed.Error is not null)
         {
-            logger.LogError(completed.Error, "{Operation} failed", completed.Kind);
-            await PublishAsync(Status with
-            {
-                State = completed.Canceled ? GameState.Idle : GameState.Failed,
-                OperationState = completed.Canceled ? OperationState.Canceled : OperationState.Failed,
-                Message = completed.Canceled ? "Game launch canceled" : "Game launch failed",
-                Error = completed.Canceled ? null : completed.Error.Message,
-                Failure = completed.Canceled ? null : FailureFor(completed.Error, completed.Kind),
-                UpdatedAt = DateTimeOffset.UtcNow
-            });
-            if (_sessionId is { } sessionId)
-                await (diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask);
+            LogOperationFailure(logger, completed.Kind, completed.Error);
+            await PublishAsync(
+                Status with
+                {
+                    State = completed.Canceled ? GameState.Idle : GameState.Failed,
+                    OperationState = completed.Canceled ? OperationState.Canceled : OperationState.Failed,
+                    Message = completed.Canceled ? "Game launch canceled" : "Game launch failed",
+                    Error = completed.Canceled ? null : completed.Error.Message,
+                    Failure = completed.Canceled ? null : FailureFor(completed.Error, completed.Kind),
+                    UpdatedAt = DateTimeOffset.UtcNow
+                }
+            ).ConfigureAwait(continueOnCapturedContext: false);
+
+            if (_sessionIdentifier is { } sessionIdentifier)
+                await ((diagnostics?.CompleteAsync(sessionIdentifier, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+
             return;
         }
 
-        _game = completed.Game ?? throw new InvalidOperationException("A successful launch did not return a game process");
-        await PublishAsync(Status with
-        {
-            State = GameState.Ready,
-            OperationState = OperationState.Succeeded,
-            ProcessId = _game.Process.Id,
-            ExitCode = null,
-            Message = "Game window is ready",
-            Error = null,
-            Failure = null,
-            UpdatedAt = DateTimeOffset.UtcNow
-        });
+        _game = completed.Game ?? throw new InvalidOperationException(message: "A successful launch did not return a game process");
+        await PublishAsync(
+            Status with
+            {
+                State = GameState.Ready,
+                OperationState = OperationState.Succeeded,
+                ProcessIdentifier = _game.Process.Identifier,
+                ExitCode = null,
+                Message = "Game window is ready",
+                Error = null,
+                Failure = null,
+                UpdatedAt = DateTimeOffset.UtcNow
+            }
+        ).ConfigureAwait(continueOnCapturedContext: false);
         Own(MonitorProcessAsync(_game));
+    }
+
+    private async Task HandleStopAsync(StopMessage message)
+    {
+        if (Status.State is GameState.Stopping)
+        {
+            message.Completion.SetException(Conflict(message: "The game is already stopping"));
+
+            return;
+        }
+
+        if (_activeCancellation is not null)
+            await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
+
+        CancelConnectWaiters();
+        var operationIdentifier = ++_nextOperationIdentifier;
+        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);
+        _activeCancellation = operationCancellation;
+        await PublishAsync(
+            Status with
+            {
+                State = GameState.Stopping,
+                OperationIdentifier = operationIdentifier,
+                Operation = "stop",
+                OperationState = OperationState.Running,
+                Message = "Stopping game",
+                Error = null,
+                Failure = null,
+                UpdatedAt = DateTimeOffset.UtcNow
+            }
+        ).ConfigureAwait(continueOnCapturedContext: false);
+        Own(
+            ObserveStopAsync(operationIdentifier, runtime.StopAsync(_game, operationCancellation.Token), operationCancellation, message.Completion)
+        );
     }
 
     private async Task HandleStopCompletedAsync(StopCompleted completed)
     {
         completed.Cancellation.Dispose();
 
-        if (completed.OperationId != Status.OperationId)
+        if (completed.OperationIdentifier != Status.OperationIdentifier)
             return;
 
         _activeCancellation = null;
 
         if (completed.Error is not null)
         {
-            logger.LogError(completed.Error, "Game stop failed");
-            await PublishAsync(Status with { State = GameState.Failed, OperationState = OperationState.Failed, Error = completed.Error.Message, Failure = FailureFor(completed.Error, "stop"), Message = "Game stop failed", UpdatedAt = DateTimeOffset.UtcNow });
+            LogGameStopFailure(logger, completed.Error);
+            await PublishAsync(
+                Status with { State = GameState.Failed, OperationState = OperationState.Failed, Error = completed.Error.Message, Failure = FailureFor(completed.Error, operation: "stop"), Message = "Game stop failed", UpdatedAt = DateTimeOffset.UtcNow }
+            ).ConfigureAwait(continueOnCapturedContext: false);
             completed.Completion.SetException(completed.Error);
+
             return;
         }
 
         var exitCode = _game?.Process.ExitCode;
-        _game?.Process.Dispose();
+        _game?.Dispose();
         _game = null;
         _connectedResponse = null;
-        await PublishAsync(new(GameState.Idle, completed.OperationId, "stop", OperationState.Succeeded, null, exitCode, null, "Game stopped", null, null, [], DateTimeOffset.UtcNow));
-        if (_sessionId is { } sessionId)
-            await (diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask);
+        await PublishAsync(
+            new(
+                GameState.Idle,
+                completed.OperationIdentifier,
+                Operation: "stop",
+                OperationState.Succeeded,
+                ProcessIdentifier: null,
+                exitCode,
+                Server: null,
+                Message: "Game stopped",
+                Error: null,
+                Failure: null,
+                [],
+                DateTimeOffset.UtcNow
+            )
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (_sessionIdentifier is { } sessionIdentifier)
+            await ((diagnostics?.CompleteAsync(sessionIdentifier, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false));
+
         completed.Completion.SetResult(new(completed.Mode, Status));
-    }
-
-    private async Task HandleConnectCompletedAsync(ConnectCompleted completed)
-    {
-        completed.Cancellation.Dispose();
-
-        if (_connectOperationId != completed.OperationId)
-            return;
-
-        var waiters = _connectWaiters.ToArray();
-        _connectWaiters.Clear();
-
-        foreach (var waiter in waiters)
-            waiter.CancellationRegistration.Dispose();
-
-        _connectingServer = null;
-        _connectOperationId = null;
-
-        if (completed.OperationId != Status.OperationId)
-        {
-            foreach (var waiter in waiters)
-                waiter.Completion.TrySetException(Conflict($"connect was superseded by operation {Status.OperationId}"));
-
-            return;
-        }
-
-        _activeCancellation = null;
-
-        if (completed.Error is not null)
-        {
-            var operationState = completed.Canceled ? OperationState.Canceled : OperationState.Failed;
-            await PublishAsync(Status with { OperationState = operationState, Message = $"connect {operationState.ToString().ToLowerInvariant()}", Error = completed.Canceled ? null : completed.Error.Message, Failure = completed.Canceled ? null : FailureFor(completed.Error, "connect"), UpdatedAt = DateTimeOffset.UtcNow });
-
-            foreach (var waiter in waiters)
-            {
-                if (completed.Canceled)
-                    waiter.Completion.TrySetCanceled();
-                else
-                    waiter.Completion.TrySetException(completed.Error);
-            }
-
-            return;
-        }
-
-        _connectedResponse = new(completed.Server, DateTimeOffset.UtcNow);
-        await PublishAsync(Status with { State = GameState.Connected, Server = completed.Server, OperationState = OperationState.Succeeded, Message = "Interactive game connection confirmed", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow });
-
-        foreach (var waiter in waiters)
-            waiter.Completion.TrySetResult(_connectedResponse);
     }
 
     private async Task HandleVoidOperationCompletedAsync(VoidOperationCompleted completed)
     {
         completed.Cancellation.Dispose();
 
-        if (!await CompleteConfirmedOperationAsync(completed.OperationId, completed.Kind, completed.Error, completed.Canceled, completed.Completion))
+        var operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationIdentifier, completed.Kind, completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (!operationCompleted)
             return;
 
-        completed.Completion.SetResult(true);
+        completed.Completion.SetResult(result: true);
     }
-
-    private async Task HandleScreenshotCompletedAsync(ScreenshotCompleted completed)
-    {
-        completed.Cancellation.Dispose();
-
-        if (!await CompleteConfirmedOperationAsync(completed.OperationId, "screenshot", completed.Error, completed.Canceled, completed.Completion))
-            return;
-
-        completed.Completion.SetResult(completed.Image ?? throw new InvalidOperationException("Screen capture returned no image"));
-    }
-
-    private async Task HandleProcessExitedAsync(ProcessExited exited)
-    {
-        if (_game?.Process.Id != exited.ProcessId)
-            return;
-
-        // Stop completion owns final state and disposal so an expected exit cannot race it into a false failure.
-        if (Status.State is GameState.Stopping)
-        {
-            await PublishAsync(Status with { ProcessId = null, ExitCode = exited.ExitCode, UpdatedAt = DateTimeOffset.UtcNow });
-            return;
-        }
-
-        var processExitedDuringOperation = _activeCancellation is not null || _connectWaiters.Count is not 0;
-        var processFailure = exited.ExitCode is not 0 || processExitedDuringOperation
-            ? new GameProcessExitException(exited.ExitCode, exited.WasOutOfMemoryKilled, exited.MemoryMb)
-            : null;
-
-        _game.Process.Dispose();
-        _game = null;
-        _connectedResponse = null;
-        Volatile.Write(ref _processExitFailure, processFailure);
-        _activeCancellation?.Cancel();
-
-        if (processFailure is null)
-            CancelConnectWaiters();
-        else
-            FailConnectWaiters(processFailure);
-
-        _activeCancellation = null;
-        await PublishAsync(Status with
-        {
-            State = processFailure is null ? GameState.Idle : GameState.Failed,
-            OperationState = processFailure is null ? OperationState.Succeeded : OperationState.Failed,
-            ProcessId = null,
-            ExitCode = exited.ExitCode,
-            Server = null,
-            Message = processFailure is null ? "Game exited" : "Game exited unexpectedly",
-            Error = processFailure?.Message,
-            Failure = processFailure?.Failure,
-            UpdatedAt = DateTimeOffset.UtcNow
-        });
-        if (_sessionId is { } sessionId)
-            await (diagnostics?.CompleteAsync(sessionId, _stoppingToken) ?? Task.CompletedTask);
-    }
-
-    private async Task<(long OperationId, CancellationTokenSource Cancellation)> BeginConfirmedOperationAsync(string operation, CancellationToken requestCancellation)
-    {
-        var operationId = ++_nextOperationId;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken, requestCancellation);
-        _activeCancellation = cancellation;
-        await PublishAsync(Status with { OperationId = operationId, Operation = operation, OperationState = OperationState.Running, Message = $"{operation} running", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow });
-        return (operationId, cancellation);
-    }
-
-    private async Task<bool> CompleteConfirmedOperationAsync<T>(long operationId, string operation, Exception? error, bool canceled, TaskCompletionSource<T> completion)
-    {
-        if (operationId != Status.OperationId)
-        {
-            completion.TrySetException(Conflict($"{operation} was superseded by operation {Status.OperationId}"));
-            return false;
-        }
-
-        _activeCancellation = null;
-
-        if (error is null)
-        {
-            await PublishAsync(Status with { OperationState = OperationState.Succeeded, Message = $"{operation} succeeded", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow });
-            return true;
-        }
-
-        var operationState = canceled ? OperationState.Canceled : OperationState.Failed;
-        await PublishAsync(Status with { OperationState = operationState, Message = $"{operation} {operationState.ToString().ToLowerInvariant()}", Error = canceled ? null : error.Message, Failure = canceled ? null : FailureFor(error, operation), UpdatedAt = DateTimeOffset.UtcNow });
-
-        if (canceled)
-            completion.SetCanceled();
-        else
-            completion.SetException(error);
-
-        return false;
-    }
-
-    private async Task ObserveStartAsync(long operationId, string kind, Task<RunningGame> operation, CancellationTokenSource cancellation)
-    {
-        try
-        {
-            var game = await operation;
-            await WriteCompletionAsync(new StartCompleted(operationId, kind, game, null, false, cancellation));
-        }
-        catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
-        {
-            await WriteCompletionAsync(new StartCompleted(operationId, kind, null, exception, true, cancellation));
-        }
-        catch (Exception exception)
-        {
-            await CaptureFailureAsync(operationId);
-            await WriteCompletionAsync(new StartCompleted(operationId, kind, null, exception, false, cancellation));
-        }
-    }
-
-    private async Task ObserveStopAsync(long operationId, Task<StopMode> operation, CancellationTokenSource cancellation, TaskCompletionSource<StopGameResponse> completion)
-    {
-        try
-        {
-            var mode = await operation;
-            await WriteCompletionAsync(new StopCompleted(operationId, mode, null, cancellation, completion));
-        }
-        catch (Exception exception)
-        {
-            await WriteCompletionAsync(new StopCompleted(operationId, default, exception, cancellation, completion));
-        }
-    }
-
-    private async Task ObserveConnectAsync(long operationId, ServerAddress server, Task operation, CancellationTokenSource cancellation)
-    {
-        var (error, canceled) = await ObserveAsync(operation, cancellation, operationId);
-        await WriteCompletionAsync(new ConnectCompleted(operationId, server, error, canceled, cancellation));
-    }
-
-    private async Task ObserveVoidOperationAsync(long operationId, string kind, Task operation, CancellationTokenSource cancellation, TaskCompletionSource<bool> completion)
-    {
-        var (error, canceled) = await ObserveAsync(operation, cancellation, operationId);
-        await WriteCompletionAsync(new VoidOperationCompleted(operationId, kind, error, canceled, cancellation, completion));
-    }
-
-    private async Task ObserveScreenshotAsync(long operationId, Task<byte[]> operation, CancellationTokenSource cancellation, TaskCompletionSource<byte[]> completion)
-    {
-        try
-        {
-            var image = await operation;
-            await WriteCompletionAsync(new ScreenshotCompleted(operationId, image, null, false, cancellation, completion));
-        }
-        catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
-        {
-            if (Volatile.Read(ref _processExitFailure) is { } processExitFailure)
-                await WriteCompletionAsync(new ScreenshotCompleted(operationId, null, processExitFailure, false, cancellation, completion));
-            else
-                await WriteCompletionAsync(new ScreenshotCompleted(operationId, null, exception, true, cancellation, completion));
-        }
-        catch (Exception exception)
-        {
-            await WriteCompletionAsync(new ScreenshotCompleted(operationId, null, exception, false, cancellation, completion));
-        }
-    }
-
-    private static async Task ObservePlayersAsync(Task<GamePlayers> operation, TaskCompletionSource<GamePlayers> completion)
-    {
-        try
-        {
-            completion.TrySetResult(await operation);
-        }
-        catch (Exception exception)
-        {
-            completion.TrySetException(exception);
-        }
-    }
-
-    private async Task<(Exception? Error, bool Canceled)> ObserveAsync(Task operation, CancellationTokenSource cancellation, long operationId)
-    {
-        try
-        {
-            await operation;
-            return (null, false);
-        }
-        catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
-        {
-            return Volatile.Read(ref _processExitFailure) is { } processExitFailure
-                ? (processExitFailure, false)
-                : (exception, true);
-        }
-        catch (Exception exception)
-        {
-            await CaptureFailureAsync(operationId);
-            return (exception, false);
-        }
-    }
-
-    private async Task CaptureFailureAsync(long operationId)
-    {
-        if (diagnostics?.CurrentSessionId is not { } sessionId)
-            return;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        try
-        {
-            var screenshot = await runtime.CaptureScreenshotAsync(timeout.Token);
-            await diagnostics.SaveScreenshotAsync(sessionId, operationId, screenshot, timeout.Token);
-        }
-        catch (Exception exception)
-        {
-            await diagnostics.WarnAsync(sessionId, $"Failure screenshot unavailable: {exception.Message}", _stoppingToken);
-        }
-        await diagnostics.CollectAsync(sessionId, _stoppingToken);
-    }
-
-    private async Task MonitorProcessAsync(RunningGame game)
-    {
-        await game.Process.WaitForExitAsync(CancellationToken.None);
-        await WriteCompletionAsync(new ProcessExited(game.Process.Id, game.Process.ExitCode ?? -1, game.Process.WasOutOfMemoryKilled, game.Process.MemoryMb));
-    }
-
-    private async Task CleanupSupersededGameAsync(RunningGame game)
-    {
-        try
-        {
-            await runtime.StopAsync(game, CancellationToken.None);
-        }
-        finally
-        {
-            game.Process.Dispose();
-        }
-    }
-
-    private async Task WriteCompletionAsync(Message message)
-    {
-        if (!await _messages.Writer.WaitToWriteAsync(CancellationToken.None) || !_messages.Writer.TryWrite(message))
-            logger.LogError("Coordinator stopped before it could record {MessageType}", message.GetType().Name);
-    }
-
-    private async Task<T> EnqueueAsync<T>(Func<TaskCompletionSource<T>, Message> createMessage, CancellationToken cancellationToken)
-    {
-        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await _messages.Writer.WriteAsync(createMessage(completion), cancellationToken);
-        return await completion.Task.WaitAsync(cancellationToken);
-    }
-
-    private void Own(Task task)
-    {
-        _ownedTasks.Add(task);
-    }
-
-    private async Task PublishAsync(GameStatus status)
-    {
-        status = status with { SessionId = _sessionId };
-        await (diagnostics?.RecordAsync(status, _stoppingToken) ?? Task.CompletedTask);
-        Volatile.Write(ref _status, status);
-    }
-
-    private static ClientFailure FailureFor(Exception exception, string operation, string stage = "coordinator")
-    {
-        return ClientFailure.FromException("client.operation.failed", operation, stage, exception);
-    }
-
-    private void CancelConnectWaiters()
-    {
-        foreach (var waiter in _connectWaiters)
-        {
-            waiter.CancellationRegistration.Dispose();
-            waiter.Completion.TrySetCanceled();
-        }
-
-        _connectWaiters.Clear();
-        _connectingServer = null;
-        _connectOperationId = null;
-    }
-
-    private void FailConnectWaiters(Exception exception)
-    {
-        foreach (var waiter in _connectWaiters)
-        {
-            waiter.CancellationRegistration.Dispose();
-            waiter.Completion.TrySetException(exception);
-        }
-
-        _connectWaiters.Clear();
-        _connectingServer = null;
-        _connectOperationId = null;
-    }
-
-    private static bool IsMaximumHeapArgument(string argument)
-    {
-        return argument.StartsWith("-Xmx", StringComparison.Ordinal)
-               || argument.StartsWith("--jvm-arg=-Xmx", StringComparison.Ordinal);
-    }
-
-    private static GameCommandException BadRequest(string message) => new(StatusCodes.Status400BadRequest, message);
-
-    private static GameCommandException Conflict(string message) => new(StatusCodes.Status409Conflict, message);
-
-    private abstract record Message;
-    private sealed record StartMessage(string Kind, StartGameRequest? Request, StartNeoForgeGameRequest? NeoForgeRequest, StartCurseForgeGameRequest? CurseForgeRequest, TaskCompletionSource<GameStatus> Completion) : Message;
-    private sealed record StopMessage(TaskCompletionSource<StopGameResponse> Completion) : Message;
-    private sealed record ConnectMessage(ConnectGameRequest Request, TaskCompletionSource<ConnectGameResponse> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record ConnectWaiterCanceled(TaskCompletionSource<ConnectGameResponse> Completion, CancellationToken CancellationToken) : Message;
-    private sealed record SendChatMessage(SendChatRequest Request, TaskCompletionSource<bool> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record ScreenshotMessage(TaskCompletionSource<byte[]> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record PlayersMessage(TaskCompletionSource<GamePlayers> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record OptionsMessage(string Options, TaskCompletionSource<bool> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record StartCompleted(long OperationId, string Kind, RunningGame? Game, Exception? Error, bool Canceled, CancellationTokenSource Cancellation) : Message;
-    private sealed record StopCompleted(long OperationId, StopMode Mode, Exception? Error, CancellationTokenSource Cancellation, TaskCompletionSource<StopGameResponse> Completion) : Message;
-    private sealed record ConnectCompleted(long OperationId, ServerAddress Server, Exception? Error, bool Canceled, CancellationTokenSource Cancellation) : Message;
-    private sealed record VoidOperationCompleted(long OperationId, string Kind, Exception? Error, bool Canceled, CancellationTokenSource Cancellation, TaskCompletionSource<bool> Completion) : Message;
-    private sealed record ScreenshotCompleted(long OperationId, byte[]? Image, Exception? Error, bool Canceled, CancellationTokenSource Cancellation, TaskCompletionSource<byte[]> Completion) : Message;
-    private sealed record ProcessExited(int ProcessId, int ExitCode, bool WasOutOfMemoryKilled, int? MemoryMb) : Message;
-    private sealed record ConnectWaiter(TaskCompletionSource<ConnectGameResponse> Completion, CancellationTokenRegistration CancellationRegistration);
 }

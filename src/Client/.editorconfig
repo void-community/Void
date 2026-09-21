@@ -1,0 +1,5 @@
+[*.cs]
+dotnet_separate_import_directive_groups = true
+csharp_prefer_braces = false:silent
+csharp_style_unused_value_assignment_preference = discard_variable:error
+dotnet_naming_symbols.type_parameters.applicable_kinds = type_parameter

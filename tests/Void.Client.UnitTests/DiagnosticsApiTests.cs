@@ -37,8 +37,8 @@ public class DiagnosticsApiTests
             using var client = new HttpClient { BaseAddress = new Uri(Assert.Single(addresses.Addresses)) };
             var sessions = await client.GetFromJsonAsync<DiagnosticSession[]>("/api/game/diagnostics", TestContext.Current.CancellationToken);
             Assert.NotNull(sessions);
-            Assert.Equal(identifier, Assert.Single(sessions).SessionId);
-            using var response = await client.GetAsync(sessions[0].DownloadUrl, TestContext.Current.CancellationToken);
+            Assert.Equal(identifier, Assert.Single(sessions).SessionIdentifier);
+            using var response = await client.GetAsync(sessions[0].DownloadUniformResourceLocator, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("application/zip", response.Content.Headers.ContentType?.MediaType);
             Assert.Contains(identifier.ToString(), response.Content.Headers.ContentDisposition?.FileNameStar ?? "");
