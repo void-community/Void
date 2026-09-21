@@ -20,6 +20,6 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
-    "eslint": "10.10.0"
+    "eslint": "10.11.0"
   }
 }
