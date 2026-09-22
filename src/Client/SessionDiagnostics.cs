@@ -8,7 +8,6 @@ using Nito.AsyncEx;
 
 using Void.Client.Configuration;
 using Void.Client.Models;
-using Void.Client.Utilities;
 
 namespace Void.Client;
 
@@ -318,7 +317,10 @@ internal sealed class SessionDiagnostics
 
     private void AddStoredBytes(long value)
     {
-        ReturnedValue.Consume(Interlocked.Add(ref _storedBytes, value));
+        long storedBytes = Volatile.Read(ref _storedBytes);
+
+        while (Interlocked.CompareExchange(ref _storedBytes, storedBytes + value, storedBytes) != storedBytes)
+            storedBytes = Volatile.Read(ref _storedBytes);
     }
 
     private async Task CollectReportsAsync(Session session, bool baseline, CancellationToken cancellationToken)

@@ -12,7 +12,6 @@ using Void.Client.Abstractions;
 using Void.Client.Failures;
 using Void.Client.Models;
 using Void.Client.States;
-using Void.Client.Utilities;
 
 using File = System.IO.File;
 
@@ -394,7 +393,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         using HttpRequestMessage request = new(HttpMethod.Get, downloadUrl);
 
         if (downloadUrl.Contains(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
-            ReturnedValue.Consume(request.Headers.TryAddWithoutValidation(name: "x-api-key", apiKey));
+            request.Headers.Add(name: "x-api-key", apiKey);
 
         using var response = await hypertextTransferProtocolClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 

@@ -5,7 +5,6 @@ using Void.Client.Failures;
 using Void.Client.Models;
 using Void.Client.Requests;
 using Void.Client.States;
-using Void.Client.Utilities;
 
 namespace Void.Client;
 
@@ -21,6 +20,16 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         LogLevel.Error,
         new EventId(id: 1004, nameof(LogRejectedMessage)),
         formatString: "Coordinator stopped before it could record {MessageType}"
+    );
+    private static readonly Action<ILogger, StopMode, Exception?> LogShutdownStopResult = LoggerMessage.Define<StopMode>(
+        LogLevel.Debug,
+        new EventId(id: 1005, nameof(LogShutdownStopResult)),
+        formatString: "Stopped Minecraft during API shutdown with mode {StopMode}"
+    );
+    private static readonly Action<ILogger, StopMode, Exception?> LogSupersededGameStopResult = LoggerMessage.Define<StopMode>(
+        LogLevel.Debug,
+        new EventId(id: 1006, nameof(LogSupersededGameStopResult)),
+        formatString: "Stopped superseded Minecraft game with mode {StopMode}"
     );
     private static readonly Action<ILogger, Exception?> LogShutdownFailure = LoggerMessage.Define(LogLevel.Error, new EventId(id: 1001, nameof(LogShutdownFailure)), formatString: "Failed to stop Minecraft during API shutdown");
     private readonly Channel<Message> _messages = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
@@ -79,7 +88,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     public async Task SendChatAsync(SendChatRequest request, CancellationToken cancellationToken)
     {
-        bool chatSent = await EnqueueAsync<bool>(completion => new SendChatMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await EnqueueAsync(completion => new SendChatMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<GameStatus> StartCurseForgeAsync(StartCurseForgeGameRequest request, CancellationToken cancellationToken)
@@ -113,7 +122,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     public async Task WriteOptionsAsync(string options, CancellationToken cancellationToken)
     {
-        bool optionsWritten = await EnqueueAsync<bool>(completion => new OptionsMessage(options, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await EnqueueAsync(completion => new OptionsMessage(options, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -133,7 +142,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         finally
         {
             Volatile.Write(ref _started, value: 0);
-            ReturnedValue.Consume(_messages.Writer.TryComplete());
+            _messages.Writer.Complete();
 
             if (_activeCancellation is not null)
                 await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
@@ -146,7 +155,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
                 if (stopTask.IsCompletedSuccessfully)
                 {
                     var stopMode = await stopTask.ConfigureAwait(continueOnCapturedContext: false);
-                    ReturnedValue.Consume(stopMode);
+                    LogShutdownStopResult(logger, stopMode, arg3: null);
                 }
                 else
                 {
@@ -192,14 +201,9 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         await ((Task)operation).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
         if (operation.IsCompletedSuccessfully)
-        {
-            bool completionSet = completion.TrySetResult(await operation.ConfigureAwait(continueOnCapturedContext: false));
-            ReturnedValue.Consume(completionSet);
-        }
+            completion.SetResult(await operation.ConfigureAwait(continueOnCapturedContext: false));
         else
-        {
-            ReturnedValue.Consume(completion.TrySetException(GetTaskException(operation)));
-        }
+            completion.SetException(GetTaskException(operation));
     }
 
     private void AddConnectWaiter(ConnectMessage message)
@@ -207,7 +211,8 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         var registration = message.RequestCancellation.Register(
             () =>
         {
-            bool cancellationMessageWritten = _messages.Writer.TryWrite(new ConnectWaiterCanceled(message.Completion, message.RequestCancellation));
+            if (!_messages.Writer.TryWrite(new ConnectWaiterCanceled(message.Completion, message.RequestCancellation)))
+                LogRejectedMessage(logger, nameof(ConnectWaiterCanceled), arg3: null);
         }
         );
 
@@ -231,7 +236,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         foreach (var waiter in _connectWaiters)
         {
             waiter.CancellationRegistration.Dispose();
-            ReturnedValue.Consume(waiter.Completion.TrySetCanceled());
+            waiter.Completion.SetCanceled();
         }
 
         _connectWaiters.Clear();
@@ -266,6 +271,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         try
         {
             var stopMode = await runtime.StopAsync(game, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+            LogSupersededGameStopResult(logger, stopMode, arg3: null);
         }
         finally
         {
@@ -273,11 +279,11 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         }
     }
 
-    private async Task<bool> CompleteConfirmedOperationAsync<TResult>(long operationId, string operation, Exception? error, bool canceled, TaskCompletionSource<TResult> completion)
+    private async Task<bool> CompleteConfirmedOperationAsync(long operationId, string operation, Exception? error, bool canceled, Action cancelCompletion, Action<Exception> failCompletion)
     {
         if (operationId != Status.OperationId)
         {
-            ReturnedValue.Consume(completion.TrySetException(Conflict($"{operation} was superseded by operation {Status.OperationId}")));
+            failCompletion(Conflict($"{operation} was superseded by operation {Status.OperationId}"));
 
             return false;
         }
@@ -300,9 +306,9 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         if (canceled)
-            completion.SetCanceled();
+            cancelCompletion();
         else
-            completion.SetException(error);
+            failCompletion(error);
 
         return false;
     }
@@ -315,12 +321,19 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
+    private async Task EnqueueAsync(Func<TaskCompletionSource, Message> createMessage, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await _messages.Writer.WriteAsync(createMessage(completion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
     private void FailConnectWaiters(Exception exception)
     {
         foreach (var waiter in _connectWaiters)
         {
             waiter.CancellationRegistration.Dispose();
-            ReturnedValue.Consume(waiter.Completion.TrySetException(exception));
+            waiter.Completion.SetException(exception);
         }
 
         _connectWaiters.Clear();
@@ -510,7 +523,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         if (completed.OperationId != Status.OperationId)
         {
             foreach (var waiter in waiters)
-                ReturnedValue.Consume(waiter.Completion.TrySetException(Conflict($"connect was superseded by operation {Status.OperationId}")));
+                waiter.Completion.SetException(Conflict($"connect was superseded by operation {Status.OperationId}"));
 
             return;
         }
@@ -528,9 +541,9 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             foreach (var waiter in waiters)
             {
                 if (completed.Canceled)
-                    ReturnedValue.Consume(waiter.Completion.TrySetCanceled());
+                    waiter.Completion.SetCanceled();
                 else
-                    ReturnedValue.Consume(waiter.Completion.TrySetException(completed.Error));
+                    waiter.Completion.SetException(completed.Error);
             }
 
             return;
@@ -542,19 +555,20 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         foreach (var waiter in waiters)
-            ReturnedValue.Consume(waiter.Completion.TrySetResult(_connectedResponse));
+            waiter.Completion.SetResult(_connectedResponse);
     }
 
     private void HandleConnectWaiterCanceled(ConnectWaiterCanceled message)
     {
-        var waiter = _connectWaiters.FirstOrDefault(waiter => waiter.Completion == message.Completion);
+        int waiterIndex = _connectWaiters.FindIndex(waiter => waiter.Completion == message.Completion);
 
-        if (waiter is null)
+        if (waiterIndex < 0)
             return;
 
+        var waiter = _connectWaiters[waiterIndex];
         waiter.CancellationRegistration.Dispose();
-        bool waiterRemoved = _connectWaiters.Remove(waiter);
-        bool completionCanceled = waiter.Completion.TrySetCanceled(message.CancellationToken);
+        _connectWaiters.RemoveAt(waiterIndex);
+        waiter.Completion.SetCanceled(message.CancellationToken);
 
         // The accepted connection intent outlives individual HTTP waiters. Stop and process-exit paths still own
         // cancellation of the background operation.
@@ -663,7 +677,14 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     {
         completed.Cancellation.Dispose();
 
-        bool operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationId, operation: "screenshot", completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
+        bool operationCompleted = await CompleteConfirmedOperationAsync(
+            completed.OperationId,
+            operation: "screenshot",
+            completed.Error,
+            completed.Canceled,
+            completed.Completion.SetCanceled,
+            completed.Completion.SetException
+        ).ConfigureAwait(continueOnCapturedContext: false);
 
         if (!operationCompleted)
             return;
@@ -939,11 +960,18 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     {
         completed.Cancellation.Dispose();
 
-        bool operationCompleted = await CompleteConfirmedOperationAsync(completed.OperationId, completed.Kind, completed.Error, completed.Canceled, completed.Completion).ConfigureAwait(continueOnCapturedContext: false);
+        bool operationCompleted = await CompleteConfirmedOperationAsync(
+            completed.OperationId,
+            completed.Kind,
+            completed.Error,
+            completed.Canceled,
+            completed.Completion.SetCanceled,
+            completed.Completion.SetException
+        ).ConfigureAwait(continueOnCapturedContext: false);
 
         if (!operationCompleted)
             return;
 
-        completed.Completion.SetResult(result: true);
+        completed.Completion.SetResult();
     }
 }

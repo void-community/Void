@@ -213,6 +213,30 @@ public sealed class GameCoordinatorTests
     }
 
     [Fact]
+    public async Task VoidOperationsCompleteWithoutSyntheticResults()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        await coordinator.WriteOptionsAsync("difficulty=hard", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal("options", coordinator.Status.Operation);
+        Assert.Equal(OperationState.Succeeded, coordinator.Status.OperationState);
+
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await coordinator.SendChatAsync(new("hello"), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal("send-chat", coordinator.Status.Operation);
+        Assert.Equal(OperationState.Succeeded, coordinator.Status.OperationState);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task SameTargetConnectCallsShareBackgroundOperationAndReplayResult()
     {
         var runtime = new FakeGameRuntime { BlockConnect = true };

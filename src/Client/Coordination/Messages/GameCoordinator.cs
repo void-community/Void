@@ -11,7 +11,7 @@ internal sealed partial class GameCoordinator
     private sealed record ConnectWaiter(TaskCompletionSource<ConnectGameResponse> Completion, CancellationTokenRegistration CancellationRegistration);
     private sealed record ConnectWaiterCanceled(TaskCompletionSource<ConnectGameResponse> Completion, CancellationToken CancellationToken) : Message;
     private abstract record Message;
-    private sealed record OptionsMessage(string Options, TaskCompletionSource<bool> Completion, CancellationToken RequestCancellation) : Message;
+    private sealed record OptionsMessage(string Options, TaskCompletionSource Completion, CancellationToken RequestCancellation) : Message;
     private sealed record PlayersMessage(TaskCompletionSource<GamePlayers> Completion, CancellationToken RequestCancellation) : Message;
     private sealed record ProcessExited(int ProcessId, int ExitCode, bool WasOutOfMemoryKilled, int? MemoryMb) : Message;
     private sealed record ScreenshotCompleted(
@@ -23,7 +23,7 @@ internal sealed partial class GameCoordinator
         TaskCompletionSource<byte[]> Completion
     ) : Message;
     private sealed record ScreenshotMessage(TaskCompletionSource<byte[]> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record SendChatMessage(SendChatRequest Request, TaskCompletionSource<bool> Completion, CancellationToken RequestCancellation) : Message;
+    private sealed record SendChatMessage(SendChatRequest Request, TaskCompletionSource Completion, CancellationToken RequestCancellation) : Message;
     private sealed record StartCompleted(long OperationId, string Kind, RunningGame? Game, Exception? Error, bool Canceled, CancellationTokenSource Cancellation) : Message;
     private sealed record StartMessage(
         string Kind,
@@ -46,6 +46,6 @@ internal sealed partial class GameCoordinator
         Exception? Error,
         bool Canceled,
         CancellationTokenSource Cancellation,
-        TaskCompletionSource<bool> Completion
+        TaskCompletionSource Completion
     ) : Message;
 }

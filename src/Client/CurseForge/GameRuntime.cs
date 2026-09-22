@@ -1,8 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using Void.Client.Utilities;
-
 namespace Void.Client;
 
 internal sealed partial class GameRuntime
@@ -62,7 +60,7 @@ internal sealed partial class GameRuntime
 
         private async Task<TResponse> SendAsync<TResponse>(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            ReturnedValue.Consume(request.Headers.TryAddWithoutValidation(name: "x-api-key", _apiKey));
+            request.Headers.Add(name: "x-api-key", _apiKey);
 
             using var response = await _hypertextTransferProtocolClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 

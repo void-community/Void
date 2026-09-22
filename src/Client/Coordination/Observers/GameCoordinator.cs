@@ -118,7 +118,7 @@ internal sealed partial class GameCoordinator
         await WriteCompletionAsync(new StopCompleted(operationId, Mode: default, GetTaskException(operation), cancellation, completion)).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    private async Task ObserveVoidOperationAsync(long operationId, string kind, Task operation, CancellationTokenSource cancellation, TaskCompletionSource<bool> completion)
+    private async Task ObserveVoidOperationAsync(long operationId, string kind, Task operation, CancellationTokenSource cancellation, TaskCompletionSource completion)
     {
         var (error, canceled) = await ObserveAsync(operation, cancellation, operationId).ConfigureAwait(continueOnCapturedContext: false);
         await WriteCompletionAsync(new VoidOperationCompleted(operationId, kind, error, canceled, cancellation, completion)).ConfigureAwait(continueOnCapturedContext: false);
