@@ -357,7 +357,7 @@ internal sealed class SessionDiagnostics
                         continue;
 
                     FileInfo information = new(file);
-                    var fingerprint = (information.Length, information.LastWriteTimeUtc);
+                    FileFingerprint fingerprint = new(information.Length, information.LastWriteTimeUtc);
 
                     if (baseline)
                     {
@@ -611,6 +611,8 @@ internal sealed class SessionDiagnostics
         }
     }
 
+    private readonly record struct FileFingerprint(long Length, DateTime LastWriteTimeUtc);
+
     private sealed class ContextScope(Action restore) : IDisposable
     {
         public void Dispose()
@@ -630,7 +632,7 @@ internal sealed class SessionDiagnostics
             get => Volatile.Read(ref field);
             set => Volatile.Write(ref field, value);
         } = metadata;
-        public Dictionary<string, (long, DateTime)> Baseline { get; } = [];
+        public Dictionary<string, FileFingerprint> Baseline { get; } = [];
         public List<string> Secrets { get; } = [];
         public long StoredBytes { get; set; }
     }

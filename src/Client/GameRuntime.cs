@@ -412,7 +412,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         HashSet<int> descendants = [rootProcessId];
 
         var processDirectories = Directory.EnumerateDirectories(path: "/proc")
-            .Select(static path => (Path: path, Name: Path.GetFileName(path)))
+            .Select(static path => new ProcessDirectory(path, Path.GetFileName(path)))
             .Where(static item => int.TryParse(item.Name, NumberStyles.None, CultureInfo.InvariantCulture, out _))
             .ToArray();
 
@@ -494,4 +494,6 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     {
         await task.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
+
+    private readonly record struct ProcessDirectory(string Path, string Name);
 }

@@ -11,25 +11,25 @@ internal sealed partial class GameCoordinator
         await WriteCompletionAsync(new ProcessExited(game.Process.Id, game.Process.ExitCode ?? -1, game.Process.WasOutOfMemoryKilled, game.Process.MemoryMb)).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    private async Task<(Exception? Error, bool Canceled)> ObserveAsync(Task operation, CancellationTokenSource cancellation, long operationId)
+    private async Task<OperationObservation> ObserveAsync(Task operation, CancellationTokenSource cancellation, long operationId)
     {
         await operation.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
         if (operation.IsCompletedSuccessfully)
-            return (null, false);
+            return new(Error: null, Canceled: false);
 
         var exception = GetTaskException(operation);
 
         if (operation.IsCanceled && cancellation.IsCancellationRequested)
         {
             return Volatile.Read(ref _processExitFailure) is { } processExitFailure
-                ? (processExitFailure, false)
-                : (exception, true);
+                ? new(processExitFailure, Canceled: false)
+                : new(exception, Canceled: true);
         }
 
         await CaptureFailureAsync(operationId).ConfigureAwait(continueOnCapturedContext: false);
 
-        return (exception, false);
+        return new(exception, Canceled: false);
     }
 
     private async Task ObserveConnectAsync(long operationId, ServerAddress server, Task operation, CancellationTokenSource cancellation)
@@ -144,4 +144,6 @@ internal sealed partial class GameCoordinator
         if (!messageWritten)
             LogRejectedMessage(logger, message.GetType().Name, arg3: null);
     }
+
+    private readonly record struct OperationObservation(Exception? Error, bool Canceled);
 }

@@ -219,7 +219,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         _connectWaiters.Add(new(message.Completion, registration));
     }
 
-    private async Task<(long OperationId, CancellationTokenSource Cancellation)> BeginConfirmedOperationAsync(string operation, CancellationToken requestCancellation)
+    private async Task<ConfirmedOperation> BeginConfirmedOperationAsync(string operation, CancellationToken requestCancellation)
     {
         long operationId = ++_nextOperationId;
         CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken, requestCancellation);
@@ -228,7 +228,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             Status with { OperationId = operationId, Operation = operation, OperationState = OperationState.Running, Message = $"{operation} running", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
         ).ConfigureAwait(continueOnCapturedContext: false);
 
-        return (operationId, cancellation);
+        return new(operationId, cancellation);
     }
 
     private void CancelConnectWaiters()
@@ -974,4 +974,6 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
         completed.Completion.SetResult();
     }
+
+    private readonly record struct ConfirmedOperation(long OperationId, CancellationTokenSource Cancellation);
 }
