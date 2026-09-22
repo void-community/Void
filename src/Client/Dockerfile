@@ -163,7 +163,7 @@ ENTRYPOINT ["tini", "--", "portableminecraftclient-entrypoint"]
 
 FROM runtime AS offline-assets
 
-ARG FIRST_RELEASE_VERSION=1.7.2
+ARG FIRST_RELEASE_VERSION
 ARG LAST_RELEASE_VERSION
 # Invalidates the asset layer when its source inputs or Minecraft release set change.
 ARG OFFLINE_ASSETS_REVISION=local
@@ -171,7 +171,8 @@ ARG OFFLINE_ASSETS_REVISION=local
 # Dry-run all release versions in reverse order (from oldest to latest).
 # The downloaded content is deterministic, so a rebuild with rewritten timestamps reproduces the same
 # layer digest and pulls skip it. The portablemc manifest cache changes over time, so it is kept out of this layer.
-RUN test -n "$OFFLINE_ASSETS_REVISION" \
+RUN test -n "$FIRST_RELEASE_VERSION" \
+ && test -n "$OFFLINE_ASSETS_REVISION" \
  && list-minecraft-release-versions "$FIRST_RELEASE_VERSION" "$LAST_RELEASE_VERSION" | while IFS= read -r minecraftVersion; do portablemc-dry-run-with-retries "mojang:$minecraftVersion"; done \
  && rm -rf /root/.cache/portablemc-cache /tmp/hsperfdata_root
 
