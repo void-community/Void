@@ -224,4 +224,4 @@ COPY --link --from=application-files / /
 
 FROM version-assets AS version
 
-COPY --from=application-files / /
+COPY --link --from=application-files / /

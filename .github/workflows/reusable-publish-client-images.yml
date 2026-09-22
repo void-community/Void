@@ -72,13 +72,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          multi_platform_image_exists() {
+            docker buildx imagetools inspect --raw "$1" 2> /dev/null \
+              | jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64", "arm64"]' > /dev/null
+          }
+
           build_and_push() {
             local target="$1"
             local image="$2"
             local minecraft_version="${3:-}"
             local rewrite_timestamps="${4:-true}"
-            local offline_assets_image="${5:-}"
-            local offline_assets_revision="${6:-}"
+            local assets_image="${5:-}"
+            local assets_revision="${6:-}"
+            local cache_image="${7:-}"
             local attempt
             local image_output="type=image,name=$image,push=true"
 
@@ -95,7 +101,7 @@ jobs:
               --cache-to type=inline
             )
 
-            if [ "$target" != offline-assets ]; then
+            if [ "$target" != offline-assets ] && [ "$target" != version-assets ]; then
               docker_build_command+=(--cache-from "type=registry,ref=$image")
             fi
 
@@ -107,17 +113,23 @@ jobs:
                 docker_build_command+=(
                   --build-arg "FIRST_RELEASE_VERSION=$FIRST_RELEASE_VERSION"
                   --build-arg "LAST_RELEASE_VERSION=$minecraft_version"
-                  --build-arg "OFFLINE_ASSETS_REVISION=$offline_assets_revision"
+                  --build-arg "OFFLINE_ASSETS_REVISION=$assets_revision"
                   --cache-from "type=registry,ref=$CACHE_REPOSITORY:offline"
                   --cache-from "type=registry,ref=$CACHE_REPOSITORY:offline-assets"
                   --cache-to "type=registry,ref=$CACHE_REPOSITORY:offline-assets,mode=max,ignore-error=true"
                 )
                 ;;
               offline)
-                docker_build_command+=(--build-context "offline-assets=docker-image://$offline_assets_image")
+                docker_build_command+=(--build-context "offline-assets=docker-image://$assets_image")
+                ;;
+              version-assets)
+                docker_build_command+=(--build-arg "MINECRAFT_VERSION=$minecraft_version")
+                if [ -n "$cache_image" ]; then
+                  docker_build_command+=(--cache-from "type=registry,ref=$cache_image")
+                fi
                 ;;
               version)
-                docker_build_command+=(--build-arg "MINECRAFT_VERSION=$minecraft_version")
+                docker_build_command+=(--build-context "version-assets=docker-image://$assets_image")
                 ;;
             esac
 
@@ -141,8 +153,32 @@ jobs:
           # GitHub Actions supplies the uppercase environment variables used below.
           # shellcheck disable=SC2153
           if [ "$TARGET" = version ]; then
+            version_assets_source_revision=$(
+              sha256sum \
+                src/Client/Dockerfile \
+                src/Client/list-minecraft-release-versions \
+                src/Client/portablemc-dry-run-with-retries \
+                | sha256sum \
+                | cut -d ' ' -f 1
+            )
+
             while IFS= read -r minecraft_version; do
-              build_and_push version "$IMAGE_REPOSITORY:$minecraft_version" "$minecraft_version"
+              version_image="$IMAGE_REPOSITORY:$minecraft_version"
+              version_assets_revision=$(printf '%s\n%s\n' "$version_assets_source_revision" "$minecraft_version" | sha256sum | cut -d ' ' -f 1)
+              version_assets_image="$CACHE_REPOSITORY:version-assets-$version_assets_revision"
+
+              if multi_platform_image_exists "$version_assets_image"; then
+                echo "Reusing Minecraft $minecraft_version assets image $version_assets_image."
+              else
+                cache_image=""
+                if multi_platform_image_exists "$version_image"; then
+                  cache_image="$version_image"
+                fi
+
+                build_and_push version-assets "$version_assets_image" "$minecraft_version" true "" "" "$cache_image"
+              fi
+
+              build_and_push version "$version_image" "$minecraft_version" false "$version_assets_image"
             done < <(jq -r '.[]' <<< "$MINECRAFT_VERSIONS")
           elif [ "$TARGET" = offline ]; then
             # Publish normalized assets once, then link the changing application layer on top without
@@ -160,8 +196,7 @@ jobs:
             )
             offline_assets_image="$CACHE_REPOSITORY:offline-assets-$offline_assets_revision"
 
-            if docker buildx imagetools inspect --raw "$offline_assets_image" 2> /dev/null \
-              | jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64", "arm64"]' > /dev/null; then
+            if multi_platform_image_exists "$offline_assets_image"; then
               echo "Reusing offline assets image $offline_assets_image."
             else
               build_and_push offline-assets "$offline_assets_image" "$last_release_version" true "" "$offline_assets_revision"
