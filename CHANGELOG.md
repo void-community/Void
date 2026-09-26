@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.1](https://github.com/void-community/Void/compare/v0.6.0...v0.6.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **deps:** ⬆️ update dependency @astrojs/starlight to ^0.42.0 ([9db850b](https://github.com/void-community/Void/commit/9db850b17e26fdd4ac55df48850430b225998b5f))
+* **deps:** ⬆️ update dependency starlight-links-validator to ^0.26.0 ([419ee6a](https://github.com/void-community/Void/commit/419ee6a6478b1e47d42e52728e9e244000572419))
+
+
+### Performance Improvements
+
+* **client:** ⚡ accelerated version image publishing ([6271d91](https://github.com/void-community/Void/commit/6271d9193982fcbc05999cb4e039e5289e3677dc))
+* **client:** ⚡ reduced offline image export duration ([25be96d](https://github.com/void-community/Void/commit/25be96de6d4f12c523b7e735d626ca3622455027))
+* **client:** ⚡ shared application layers across client images ([7e7144d](https://github.com/void-community/Void/commit/7e7144d66994407b54fb82f03b31c8447ab397b1))
+
 ## [0.6.0](https://github.com/void-community/Void/compare/v0.5.17...v0.6.0) (2026-09-20)
 
 
