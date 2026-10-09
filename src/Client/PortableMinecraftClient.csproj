@@ -6,7 +6,7 @@
     <RootNamespace>Void.Client</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NetAgents.Analyzers" Version="26.10.9.6943">
+    <PackageReference Include="NetAgents.Analyzers" Version="26.10.9.9207">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
