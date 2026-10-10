@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.1](https://github.com/void-community/Void/compare/v0.6.0...v0.6.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** ⬆️ update dependency @astrojs/starlight to ^0.42.0 ([9db850b](https://github.com/void-community/Void/commit/9db850b17e26fdd4ac55df48850430b225998b5f))
+* **deps:** ⬆️ update dependency org.ow2.asm:asm to v9.11 ([2fbcc54](https://github.com/void-community/Void/commit/2fbcc54827a2ab42d88ee0bf9cac86070bf0bb63))
+* **deps:** ⬆️ update dependency org.ow2.asm:asm-tree to v9.11 ([853ff2c](https://github.com/void-community/Void/commit/853ff2c4fec324711c26f4671df31d0bee52e434))
+* **deps:** ⬆️ update dependency starlight-links-validator to ^0.26.0 ([419ee6a](https://github.com/void-community/Void/commit/419ee6a6478b1e47d42e52728e9e244000572419))
+
+
+### Performance Improvements
+
+* **client:** ⚡ accelerated version image publishing ([6271d91](https://github.com/void-community/Void/commit/6271d9193982fcbc05999cb4e039e5289e3677dc))
+* **client:** ⚡ reduced offline image export duration ([25be96d](https://github.com/void-community/Void/commit/25be96de6d4f12c523b7e735d626ca3622455027))
+* **client:** ⚡ shared application layers across client images ([7e7144d](https://github.com/void-community/Void/commit/7e7144d66994407b54fb82f03b31c8447ab397b1))
+
 ## [0.6.0](https://github.com/void-community/Void/compare/v0.5.17...v0.6.0) (2026-09-20)
 
 
