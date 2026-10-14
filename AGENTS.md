@@ -56,6 +56,7 @@ Follow the existing C# style rules:
 - Do not run integration tests (`tests/Void.IntegrationTests/`) unless explicitly asked to do so.
 - Be patient with long-running tests and avoid aborting them early; some may take several minutes to complete.
 - After changing source code, run `dotnet build` from the repository root.
+- Never add .NET-related JSON files such as `global.json` to the repository.
 - Conventional Commits are required for commit messages.
 - Commit messages must include a scope after the type, e.g., `docs(readme): ...`.
 - Use only the following Conventional Commit types:
