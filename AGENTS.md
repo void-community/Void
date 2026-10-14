@@ -52,11 +52,12 @@ Follow the existing C# style rules:
 ## Development
 
 - Commit only hunks with actual code changes. Preserve existing whitespace and never reformat untouched lines.
-- Run `dotnet test tests/Void.UnitTests/` to ensure unit tests pass whenever C# source files (`*.cs`) are modified. Skip this step if no C# files change.
+- Run `dotnet test --project tests/Void.UnitTests/` to ensure unit tests pass whenever C# source files (`*.cs`) are modified. Skip this step if no C# files change.
 - Do not run integration tests (`tests/Void.IntegrationTests/`) unless explicitly asked to do so.
 - Be patient with long-running tests and avoid aborting them early; some may take several minutes to complete.
 - After changing source code, run `dotnet build` from the repository root.
 - Never add .NET-related JSON files such as `global.json` to the repository.
+- `dotnet test` needs the .NET 11 SDK with `DOTNET_TEST_RUNNER=Microsoft.Testing.Platform`. If it is missing, install it with `dotnet-install.sh` (11.0 SDK plus 10.0 runtimes) and persist the variable in `/etc/sandbox-persistent.sh`.
 - Conventional Commits are required for commit messages.
 - Commit messages must include a scope after the type, e.g., `docs(readme): ...`.
 - Use only the following Conventional Commit types:
