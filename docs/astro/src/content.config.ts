@@ -199,6 +199,9 @@ const starlightVirtualCompositeLoader = () => {
     };
 };
 
+const repositoryApiUrl = 'https://api.github.com/repos/void-community/Void';
+const artifactRequestBatchSize = 8;
+
 const getHeaders = (): Record<string, string> => {
     const headers: Record<string, string> = {};
     const token = process.env.GITHUB_TOKEN;
@@ -209,6 +212,15 @@ const getHeaders = (): Record<string, string> => {
     return headers;
 };
 
+const fetchJson = async (url: string, headers: Record<string, string>): Promise<any> => {
+    const response = await fetch(url, { headers });
+
+    if (!response.ok)
+        throw new Error(`GitHub API ${response.status} ${response.statusText} for ${url}`);
+
+    return await response.json();
+};
+
 export const collections = {
     docs: defineCollection({
         loader: starlightVirtualCompositeLoader(),
@@ -216,12 +228,7 @@ export const collections = {
     }),
     releases: defineCollection({
         loader: async () => {
-            const response = await fetch(
-                'https://api.github.com/repos/caunt/Void/releases',
-                { headers: getHeaders() }
-            );
-
-            const data = await response.json();
+            const data = await fetchJson(`${repositoryApiUrl}/releases`, getHeaders());
 
             if (!Array.isArray(data))
                 throw new Error(`Unexpected response from GitHub Releases API: ${JSON.stringify(data)}`);
@@ -231,46 +238,40 @@ export const collections = {
     }),
     workflows: defineCollection({
         loader: async () => {
-            const base = 'https://api.github.com/repos/caunt/Void';
             const headers = getHeaders();
 
-            const [workflowsResponse, runsResponse, artifactsResponse] = await Promise.all([
-                fetch(`${base}/actions/workflows?per_page=1000`, { headers }),
-                fetch(`${base}/actions/runs?per_page=1000`, { headers }),
-                fetch(`${base}/actions/artifacts?per_page=1000`, { headers })
+            const [workflowsData, runsData] = await Promise.all([
+                fetchJson(`${repositoryApiUrl}/actions/workflows?per_page=100`, headers),
+                fetchJson(`${repositoryApiUrl}/actions/runs?per_page=100`, headers)
             ]);
 
-            const [workflowsData, runsData, artifactsData] = await Promise.all([
-                workflowsResponse.json(),
-                runsResponse.json(),
-                artifactsResponse.json()
-            ]);
-
-            if (!Array.isArray(workflowsData.workflows)) 
+            if (!Array.isArray(workflowsData.workflows))
                 throw new Error(`Unexpected response from GitHub Workflows API: ${JSON.stringify(workflowsData)}`);
 
-            if (!Array.isArray(runsData.workflow_runs)) 
+            if (!Array.isArray(runsData.workflow_runs))
                 throw new Error(`Unexpected response from GitHub Workflow Runs API: ${JSON.stringify(runsData)}`);
 
-            if (!Array.isArray(artifactsData.artifacts)) 
-                throw new Error(`Unexpected response from GitHub Artifacts API: ${JSON.stringify(artifactsData)}`);
-
+            // The repository-wide artifacts endpoint times out for this repository, so artifacts are requested per successful run.
+            const successfulRuns = runsData.workflow_runs.filter((run: any) => run.conclusion === 'success');
             const artifactsByRunId = new Map<string, any[]>();
 
-            for (const artifact of artifactsData.artifacts) {
-                const runId = artifact.workflow_run?.id?.toString();
+            for (let batchStart = 0; batchStart < successfulRuns.length; batchStart += artifactRequestBatchSize) {
+                const batchRuns = successfulRuns.slice(batchStart, batchStart + artifactRequestBatchSize);
+                const batchArtifactsData = await Promise.all(
+                    batchRuns.map((run: any) => fetchJson(`${repositoryApiUrl}/actions/runs/${run.id}/artifacts?per_page=100`, headers))
+                );
 
-                if (!runId)
-                    continue;
+                batchRuns.forEach((run: any, batchIndex: number) => {
+                    const artifactsData = batchArtifactsData[batchIndex];
 
-                const currentArtifacts = artifactsByRunId.get(runId) ?? [];
+                    if (!Array.isArray(artifactsData.artifacts))
+                        throw new Error(`Unexpected response from GitHub Artifacts API: ${JSON.stringify(artifactsData)}`);
 
-                currentArtifacts.push({
-                    ...artifact,
-                    id: artifact.id.toString()
+                    artifactsByRunId.set(
+                        run.id.toString(),
+                        artifactsData.artifacts.map((artifact: any) => ({ ...artifact, id: artifact.id.toString() }))
+                    );
                 });
-
-                artifactsByRunId.set(runId, currentArtifacts);
             }
 
             const runsByWorkflowId = new Map<string, any[]>();
