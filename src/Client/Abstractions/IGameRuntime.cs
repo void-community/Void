@@ -11,7 +11,13 @@ internal interface IGameRuntime
 
     Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
 
-    Task<RunningGame> LaunchNeoForgeAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
+    Task<RunningGame> LaunchNeoForgeAsync(
+        string version,
+        string? maximumMinecraftVersion,
+        IReadOnlyList<string> arguments,
+        int? memoryMb,
+        CancellationToken cancellationToken
+    );
 
     Task<RunningGame> LaunchVanillaAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
 

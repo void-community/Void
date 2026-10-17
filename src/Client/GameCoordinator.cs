@@ -734,6 +734,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
         string? version = message.Request?.Version?.Trim();
         string? neoForgeVersion = message.NeoForgeRequest?.Version?.Trim();
+        string? maximumMinecraftVersion = message.NeoForgeRequest?.MaximumMinecraftVersion?.Trim();
         string? slug = message.CurseForgeRequest?.Slug?.Trim();
         string[] arguments = message.Request?.Arguments ?? message.NeoForgeRequest?.Arguments ?? message.CurseForgeRequest?.Arguments ?? [];
         int? memoryMb = message.Request?.MemoryMb ?? message.NeoForgeRequest?.MemoryMb ?? message.CurseForgeRequest?.MemoryMb;
@@ -741,6 +742,15 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         if (message.Kind is "start-vanilla" && string.IsNullOrWhiteSpace(version))
         {
             message.Completion.SetException(BadRequest(message: "version is required"));
+
+            return;
+        }
+
+        bool maximumMinecraftVersionConflicts = !string.IsNullOrWhiteSpace(neoForgeVersion) && !string.IsNullOrWhiteSpace(maximumMinecraftVersion);
+
+        if (message.Kind is "start-neoforge" && maximumMinecraftVersionConflicts)
+        {
+            message.Completion.SetException(BadRequest(message: "maximumMinecraftVersion can only be used when version is omitted"));
 
             return;
         }
@@ -806,7 +816,13 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             Task<RunningGame> operation = message.Kind switch
             {
                 "start-vanilla" => runtime.LaunchVanillaAsync(version ?? "", arguments, memoryMb, operationCancellation.Token),
-                "start-neoforge" => runtime.LaunchNeoForgeAsync(neoForgeVersion ?? "", arguments, memoryMb, operationCancellation.Token),
+                "start-neoforge" => runtime.LaunchNeoForgeAsync(
+                    neoForgeVersion ?? "",
+                    string.IsNullOrWhiteSpace(maximumMinecraftVersion) ? null : maximumMinecraftVersion,
+                    arguments,
+                    memoryMb,
+                    operationCancellation.Token
+                ),
                 "start-curseforge" => runtime.LaunchCurseForgeAsync(slug ?? "", message.CurseForgeRequest?.FileId ?? 0, arguments, memoryMb, operationCancellation.Token),
                 _ => throw new InvalidOperationException($"Unknown launch kind {message.Kind}")
             };

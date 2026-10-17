@@ -153,6 +153,37 @@ public sealed class GameCoordinatorTests
         await coordinator.StartNeoForgeAsync(new(null, []), CancellationToken.None);
 
         Assert.Equal("", runtime.LastNeoForgeVersion);
+        Assert.Null(runtime.LastNeoForgeMaximumMinecraftVersion);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task NeoForgeLaunchForwardsMaximumMinecraftVersion()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        await coordinator.StartNeoForgeAsync(new(null, [], MaximumMinecraftVersion: " 26.2 "), CancellationToken.None);
+
+        Assert.Equal("", runtime.LastNeoForgeVersion);
+        Assert.Equal("26.2", runtime.LastNeoForgeMaximumMinecraftVersion);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task NeoForgeLaunchRejectsMaximumMinecraftVersionWithExplicitVersion()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.StartNeoForgeAsync(new("26.3", [], MaximumMinecraftVersion: "26.2"), CancellationToken.None));
+
+        Assert.Equal(400, exception.StatusCode);
+        Assert.Equal(0, runtime.LaunchCount);
 
         await coordinator.StopAsync(CancellationToken.None);
     }
@@ -537,6 +568,7 @@ public sealed class GameCoordinatorTests
         public int? LastMemoryMb { get; private set; }
         public string? LastVanillaVersion { get; private set; }
         public string? LastNeoForgeVersion { get; private set; }
+        public string? LastNeoForgeMaximumMinecraftVersion { get; private set; }
         public RunningGame? LastConnectGame { get; private set; }
 
         public void FailLaunch(Exception exception) => _launch.SetException(exception);
@@ -578,9 +610,10 @@ public sealed class GameCoordinatorTests
             return BeginLaunch(cancellationToken);
         }
 
-        public Task<RunningGame> LaunchNeoForgeAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
+        public Task<RunningGame> LaunchNeoForgeAsync(string version, string? maximumMinecraftVersion, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
         {
             LastNeoForgeVersion = version;
+            LastNeoForgeMaximumMinecraftVersion = maximumMinecraftVersion;
             LastMemoryMb = memoryMb;
             return BeginLaunch(cancellationToken);
         }

@@ -105,7 +105,9 @@ internal static class ClientApiEndpoints
             ).ConfigureAwait(continueOnCapturedContext: false)
         )
             .WithName(endpointName: "StartNeoForgeGame")
-            .WithSummary(summary: "Starts a NeoForge Minecraft version, or the latest stable release when no version is given.");
+            .WithSummary(
+                summary: "Starts a NeoForge Minecraft version, or the newest release with a stable NeoForge build, optionally capped by maximumMinecraftVersion, when no version is given."
+            );
 
         var curseForgeStartEndpoint = api.MapPost(
             pattern: "/game/start/curseforge",

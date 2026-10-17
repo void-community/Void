@@ -15,6 +15,49 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
+    /// <summary>
+    /// Picks the newest release build from a Modrinth version list (newest first), falling back to the newest pre-release build when no release exists.
+    /// </summary>
+    internal static SodiumDownload? SelectSodiumDownload(JsonElement versions)
+    {
+        SodiumDownload? preReleaseDownload = null;
+
+        foreach (var version in versions.EnumerateArray())
+        {
+            if (!version.TryGetProperty(propertyName: "files", out var files))
+                continue;
+
+            string? downloadUrl = null;
+
+            foreach (var file in files.EnumerateArray())
+            {
+                bool primaryFound = file.TryGetProperty(propertyName: "primary", out var primary);
+                bool uniformResourceLocatorFound = file.TryGetProperty(propertyName: "url", out var uniformResourceLocator);
+
+                if (primaryFound && primary.GetBoolean() && uniformResourceLocatorFound)
+                {
+                    downloadUrl = uniformResourceLocator.GetString();
+
+                    break;
+                }
+            }
+
+            if (downloadUrl is null)
+                continue;
+
+            string versionNumber = version.TryGetProperty(propertyName: "version_number", out var number) ? number.GetString() ?? "unknown" : "unknown";
+            string versionType = version.TryGetProperty(propertyName: "version_type", out var type) ? type.GetString() ?? "unknown" : "unknown";
+            SodiumDownload download = new(versionNumber, versionType, new Uri(downloadUrl, UriKind.Absolute));
+
+            if (versionType is "release")
+                return download;
+
+            preReleaseDownload ??= download;
+        }
+
+        return preReleaseDownload;
+    }
+
     private static async Task<string> InstallModpack(string slug, int fileId, string apiKey, Uri apiBaseUri, string minecraftDirectory, CancellationToken cancellationToken)
     {
         using HttpClient hypertextTransferProtocolClient = new();
@@ -215,7 +258,6 @@ internal sealed partial class GameRuntime
         string loader = separatorIndex < 0 ? "mojang" : portableMinecraftVersion[..separatorIndex];
         string loaders = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { loader }));
         string gameVersions = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { minecraftVersion }));
-        string? sodiumUrl = null;
 
         File.Delete(sodiumPath);
 
@@ -235,38 +277,14 @@ internal sealed partial class GameRuntime
 
             using var versionsDocument = await JsonDocument.ParseAsync(versionsStream, cancellationToken: cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-            foreach (var version in versionsDocument.RootElement.EnumerateArray())
-            {
-                if (!version.TryGetProperty(propertyName: "files", out var files))
-                    continue;
-
-                foreach (var file in files.EnumerateArray())
-                {
-                    bool primaryFound = file.TryGetProperty(propertyName: "primary", out var primary);
-                    bool uniformResourceLocatorFound = file.TryGetProperty(propertyName: "url", out var uniformResourceLocator);
-
-                    if (primaryFound && primary.GetBoolean() && uniformResourceLocatorFound)
-                    {
-                        sodiumUrl = uniformResourceLocator.GetString();
-
-                        break;
-                    }
-                }
-
-                if (sodiumUrl is not null)
-                    break;
-            }
-
-            if (sodiumUrl is null)
+            if (SelectSodiumDownload(versionsDocument.RootElement) is not { } sodiumDownload)
             {
                 await Console.Error.WriteLineAsync($"Sodium was not found for {loader} Minecraft {minecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
 
                 return;
             }
 
-            Uri sodiumUri = new(sodiumUrl, UriKind.Absolute);
-
-            using var sodiumResponse = await hypertextTransferProtocolClient.GetAsync(sodiumUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            using var sodiumResponse = await hypertextTransferProtocolClient.GetAsync(sodiumDownload.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var successfulSodiumResponse = sodiumResponse.EnsureSuccessStatusCode();
 
@@ -274,6 +292,8 @@ internal sealed partial class GameRuntime
                 await successfulSodiumResponse.Content.CopyToAsync(sodiumFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             File.Move(temporarySodiumPath, sodiumPath, overwrite: true);
+
+            await Console.Error.WriteLineAsync($"Installed Sodium {sodiumDownload.VersionNumber} ({sodiumDownload.VersionType}) for {loader} Minecraft {minecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException)
         {
@@ -588,4 +608,6 @@ internal sealed partial class GameRuntime
             await Task.Delay(millisecondsDelay: 50, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
     }
+
+    internal sealed record SodiumDownload(string VersionNumber, string VersionType, Uri DownloadUri);
 }

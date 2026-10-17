@@ -33,7 +33,10 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string DisplayScreenWidth = "854";
     private const int ExternalProcessTimeoutMilliseconds = 5000;
     private const string LauncherSplashWindowTitle = "Void Client Startup";
+    private const string LegacyNeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml";
     private const int MinecraftGameId = 432;
+    private const string MojangVersionManifestUrl = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+    private const string NeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
     private const int PlayerReadTimeoutMilliseconds = 2000;
     private const string PortableMinecraftAgentPath = "/opt/portableminecraftclient/void-client-agent.jar";
     private const string PortableMinecraftArmLwjgl3Version = "3.3.3";
@@ -51,6 +54,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int ProcessStopTimeoutMilliseconds = 10000;
     private const int ScreenCaptureMaximumAttempts = 3;
     private const int ScreenCaptureTimeoutMilliseconds = 10000;
+    private const int UpstreamRequestAttempts = 3;
+    private const string UpstreamUserAgent = "caunt/Void";
     private static readonly JsonSerializerOptions CurseForgeManifestJsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false
@@ -90,9 +95,21 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public Task<RunningGame> LaunchNeoForgeAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
+    public async Task<RunningGame> LaunchNeoForgeAsync(
+        string version,
+        string? maximumMinecraftVersion,
+        IReadOnlyList<string> arguments,
+        int? memoryMb,
+        CancellationToken cancellationToken
+    )
     {
-        return LaunchPortableAsync($"neoforge:{version}", arguments, memoryMb, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(version))
+            return await LaunchPortableAsync($"neoforge:{version}", arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        var selection = await ResolveLatestStableNeoForgeAsync(maximumMinecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        // An exact loader build keeps the dry run and the launch on the same NeoForge version.
+        return await LaunchPortableAsync($"neoforge::{selection.NeoForgeVersion}", arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public Task<RunningGame> LaunchVanillaAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
