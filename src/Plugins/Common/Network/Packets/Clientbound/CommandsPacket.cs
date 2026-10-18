@@ -127,6 +127,66 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
         }
     }
 
+    /// <summary>
+    /// Removes argument nodes whose argument type can't be written for <paramref name="protocolVersion"/>, so an argument the
+    /// proxy can't encode costs only its command branch instead of the player's connection.
+    /// </summary>
+    /// <param name="rootNode">The command tree to prune.</param>
+    /// <param name="protocolVersion">The protocol version the tree will be encoded for.</param>
+    /// <returns>Each removed node with the reason it can't be written.</returns>
+    public static List<(ArgumentCommandNode Node, Exception Reason)> RemoveUnserializableArguments(CommandNode rootNode, ProtocolVersion protocolVersion)
+    {
+        var removed = new List<(ArgumentCommandNode Node, Exception Reason)>();
+        var failures = new Dictionary<CommandNode, Exception?>(ReferenceEqualityComparer.Instance);
+        var visited = new HashSet<CommandNode>(ReferenceEqualityComparer.Instance);
+        var queue = new Queue<CommandNode>([rootNode]);
+        var scratch = new byte[128 * 1024];
+
+        while (queue.TryDequeue(out var commandNode))
+        {
+            if (!visited.Add(commandNode))
+                continue;
+
+            foreach (var childCommandNode in commandNode.Children.ToArray())
+            {
+                if (childCommandNode is ArgumentCommandNode argumentCommandNode && FindSerializationFailure(argumentCommandNode) is not null)
+                {
+                    commandNode.RemoveChild(argumentCommandNode.Name);
+                    continue;
+                }
+
+                queue.Enqueue(childCommandNode);
+            }
+
+            if (commandNode.RedirectTarget is not null)
+                queue.Enqueue(commandNode.RedirectTarget);
+        }
+
+        return removed;
+
+        Exception? FindSerializationFailure(ArgumentCommandNode argumentCommandNode)
+        {
+            if (failures.TryGetValue(argumentCommandNode, out var knownFailure))
+                return knownFailure;
+
+            Exception? failure = null;
+
+            try
+            {
+                var buffer = new BufferSpan(scratch);
+                ArgumentSerializerRegistry.Serialize(ref buffer, argumentCommandNode.Type, protocolVersion);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+                removed.Add((argumentCommandNode, exception));
+            }
+
+            failures[argumentCommandNode] = failure;
+            return failure;
+        }
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

@@ -44,6 +44,9 @@ public abstract class AbstractCommandService(ILogger logger, IEventService event
                 }
                 else
                 {
+                    foreach (var (node, reason) in CommandsPacket.RemoveUnserializableArguments(packet.RootNode, @event.Player.ProtocolVersion))
+                        logger.LogWarning(reason, "Player {Player} will not see command argument {Argument} because it can't be encoded for their protocol version", @event.Player, node.Name);
+
                     await events.ThrowAsync(new AvailableCommandsEvent(@event.Link, @event.Player, packet.RootNode), cancellationToken);
                 }
 

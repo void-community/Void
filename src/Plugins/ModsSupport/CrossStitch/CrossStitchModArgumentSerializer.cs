@@ -24,18 +24,20 @@ public class CrossStitchModArgumentSerializer : IArgumentSerializer
     public IArgumentType Deserialize(ref BufferSpan buffer, ProtocolVersion protocolVersion)
     {
         ArgumentSerializerMapping identifier;
+        int? parserId = null;
 
         if (protocolVersion >= ProtocolVersion.MINECRAFT_1_19)
         {
-            var parserId = buffer.ReadVarInt();
-            identifier = new ArgumentSerializerMapping("crossstitch:identified_" + (parserId < 0 ? "n" + (-parserId) : parserId), protocolVersion, parserId);
+            var id = buffer.ReadVarInt();
+            identifier = new ArgumentSerializerMapping("crossstitch:identified_" + (id < 0 ? "n" + (-id) : id), protocolVersion, id);
+            parserId = id;
         }
         else
         {
             identifier = new ArgumentSerializerMapping(buffer.ReadString());
         }
 
-        return new CrossStitchModArgumentType(identifier, new BufferMemory(buffer.ReadByteArray().ToArray()));
+        return new CrossStitchModArgumentType(identifier, new BufferMemory(buffer.ReadByteArray().ToArray()), parserId);
     }
 
     public void Serialize(IArgumentType argumentType, ref BufferSpan buffer, ProtocolVersion protocolVersion)
@@ -47,7 +49,12 @@ public class CrossStitchModArgumentSerializer : IArgumentSerializer
         var headerSize = _headerSizes[protocolVersion];
         buffer.Seek(-headerSize);
 
-        ArgumentSerializerRegistry.WriteParserIdentifier(ref buffer, unwrappedMapping, protocolVersion);
+        // The backend's parser ID is written back as read, not resolved through the proxy's parser table where -1 means removed.
+        // An argument type the backend never registered arrives as -1, and the client skips it just as on a direct connection.
+        if (protocolVersion >= ProtocolVersion.MINECRAFT_1_19 && modArgumentType.ParserId is { } parserId)
+            buffer.WriteVarInt(parserId);
+        else
+            ArgumentSerializerRegistry.WriteParserIdentifier(ref buffer, unwrappedMapping, protocolVersion);
 
         var span = modArgumentType.Data.Span;
         buffer.Write(span.ReadToEnd());

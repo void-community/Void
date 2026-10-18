@@ -23,6 +23,7 @@
 
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\Plugins\Common\Void.Proxy.Plugins.Common.csproj" />
+	  <ProjectReference Include="..\..\src\Plugins\ModsSupport\CrossStitch\Void.Proxy.Plugins.ModsSupport.CrossStitch.csproj" />
 	  <ProjectReference Include="..\..\src\Platform\Void.Proxy.csproj" />
 	</ItemGroup>
 </Project>
