@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 
 using Void.Client.Abstractions;
@@ -35,7 +36,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     private readonly Channel<Message> _messages = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
     private readonly List<Task> _ownedTasks = [];
     private readonly List<ConnectWaiter> _connectWaiters = [];
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (Task<RunningGame> Operation, CancellationTokenSource Cancellation, IDisposable? DiagnosticContext)> _startObservations = new();
+    private readonly ConcurrentDictionary<long, (Task<RunningGame> Operation, CancellationTokenSource Cancellation, IDisposable? DiagnosticContext)> _startObservations = new();
     private CancellationTokenSource? _activeCancellation;
     private long? _connectOperationId;
     private ConnectGameResponse? _connectedResponse;

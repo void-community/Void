@@ -1,7 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace Void.Client.Models;
 
 internal sealed record DiagnosticSession(
-    [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid SessionId,
+    [property: JsonPropertyName("sessionId")] Guid SessionId,
     string Launch,
     DateTimeOffset StartedAt,
     DateTimeOffset? EndedAt,
@@ -10,6 +12,6 @@ internal sealed record DiagnosticSession(
     IReadOnlyList<string> Warnings
 )
 {
-    [System.Text.Json.Serialization.JsonPropertyName("downloadUrl")]
+    [JsonPropertyName("downloadUrl")]
     public string DownloadUrl => $"/api/game/diagnostics/{SessionId}";
 }

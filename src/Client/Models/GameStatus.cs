@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 using Void.Client.States;
 
 namespace Void.Client.Models;
@@ -8,10 +10,10 @@ namespace Void.Client.Models;
 /// </summary>
 internal sealed record GameStatus(
     GameState State,
-    [property: System.Text.Json.Serialization.JsonPropertyName("operationId")] long OperationId,
+    [property: JsonPropertyName("operationId")] long OperationId,
     string? Operation,
     OperationState OperationState,
-    [property: System.Text.Json.Serialization.JsonPropertyName("processId")] int? ProcessId,
+    [property: JsonPropertyName("processId")] int? ProcessId,
     int? ExitCode,
     ServerAddress? Server,
     string? Message,
@@ -19,5 +21,5 @@ internal sealed record GameStatus(
     ClientFailure? Failure,
     IReadOnlyList<string> Warnings,
     DateTimeOffset UpdatedAt,
-    [property: System.Text.Json.Serialization.JsonPropertyName("sessionId")] Guid? SessionId = null
+    [property: JsonPropertyName("sessionId")] Guid? SessionId = null
 );

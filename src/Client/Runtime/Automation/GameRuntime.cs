@@ -341,24 +341,24 @@ internal sealed partial class GameRuntime
 
         var process = StartGameProcess(
             processStartInformation =>
-        {
-            processStartInformation.ArgumentList.Add(item: "--main-dir");
-            processStartInformation.ArgumentList.Add(directory);
-            processStartInformation.ArgumentList.Add(item: "start");
-            processStartInformation.ArgumentList.Add(version);
-
-            if (!HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--resolution"))
             {
-                processStartInformation.ArgumentList.Add(item: "--resolution");
-                processStartInformation.ArgumentList.Add(DisplayScreenResolution);
+                processStartInformation.ArgumentList.Add(item: "--main-dir");
+                processStartInformation.ArgumentList.Add(directory);
+                processStartInformation.ArgumentList.Add(item: "start");
+                processStartInformation.ArgumentList.Add(version);
+
+                if (!HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--resolution"))
+                {
+                    processStartInformation.ArgumentList.Add(item: "--resolution");
+                    processStartInformation.ArgumentList.Add(DisplayScreenResolution);
+                }
+
+                foreach (string argument in CreateArmPortableMinecraftArguments(armLaunchOptions, requestedPortableMinecraftArguments, isLaunch: true))
+                    processStartInformation.ArgumentList.Add(argument);
+
+                foreach (string? argument in requestedPortableMinecraftArguments)
+                    processStartInformation.ArgumentList.Add(argument);
             }
-
-            foreach (string argument in CreateArmPortableMinecraftArguments(armLaunchOptions, requestedPortableMinecraftArguments, isLaunch: true))
-                processStartInformation.ArgumentList.Add(argument);
-
-            foreach (string? argument in requestedPortableMinecraftArguments)
-                processStartInformation.ArgumentList.Add(argument);
-        }
         );
 
         return process;

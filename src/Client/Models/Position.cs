@@ -1,7 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace Void.Client.Models;
 
 internal sealed record Position(
-    [property: System.Text.Json.Serialization.JsonPropertyName("x")] double XCoordinate,
-    [property: System.Text.Json.Serialization.JsonPropertyName("y")] double YCoordinate,
-    [property: System.Text.Json.Serialization.JsonPropertyName("z")] double ZCoordinate
+    [property: JsonPropertyName("x")] double XCoordinate,
+    [property: JsonPropertyName("y")] double YCoordinate,
+    [property: JsonPropertyName("z")] double ZCoordinate
 );

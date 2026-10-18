@@ -37,11 +37,11 @@ internal static class ClientApiEndpoints
         var diagnosticsDownloadEndpoint = api.MapGet(
             pattern: "/game/diagnostics/{sessionId:guid}",
             async Task<IResult> (Guid sessionId, SessionDiagnostics diagnostics, CancellationToken cancellationToken) =>
-        {
-            byte[]? archive = await diagnostics.DownloadAsync(sessionId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            {
+                byte[]? archive = await diagnostics.DownloadAsync(sessionId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-            return archive is null ? Results.NotFound() : Results.File(archive, contentType: "application/zip", $"client-diagnostics-{sessionId}.zip");
-        }
+                return archive is null ? Results.NotFound() : Results.File(archive, contentType: "application/zip", $"client-diagnostics-{sessionId}.zip");
+            }
         )
             .WithName(endpointName: "DownloadGameDiagnostics")
             .WithSummary(summary: "Downloads retained evidence for a running or stopped Minecraft session.");
@@ -65,14 +65,14 @@ internal static class ClientApiEndpoints
             await ExecuteAsync(
                 operation: "options",
                 async () =>
-            {
-                using StreamReader reader = new(request.Body);
+                {
+                    using StreamReader reader = new(request.Body);
 
-                string options = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                await coordinator.WriteOptionsAsync(options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    string options = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    await coordinator.WriteOptionsAsync(options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-                return Results.NoContent();
-            },
+                    return Results.NoContent();
+                },
                 loggerFactory,
                 cancellationToken
             ).ConfigureAwait(continueOnCapturedContext: false)
@@ -159,11 +159,11 @@ internal static class ClientApiEndpoints
             await ExecuteAsync(
                 operation: "send-chat",
                 async () =>
-            {
-                await coordinator.SendChatAsync(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                {
+                    await coordinator.SendChatAsync(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-                return Results.NoContent();
-            },
+                    return Results.NoContent();
+                },
                 loggerFactory,
                 cancellationToken
             ).ConfigureAwait(continueOnCapturedContext: false)
