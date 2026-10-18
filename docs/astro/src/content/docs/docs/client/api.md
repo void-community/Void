@@ -194,6 +194,10 @@ curl --fail-with-body \
 Replace the example CurseForge file identifier with the exact file you want to launch.
 :::
 
+Mods whose authors disallow third-party API downloads are fetched from CurseForge's CDN, and every downloaded file is checked
+against the SHA-1 hash CurseForge publishes. If any file still cannot be downloaded, the launch fails with one error that
+lists every missing file.
+
 ## Connecting
 
 The game must be running. `port` must be between `1` and `65535`. Connection navigation is idempotent for a given `host` and `port`: repeated callers join the same background operation, and an already-connected game returns its original result. A different target is rejected with `409 Conflict` while connecting or connected.
