@@ -30,7 +30,9 @@ services:
       EULA: "TRUE"
       TYPE: "PAPER"
       ONLINE_MODE: "FALSE"
-      MODRINTH_PROJECTS: "viaversion,viabackwards,viarewind"
+      VERSION: "${DEMO_PAPER_VERSION:-LATEST}"
+      PAPER_BUILD: "${DEMO_PAPER_BUILD:-}"
+      MODRINTH_PROJECTS: "${DEMO_MODRINTH_PROJECTS:-viaversion,viabackwards,viarewind}"
       RCON_CMDS_ON_CONNECT:  "time set day"
 
 networks:

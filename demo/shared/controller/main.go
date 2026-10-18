@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -16,10 +17,21 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+)
+
+const (
+	dockerQuickCommandTimeout   = time.Minute
+	dockerComposeCommandTimeout = 5 * time.Minute
+	dockerBuildCommandTimeout   = 30 * time.Minute
+	failureMessageMaximumLength = 300
+	clientWatchInterval         = 15 * time.Second
+	clientMaximumRelaunchCount  = 3
 )
 
 type LogPrefixWriter struct {
@@ -29,24 +41,43 @@ type LogPrefixWriter struct {
 }
 
 type Session struct {
-	Id            string
-	SanitizedId   string
-	DashboardHost string
-	ClientHost    string
-	VoidHost      string
-	CreatedUtc    time.Time
-	ExpiresUtc    time.Time
-	DeleteTimer   *time.Timer
-	Ready         bool
+	Id                  string
+	SanitizedId         string
+	DashboardHost       string
+	ClientHost          string
+	VoidHost            string
+	CreatedUtc          time.Time
+	ExpiresUtc          time.Time
+	DeleteTimer         *time.Timer
+	Ready               bool
+	Failed              bool
+	FailureMessage      string
+	ClientRelaunchCount int
+	Cancel              context.CancelFunc
 }
 
 type Server struct {
-	ListenAddress string
-	SessionTtl    time.Duration
-	RedirectLogs  bool
+	ListenAddress          string
+	SessionTtl             time.Duration
+	SessionStartTimeout    time.Duration
+	FailedSessionRetention time.Duration
+	RefreshInterval        time.Duration
+	BackendRecreateGrace   time.Duration
+	RedirectLogs           bool
+
+	RootContext      context.Context
+	UpstreamClient   *http.Client
+	ImagesReady      chan struct{}
+	ImagesReadyOnce  sync.Once
+	RefreshRequested chan struct{}
+
+	SessionImagesBuilt bool
 
 	Sessions      map[string]*Session
 	SessionsMutex sync.RWMutex
+
+	Backend      BackendState
+	BackendMutex sync.Mutex
 }
 
 type clientGameStatus struct {
@@ -57,20 +88,31 @@ type clientGameStatus struct {
 }
 
 func main() {
+	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	server := &Server{
-		SessionTtl:    time.Duration(getEnvInt("SESSION_TTL_SECONDS", 7200)) * time.Second,
-		ListenAddress: getEnvString("LISTEN_ADDRESS", "0.0.0.0:80"),
-		RedirectLogs:  getEnvBool("REDIRECT_LOGS", false),
-		Sessions:      map[string]*Session{},
+		SessionTtl:             time.Duration(getEnvInt("SESSION_TTL_SECONDS", 7200)) * time.Second,
+		SessionStartTimeout:    time.Duration(getEnvInt("SESSION_START_TIMEOUT_SECONDS", 1200)) * time.Second,
+		FailedSessionRetention: 10 * time.Minute,
+		RefreshInterval:        time.Duration(getEnvInt("REFRESH_INTERVAL_SECONDS", 600)) * time.Second,
+		BackendRecreateGrace:   time.Duration(getEnvInt("BACKEND_RECREATE_GRACE_SECONDS", 3600)) * time.Second,
+		ListenAddress:          getEnvString("LISTEN_ADDRESS", "0.0.0.0:80"),
+		RedirectLogs:           getEnvBool("REDIRECT_LOGS", false),
+		RootContext:            rootContext,
+		UpstreamClient:         newUpstreamClient(),
+		ImagesReady:            make(chan struct{}),
+		RefreshRequested:       make(chan struct{}, 1),
+		Sessions:               map[string]*Session{},
 	}
 
-	if output, err := dockerCommand("network", "prune", "-f").Output(); err != nil {
+	if output, err := runDockerCommand(rootContext, dockerQuickCommandTimeout, "network", "prune", "-f"); err != nil {
 		log.Fatalf("Failed to prune docker networks: %v. Output: %s", err, string(output))
 	}
 
-	if err := server.ensureSessionImagesAvailable(); err != nil {
-		log.Fatalf("Failed to ensure session images are available: %v", err)
-	}
+	server.cleanupOrphanSessions(rootContext)
+
+	go server.runRefreshLoop(rootContext)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
@@ -90,8 +132,20 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	go func() {
+		<-rootContext.Done()
+
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_ = httpServer.Shutdown(shutdownContext)
+	}()
+
 	log.Printf("Listening on http://%s", server.ListenAddress)
 	log.Printf("Session TTL: %s", server.SessionTtl)
+	log.Printf("Session start timeout: %s", server.SessionStartTimeout)
+	log.Printf("Refresh interval: %s", server.RefreshInterval)
+	log.Printf("Backend recreate grace: %s", server.BackendRecreateGrace)
 	log.Printf("Redirect logs: %v", server.RedirectLogs)
 
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -106,7 +160,8 @@ func (server *Server) handleNewSession(writer http.ResponseWriter, request *http
 		return
 	}
 
-	session := &Session{Id: sessionId}
+	sessionContext, cancel := context.WithCancel(server.RootContext)
+	session := &Session{Id: sessionId, Cancel: cancel}
 
 	session.SanitizedId = sanitizeForDockerName(sessionId)
 	session.CreatedUtc = time.Now().UTC()
@@ -118,21 +173,19 @@ func (server *Server) handleNewSession(writer http.ResponseWriter, request *http
 	http.Redirect(writer, request, "/session/"+session.Id+"/", http.StatusTemporaryRedirect)
 
 	go func() {
-		startedSuccessfully := false
-		defer func() {
-			if startedSuccessfully {
-				return
-			}
-
-			server.SessionsMutex.Lock()
-			delete(server.Sessions, session.Id)
-			server.SessionsMutex.Unlock()
-		}()
+		startContext, cancelStart := context.WithTimeout(sessionContext, server.SessionStartTimeout)
+		defer cancelStart()
 
 		log.Printf("Creating new session %s (TTL: %s)", session.Id, server.SessionTtl)
 
-		if err := server.startSessionContainers(session); err != nil {
+		if err := server.waitForImages(startContext); err != nil {
+			server.markSessionFailed(session.Id, fmt.Sprintf("Session images are not available: %v", err))
+			return
+		}
+
+		if err := server.startSessionContainers(startContext, sessionContext, session); err != nil {
 			log.Printf("Failed to start session containers for session %s: %v", session.Id, err)
+			server.markSessionFailed(session.Id, err.Error())
 			return
 		}
 
@@ -143,12 +196,18 @@ func (server *Server) handleNewSession(writer http.ResponseWriter, request *http
 			}
 		})
 		server.SessionsMutex.Lock()
+		if session.Failed {
+			server.SessionsMutex.Unlock()
+			deleteTimer.Stop()
+			return
+		}
 		session.DeleteTimer = deleteTimer
 		session.Ready = true
 		server.SessionsMutex.Unlock()
 
-		startedSuccessfully = true
 		log.Printf("Session %s created successfully", session.Id)
+
+		server.watchSessionClient(sessionContext, session.Id)
 	}()
 }
 
@@ -169,10 +228,13 @@ func (server *Server) handleStatus(writer http.ResponseWriter, request *http.Req
 	server.SessionsMutex.RUnlock()
 
 	type statusResponse struct {
-		Exists      bool   `json:"exists"`
-		Ready       bool   `json:"ready"`
-		SessionId   string `json:"sessionId"`
-		SecondsLeft int64  `json:"secondsLeft"`
+		Exists          bool   `json:"exists"`
+		Ready           bool   `json:"ready"`
+		Failed          bool   `json:"failed"`
+		Error           string `json:"error,omitempty"`
+		BackendUpdating bool   `json:"backendUpdating"`
+		SessionId       string `json:"sessionId"`
+		SecondsLeft     int64  `json:"secondsLeft"`
 	}
 
 	response := statusResponse{
@@ -186,9 +248,14 @@ func (server *Server) handleStatus(writer http.ResponseWriter, request *http.Req
 			secondsLeft = 0
 		}
 		response.SecondsLeft = int64(secondsLeft)
+		response.Failed = session.Failed
+		response.Error = session.FailureMessage
 
-		readyValue := server.isSessionReady(session)
-		response.Ready = readyValue
+		if !session.Failed {
+			readyValue := server.isSessionReady(session)
+			response.Ready = readyValue
+			response.BackendUpdating = !readyValue && server.isBackendUpdating()
+		}
 	}
 
 	writer.Header().Set("Content-Type", "application/json")
@@ -233,6 +300,11 @@ func (server *Server) handleSession(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
+	if session.Failed {
+		server.writeSessionFailedHtml(writer, session)
+		return
+	}
+
 	targetUrl := &url.URL{
 		Scheme: "http",
 		Host:   session.DashboardHost,
@@ -263,7 +335,7 @@ func (server *Server) handleSession(writer http.ResponseWriter, request *http.Re
 }
 
 func (server *Server) isSessionReady(session *Session) bool {
-	if !session.Ready {
+	if !session.Ready || session.Failed {
 		return false
 	}
 
@@ -301,6 +373,10 @@ func (server *Server) isSessionReady(session *Session) bool {
 
 func (server *Server) writeSessionStartingHtml(writer http.ResponseWriter, sessionId string) {
 	server.writeLiveHtml(writer, http.StatusOK, "Starting session", "Your session container is starting", "/session/"+sessionId+"/")
+}
+
+func (server *Server) writeSessionFailedHtml(writer http.ResponseWriter, session *Session) {
+	server.writeLiveHtml(writer, http.StatusServiceUnavailable, "Session failed", session.FailureMessage, "/session/"+session.Id+"/")
 }
 
 func (server *Server) writeSessionExpiredHtml(writer http.ResponseWriter) {
@@ -425,6 +501,12 @@ func (server *Server) writeLiveHtml(writer http.ResponseWriter, statusCode int, 
       animation: pulse 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
     }
 
+    .retry-link {
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 14px;
+    }
+
     @keyframes pulse {
       0%% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 var(--accent-glow); }
       50%% { opacity: .7; transform: scale(1.1); box-shadow: 0 0 0 6px rgba(0,0,0,0); }
@@ -452,12 +534,13 @@ func (server *Server) writeLiveHtml(writer http.ResponseWriter, statusCode int, 
     <div class="card">
       <h1>%s</h1>
       <p>%s</p>
-      
+
       <div class="row">
         <div class="pill">
           <span class="dot"></span>
           <span id="statusText">Checking status…</span>
         </div>
+        <a id="retryLink" class="retry-link" href="/" hidden>Start a new session</a>
       </div>
 
       <p class="footer-text">
@@ -471,8 +554,10 @@ func (server *Server) writeLiveHtml(writer http.ResponseWriter, statusCode int, 
   // Go variables injected here
   const retryPath = %s;
   const sessionId = %s;
-  
+
   const statusTextElement = document.getElementById("statusText");
+  const retryLinkElement = document.getElementById("retryLink");
+  let stopped = false;
 
   if (!statusTextElement) {
     console.error("Critical: Status text element missing.");
@@ -489,7 +574,7 @@ func (server *Server) writeLiveHtml(writer http.ResponseWriter, statusCode int, 
     try {
       // Added timestamp to prevent aggressive browser caching issues
       const timestamp = new Date().getTime();
-      const response = await fetch("/status/" + sessionId + "?t=" + timestamp, { 
+      const response = await fetch("/status/" + sessionId + "?t=" + timestamp, {
         cache: "no-store",
         headers: { 'Cache-Control': 'no-cache' }
       });
@@ -504,6 +589,15 @@ func (server *Server) writeLiveHtml(writer http.ResponseWriter, statusCode int, 
         return;
       }
 
+      // Session failed -> show the reason and stop polling instead of starting another session
+      if (status.failed) {
+        statusTextElement.textContent = "Session failed: " + (status.error || "unknown error");
+        statusTextElement.style.color = "#fca5a5";
+        if (retryLinkElement) retryLinkElement.hidden = false;
+        stopped = true;
+        return;
+      }
+
       // Session is ready -> go to application
       if (status.ready) {
         statusTextElement.textContent = "Session Ready! Redirecting...";
@@ -512,12 +606,12 @@ func (server *Server) writeLiveHtml(writer http.ResponseWriter, statusCode int, 
         return;
       }
 
-      statusTextElement.textContent = "Starting environment...";
-      
+      statusTextElement.textContent = status.backendUpdating ? "Updating Minecraft server..." : "Starting environment...";
+
     } catch(error) {
       console.warn("Status check failed, retrying...", error);
     } finally {
-      setTimeout(tick, 1000);
+      if (!stopped) setTimeout(tick, 1000);
     }
   }
 
@@ -544,47 +638,132 @@ func (server *Server) deleteSession(sessionId string) error {
 
 	log.Printf("Deleting session %s", session.Id)
 
+	if session.Cancel != nil {
+		session.Cancel()
+	}
+
 	err := server.stopSession(session)
 	if err != nil {
 		return err
 	}
 
 	log.Printf("Session %s cleanup completed", session.Id)
+	server.requestRefreshIfBackendPending()
 	return nil
 }
 
+// markSessionFailed keeps the session visible with its failure reason (so the page can show it instead of
+// silently creating a new session), stops its containers, and drops it after FailedSessionRetention.
+func (server *Server) markSessionFailed(sessionId string, message string) {
+	server.SessionsMutex.Lock()
+	session, ok := server.Sessions[sessionId]
+	if !ok || session.Failed {
+		server.SessionsMutex.Unlock()
+		return
+	}
+
+	session.Failed = true
+	session.Ready = false
+	session.FailureMessage = truncateFailureMessage(message)
+	if session.DeleteTimer != nil {
+		session.DeleteTimer.Stop()
+	}
+	session.DeleteTimer = time.AfterFunc(server.FailedSessionRetention, func() {
+		server.SessionsMutex.Lock()
+		delete(server.Sessions, sessionId)
+		server.SessionsMutex.Unlock()
+	})
+	cancel := session.Cancel
+	sessionSnapshot := *session
+	server.SessionsMutex.Unlock()
+
+	log.Printf("Session %s failed: %s", sessionId, sessionSnapshot.FailureMessage)
+
+	if cancel != nil {
+		cancel()
+	}
+
+	go func() {
+		if err := server.stopSession(&sessionSnapshot); err != nil {
+			log.Printf("Failed to stop failed session %s: %v", sessionId, err)
+		}
+
+		server.requestRefreshIfBackendPending()
+	}()
+}
+
+func (server *Server) activeSessionCount() int {
+	server.SessionsMutex.RLock()
+	defer server.SessionsMutex.RUnlock()
+
+	count := 0
+	for _, session := range server.Sessions {
+		if !session.Failed {
+			count++
+		}
+	}
+
+	return count
+}
+
+func (server *Server) endActiveSessions(message string) {
+	server.SessionsMutex.RLock()
+	sessionIds := make([]string, 0, len(server.Sessions))
+	for sessionId, session := range server.Sessions {
+		if !session.Failed {
+			sessionIds = append(sessionIds, sessionId)
+		}
+	}
+	server.SessionsMutex.RUnlock()
+
+	for _, sessionId := range sessionIds {
+		server.markSessionFailed(sessionId, message)
+	}
+}
+
 func (server *Server) stopSession(session *Session) error {
-	stopOutput, stopErr := dockerCommand("compose", "--project-name", session.SanitizedId, "--file", "session.yml", "down", "--remove-orphans", "--volumes").CombinedOutput()
+	stopOutput, stopErr := runDockerCommand(context.Background(), dockerComposeCommandTimeout, "compose", "--project-name", session.SanitizedId, "--file", "session.yml", "down", "--remove-orphans", "--volumes")
 	if stopErr != nil {
 		return fmt.Errorf("docker compose down failed: %v: %s", stopErr, string(stopOutput))
 	}
 	return nil
 }
 
-func (server *Server) ensureSessionImagesAvailable() error {
-	build := dockerCommand("compose", "--file", "session.yml", "build")
-
-	build.Stdout = os.Stdout
-	build.Stderr = os.Stderr
-	build.Stdin = os.Stdin
-
-	err := build.Run()
+// cleanupOrphanSessions removes session projects left behind by a previous controller process, whose
+// in-memory session map (and with it every delete timer) was lost.
+func (server *Server) cleanupOrphanSessions(ctx context.Context) {
+	output, err := runDockerCommand(ctx, dockerQuickCommandTimeout, "compose", "ls", "--all", "--format", "json")
 	if err != nil {
-		return fmt.Errorf("docker compose build failed: %v", err)
+		log.Printf("Failed to list compose projects for orphan cleanup: %v: %s", err, string(output))
+		return
 	}
-	return nil
+
+	var projects []struct {
+		Name        string `json:"Name"`
+		ConfigFiles string `json:"ConfigFiles"`
+	}
+	if err := json.Unmarshal(output, &projects); err != nil {
+		log.Printf("Failed to parse compose projects for orphan cleanup: %v", err)
+		return
+	}
+
+	for _, project := range projects {
+		if project.Name == "demo" || !strings.Contains(project.ConfigFiles, "session.yml") {
+			continue
+		}
+
+		log.Printf("Removing orphaned session project %s", project.Name)
+
+		if downOutput, downErr := runDockerCommand(ctx, dockerComposeCommandTimeout, "compose", "--project-name", project.Name, "--file", "session.yml", "down", "--remove-orphans", "--volumes"); downErr != nil {
+			log.Printf("Failed to remove orphaned session project %s: %v: %s", project.Name, downErr, string(downOutput))
+		}
+	}
 }
 
-func (server *Server) startSessionContainers(session *Session) (returnedError error) {
+func (server *Server) startSessionContainers(ctx context.Context, sessionContext context.Context, session *Session) error {
 	log.Printf("Session %s: Starting containers", session.Id)
 
-	defer func() {
-		if returnedError != nil {
-			server.stopSession(session)
-		}
-	}()
-
-	startOutputBytes, startError := dockerCommand("compose", "--project-name", session.SanitizedId, "--file", "session.yml", "up", "--build", "--detach").CombinedOutput()
+	startOutputBytes, startError := runDockerCommand(ctx, dockerComposeCommandTimeout, "compose", "--project-name", session.SanitizedId, "--file", "session.yml", "up", "--detach", "--no-build")
 	if startError != nil {
 		log.Printf("Session %s: Failed to start containers with docker compose: %v, output: %s", session.Id, startError, string(startOutputBytes))
 		return fmt.Errorf("failed to start containers with docker compose: %v: %s", startError, string(startOutputBytes))
@@ -592,7 +771,7 @@ func (server *Server) startSessionContainers(session *Session) (returnedError er
 
 	log.Printf("Session %s: Containers started with docker compose", session.Id)
 
-	containerIdBytes, listContainersError := dockerCommand("compose", "--project-name", session.SanitizedId, "--file", "session.yml", "ps", "-q").Output()
+	containerIdBytes, listContainersError := dockerCommand(ctx, dockerQuickCommandTimeout, "compose", "--project-name", session.SanitizedId, "--file", "session.yml", "ps", "-q")
 	if listContainersError != nil {
 		log.Printf("Session %s: Failed to list compose containers: %v", session.Id, listContainersError)
 		return fmt.Errorf("failed to list compose containers: %v", listContainersError)
@@ -611,7 +790,7 @@ func (server *Server) startSessionContainers(session *Session) (returnedError er
 	}
 	inspectArguments = append(inspectArguments, containerIds...)
 
-	inspectOutputBytes, inspectError := dockerCommand(inspectArguments...).CombinedOutput()
+	inspectOutputBytes, inspectError := runDockerCommand(ctx, dockerQuickCommandTimeout, inspectArguments...)
 	if inspectError != nil {
 		return fmt.Errorf("failed to inspect compose containers: %v: %s", inspectError, string(inspectOutputBytes))
 	}
@@ -644,7 +823,7 @@ func (server *Server) startSessionContainers(session *Session) (returnedError er
 				continue
 			}
 
-			server.streamContainerLogs(containerName)
+			server.streamContainerLogs(sessionContext, containerName)
 		}
 	}
 
@@ -666,28 +845,102 @@ func (server *Server) startSessionContainers(session *Session) (returnedError er
 	session.VoidHost = voidContainerName
 	server.SessionsMutex.Unlock()
 
-	if err := startAndJoinPortableMinecraftClient(clientContainerName, createMinecraftUsername(session.SanitizedId)); err != nil {
+	if err := server.startAndJoinPortableMinecraftClient(ctx, clientContainerName, createMinecraftUsername(session.SanitizedId)); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func startAndJoinPortableMinecraftClient(clientHost string, minecraftUsername string) error {
+// watchSessionClient relaunches the game when it crashes or is quit, and fails the session after
+// clientMaximumRelaunchCount relaunches. It returns when the session context ends.
+func (server *Server) watchSessionClient(ctx context.Context, sessionId string) {
+	ticker := time.NewTicker(clientWatchInterval)
+	defer ticker.Stop()
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		server.SessionsMutex.RLock()
+		session, ok := server.Sessions[sessionId]
+		if !ok || session.Failed {
+			server.SessionsMutex.RUnlock()
+			return
+		}
+		clientHost := session.ClientHost
+		sanitizedId := session.SanitizedId
+		server.SessionsMutex.RUnlock()
+
+		clientApiUrl := &url.URL{Scheme: "http", Host: net.JoinHostPort(clientHost, "80"), Path: "/api/game/status"}
+		responseStatusCode, responseBody, err := requestPortableMinecraftClient(ctx, httpClient, http.MethodGet, clientApiUrl, nil)
+		if err != nil || responseStatusCode != http.StatusOK {
+			log.Printf("Session %s: client status check failed: %v (HTTP %d)", sessionId, err, responseStatusCode)
+			continue
+		}
+
+		var status clientGameStatus
+		if err := json.Unmarshal([]byte(responseBody), &status); err != nil {
+			log.Printf("Session %s: client returned malformed status: %v", sessionId, err)
+			continue
+		}
+
+		if status.State != "failed" && status.State != "idle" {
+			continue
+		}
+
+		server.SessionsMutex.Lock()
+		session.ClientRelaunchCount++
+		relaunchCount := session.ClientRelaunchCount
+		server.SessionsMutex.Unlock()
+
+		if relaunchCount > clientMaximumRelaunchCount {
+			server.markSessionFailed(sessionId, fmt.Sprintf("The Minecraft client stopped %d times (last state %s: %s)", relaunchCount, status.State, status.Error))
+			return
+		}
+
+		log.Printf("Session %s: client is %s (%s), relaunching (%d/%d)", sessionId, status.State, status.Error, relaunchCount, clientMaximumRelaunchCount)
+
+		relaunchContext, cancelRelaunch := context.WithTimeout(ctx, server.SessionStartTimeout)
+		err = server.startAndJoinPortableMinecraftClient(relaunchContext, clientHost, createMinecraftUsername(sanitizedId))
+		cancelRelaunch()
+
+		if err != nil && ctx.Err() == nil {
+			log.Printf("Session %s: client relaunch failed: %v", sessionId, err)
+		}
+	}
+}
+
+func (server *Server) startAndJoinPortableMinecraftClient(ctx context.Context, clientHost string, minecraftUsername string) error {
 	clientApiUrl := &url.URL{
 		Scheme: "http",
 		Host:   net.JoinHostPort(clientHost, "80"),
 	}
-	if err := waitForPortableMinecraftClient(clientApiUrl); err != nil {
+	if err := waitForPortableMinecraftClient(ctx, clientApiUrl); err != nil {
 		return err
+	}
+
+	maximumMinecraftVersion, err := server.waitForBackendReady(ctx)
+	if err != nil {
+		return fmt.Errorf("minecraft server is not ready: %w", err)
 	}
 
 	clientApiUrl.Path = "/api/game/start/neoforge"
 	startRequest := map[string]any{
 		"arguments": []string{"--username", minecraftUsername, "--jvm-arg=-Djava.awt.headless=false"},
 	}
+	if maximumMinecraftVersion != "" {
+		startRequest["maximumMinecraftVersion"] = maximumMinecraftVersion
+	}
+	log.Printf("Starting portable Minecraft client at %s (maximum Minecraft version %q)", clientHost, maximumMinecraftVersion)
+
 	httpClient := &http.Client{Timeout: 30 * time.Second}
-	responseStatusCode, responseBody, err := requestPortableMinecraftClient(httpClient, http.MethodPost, clientApiUrl, startRequest)
+	responseStatusCode, responseBody, err := requestPortableMinecraftClient(ctx, httpClient, http.MethodPost, clientApiUrl, startRequest)
 	if err != nil {
 		return fmt.Errorf("portable Minecraft client launch request failed: %w", err)
 	}
@@ -703,7 +956,7 @@ func startAndJoinPortableMinecraftClient(clientHost string, minecraftUsername st
 	clientApiUrl.Path = "/api/game/status"
 	deadline := time.Now().Add(10 * time.Minute)
 	for {
-		responseStatusCode, responseBody, err = requestPortableMinecraftClient(httpClient, http.MethodGet, clientApiUrl, nil)
+		responseStatusCode, responseBody, err = requestPortableMinecraftClient(ctx, httpClient, http.MethodGet, clientApiUrl, nil)
 		if err != nil {
 			return fmt.Errorf("portable Minecraft client status request failed: %w", err)
 		}
@@ -728,14 +981,16 @@ func startAndJoinPortableMinecraftClient(clientHost string, minecraftUsername st
 			return fmt.Errorf("portable Minecraft client launch operation %d timed out", acceptedStatus.OperationId)
 		}
 
-		time.Sleep(250 * time.Millisecond)
+		if err := sleepContext(ctx, 250*time.Millisecond); err != nil {
+			return err
+		}
 	}
 
 	log.Printf("Portable Minecraft client launch confirmed from %s", clientHost)
 
 	clientApiUrl.Path = "/api/game/connect"
 	httpClient.Timeout = 5 * time.Minute
-	responseStatusCode, responseBody, err = requestPortableMinecraftClient(httpClient, http.MethodPost, clientApiUrl, map[string]any{"host": "void", "port": 25565})
+	responseStatusCode, responseBody, err = requestPortableMinecraftClient(ctx, httpClient, http.MethodPost, clientApiUrl, map[string]any{"host": "void", "port": 25565})
 	if err != nil {
 		return fmt.Errorf("portable Minecraft client failed to join the server: %w", err)
 	}
@@ -747,14 +1002,14 @@ func startAndJoinPortableMinecraftClient(clientHost string, minecraftUsername st
 	return nil
 }
 
-func waitForPortableMinecraftClient(clientApiUrl *url.URL) error {
+func waitForPortableMinecraftClient(ctx context.Context, clientApiUrl *url.URL) error {
 	clientApiUrl.Path = "/api/health"
 	httpClient := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(2 * time.Minute)
 	lastResult := "no response"
 
 	for time.Now().Before(deadline) {
-		responseStatusCode, responseBody, err := requestPortableMinecraftClient(httpClient, http.MethodGet, clientApiUrl, nil)
+		responseStatusCode, responseBody, err := requestPortableMinecraftClient(ctx, httpClient, http.MethodGet, clientApiUrl, nil)
 		if err == nil && responseStatusCode == http.StatusOK {
 			log.Printf("Portable Minecraft client API is ready at %s", clientApiUrl.Host)
 			return nil
@@ -766,13 +1021,15 @@ func waitForPortableMinecraftClient(clientApiUrl *url.URL) error {
 			lastResult = fmt.Sprintf("HTTP %d: %s", responseStatusCode, responseBody)
 		}
 
-		time.Sleep(250 * time.Millisecond)
+		if err := sleepContext(ctx, 250*time.Millisecond); err != nil {
+			return err
+		}
 	}
 
 	return fmt.Errorf("portable Minecraft client API did not become ready within 2 minutes: %s", lastResult)
 }
 
-func requestPortableMinecraftClient(httpClient *http.Client, method string, clientApiUrl *url.URL, requestBody any) (int, string, error) {
+func requestPortableMinecraftClient(ctx context.Context, httpClient *http.Client, method string, clientApiUrl *url.URL, requestBody any) (int, string, error) {
 	var bodyReader io.Reader
 	if requestBody != nil {
 		body, err := json.Marshal(requestBody)
@@ -782,7 +1039,7 @@ func requestPortableMinecraftClient(httpClient *http.Client, method string, clie
 		bodyReader = bytes.NewReader(body)
 	}
 
-	request, err := http.NewRequest(method, clientApiUrl.String(), bodyReader)
+	request, err := http.NewRequestWithContext(ctx, method, clientApiUrl.String(), bodyReader)
 	if err != nil {
 		return 0, "", err
 	}
@@ -805,6 +1062,27 @@ func requestPortableMinecraftClient(httpClient *http.Client, method string, clie
 	}
 
 	return response.StatusCode, strings.TrimSpace(string(responseBody)), nil
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func truncateFailureMessage(message string) string {
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > failureMessageMaximumLength {
+		message = message[:failureMessageMaximumLength] + "…"
+	}
+
+	return message
 }
 
 func createSessionId() (string, error) {
@@ -861,13 +1139,30 @@ func createMinecraftUsername(sanitizedSessionId string) string {
 	return "void" + suffix
 }
 
-func dockerCommand(arguments ...string) *exec.Cmd {
-	command := exec.Command("docker", arguments...)
+// dockerCommand runs a docker command bounded by timeout and returns its standard output.
+func dockerCommand(ctx context.Context, timeout time.Duration, arguments ...string) ([]byte, error) {
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return newDockerCommand(commandContext, arguments...).Output()
+}
+
+// runDockerCommand runs a docker command bounded by timeout and returns its combined output.
+func runDockerCommand(ctx context.Context, timeout time.Duration, arguments ...string) ([]byte, error) {
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return newDockerCommand(commandContext, arguments...).CombinedOutput()
+}
+
+func newDockerCommand(ctx context.Context, arguments ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "docker", arguments...)
 	command.Env = os.Environ()
+	command.WaitDelay = 10 * time.Second
 	return command
 }
 
-func (server *Server) streamContainerLogs(containerName string) {
+func (server *Server) streamContainerLogs(ctx context.Context, containerName string) {
 	if !server.RedirectLogs {
 		return
 	}
@@ -877,14 +1172,14 @@ func (server *Server) streamContainerLogs(containerName string) {
 
 		writer := &LogPrefixWriter{Prefix: "[" + containerName + "] "}
 
-		logsCommand := dockerCommand("logs", "--follow", "--tail=0", containerName)
+		logsCommand := newDockerCommand(ctx, "logs", "--follow", "--tail=0", containerName)
 
 		var stderrBuffer bytes.Buffer
 		logsCommand.Stdout = writer
 		logsCommand.Stderr = io.MultiWriter(writer, &stderrBuffer)
 
 		err := logsCommand.Run()
-		if err == nil {
+		if err == nil || ctx.Err() != nil {
 			return
 		}
 

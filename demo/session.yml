@@ -1,5 +1,7 @@
 services:
   dashboard:
+    image: local/void-demo-dashboard:latest
+    pull_policy: never
     build: session/dashboard
     restart: unless-stopped
     networks:
@@ -8,8 +10,8 @@ services:
       - itzg_and_dashboard
   
   client:
-    image: ghcr.io/caunt/portable-minecraft-client:latest
-    pull_policy: always
+    image: ghcr.io/void-community/portable-minecraft-client:latest
+    pull_policy: missing
     restart: unless-stopped
     networks:
       - default
@@ -17,6 +19,8 @@ services:
     cpus: 4.0
       
   void:
+    image: local/void-demo-void:latest
+    pull_policy: never
     build: session/void
     restart: unless-stopped
     networks:
