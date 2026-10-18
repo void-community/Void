@@ -172,8 +172,9 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
-Sodium is installed automatically for the exact resolved Minecraft version: the newest release build on Modrinth, or the
-newest beta when no release exists yet. The launch continues without Sodium when Modrinth has no build for that version.
+Sodium is installed automatically for the exact resolved Minecraft version: the newest build on Modrinth, including betas,
+because older Sodium builds can target NeoForge internals that newer NeoForge builds no longer have. The launch continues
+without Sodium when Modrinth has no build for that version.
 On ARM64 images the client also selects the LWJGL natives and, when needed, downloads the Java runtime that the resolved
 Minecraft version requires.
 
