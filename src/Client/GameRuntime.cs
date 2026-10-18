@@ -23,6 +23,7 @@ namespace Void.Client;
 /// </summary>
 internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null) : IGameRuntime
 {
+    private const string AzulPackagesUrl = "https://api.azul.com/metadata/v1/zulu/packages/";
     private const int CurseForgeFilesBatchSize = 50;
     private const string DefaultCurseForgeApiBaseUrl = "https://api.curseforge.com";
     private const string DefaultDisplay = ":99";
@@ -34,18 +35,18 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int ExternalProcessTimeoutMilliseconds = 5000;
     private const string LauncherSplashWindowTitle = "Void Client Startup";
     private const string LegacyNeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml";
+    private const string MavenCentralRepositoryUrl = "https://repo1.maven.org/maven2";
     private const int MinecraftGameId = 432;
     private const string MojangVersionManifestUrl = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private const string NeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
     private const int PlayerReadTimeoutMilliseconds = 2000;
     private const string PortableMinecraftAgentPath = "/opt/portableminecraftclient/void-client-agent.jar";
-    private const string PortableMinecraftArmLwjgl3Version = "3.3.3";
-    private const string PortableMinecraftArmLwjgl4ClassPath = "/opt/portableminecraftclient/lwjgl-3.4.1-unsafe.jar";
-    private const string PortableMinecraftArmLwjgl4NativePath = "/opt/portableminecraftclient/lwjgl-3.4.1-natives-linux-arm64.jar";
-    private const string PortableMinecraftArmLwjgl4Version = "3.4.1";
-    private const string PortableMinecraftArmVulkanLibrary = "org.lwjgl:lwjgl-vulkan:*:natives-linux-arm64";
+    private const string PortableMinecraftArmLwjglMinimumVersion = "3.3.3";
+    private const string PortableMinecraftArmNativesClassifier = "natives-linux-arm64";
+    private const string PortableMinecraftBakedFilesDirectory = "/opt/portableminecraftclient";
     private const string PortableMinecraftDryRunPath = "/usr/local/bin/portablemc-dry-run-with-retries";
     private const string PortableMinecraftJvmAttachPath = "/usr/bin/jattach";
+    private const string PortableMinecraftJvmDirectory = "/usr/lib/jvm";
     private const string PortableMinecraftLauncherPath = "/usr/local/bin/launch-portableminecraftclient";
     private const string PortableMinecraftLegacyJvmExecutablePath = "/usr/lib/jvm/zulu-8/bin/java";
     private const string PortableMinecraftLegacyJvmPath = "/usr/local/bin/java-arm64-lwjgl2";
@@ -91,8 +92,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         string minecraftDirectory = GetMinecraftDirectory();
 
         string portableMinecraftVersion = await PrepareCurseForgeAsync(slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<RunningGame> LaunchNeoForgeAsync(
@@ -104,17 +106,17 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     )
     {
         if (!string.IsNullOrWhiteSpace(version))
-            return await LaunchPortableAsync($"neoforge:{version}", arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            return await LaunchPortableAsync($"neoforge:{version}", minecraftVersion: null, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         var selection = await ResolveLatestStableNeoForgeAsync(maximumMinecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         // An exact loader build keeps the dry run and the launch on the same NeoForge version.
-        return await LaunchPortableAsync($"neoforge::{selection.NeoForgeVersion}", arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await LaunchPortableAsync($"neoforge::{selection.NeoForgeVersion}", selection.MinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public Task<RunningGame> LaunchVanillaAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
     {
-        return LaunchPortableAsync($"mojang:{version}", arguments, memoryMb, cancellationToken);
+        return LaunchPortableAsync($"mojang:{version}", minecraftVersion: null, arguments, memoryMb, cancellationToken);
     }
 
     public async Task<GamePlayers> ReadPlayersAsync(RunningGame game, CancellationToken cancellationToken)
@@ -484,15 +486,6 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         }
 
         return null;
-    }
-
-    private static string GetArmLwjglVersion(string version)
-    {
-        string[] versionComponents = version["mojang:".Length..].Split(separator: '.');
-
-        return versionComponents.Length >= 1 && int.TryParse(versionComponents[0], out int majorVersion) && majorVersion >= 26
-            ? PortableMinecraftArmLwjgl4Version
-            : PortableMinecraftArmLwjgl3Version;
     }
 
     private static string GetMinecraftDirectory()

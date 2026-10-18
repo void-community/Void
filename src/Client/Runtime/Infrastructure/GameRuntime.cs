@@ -502,17 +502,6 @@ internal sealed partial class GameRuntime
         return false;
     }
 
-    private static bool UsesLegacyLwjgl(string version)
-    {
-        string[] versionComponents = version["mojang:".Length..].Split(separator: '.');
-
-        return versionComponents.Length >= 2
-            && int.TryParse(versionComponents[0], out int majorVersion)
-            && int.TryParse(versionComponents[1], out int minorVersion)
-            && majorVersion == 1
-            && minorVersion <= 12;
-    }
-
     private static void ValidateFileName(string fileName, int modId, int modFileId)
     {
         string safeName = Path.GetFileName(fileName);

@@ -225,6 +225,7 @@ internal sealed partial class GameRuntime
     private async Task<RunningGame> LaunchGameAsync(
         string minecraftDirectory,
         string portableMinecraftVersion,
+        ArmLaunchOptions? armLaunchOptions,
         IReadOnlyList<string> arguments,
         int? memoryMb,
         CancellationToken cancellationToken
@@ -248,7 +249,7 @@ internal sealed partial class GameRuntime
 
             try
             {
-                process = LaunchPortableMinecraftClient(minecraftDirectory, portableMinecraftVersion, launchArguments, cancellationToken);
+                process = LaunchPortableMinecraftClient(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, launchArguments, cancellationToken);
             }
             catch
             {
@@ -312,15 +313,28 @@ internal sealed partial class GameRuntime
         }
     }
 
-    private async Task<RunningGame> LaunchPortableAsync(string portableMinecraftVersion, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
+    private async Task<RunningGame> LaunchPortableAsync(
+        string portableMinecraftVersion,
+        string? minecraftVersion,
+        IReadOnlyList<string> arguments,
+        int? memoryMb,
+        CancellationToken cancellationToken
+    )
     {
         string minecraftDirectory = GetMinecraftDirectory();
-        await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, minecraftVersion ?? GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    private Process LaunchPortableMinecraftClient(string directory, string version, string?[]? portableMinecraftArguments = null, CancellationToken cancellationToken = default)
+    private Process LaunchPortableMinecraftClient(
+        string directory,
+        string version,
+        ArmLaunchOptions? armLaunchOptions,
+        string?[]? portableMinecraftArguments = null,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         portableMinecraftArguments ??= [];
@@ -340,40 +354,8 @@ internal sealed partial class GameRuntime
                 processStartInformation.ArgumentList.Add(DisplayScreenResolution);
             }
 
-            if (File.Exists(PortableMinecraftLegacyJvmExecutablePath))
-            {
-                bool isMojangVersion = version.StartsWith(value: "mojang:", StringComparison.Ordinal);
-                bool usesLegacyLwjgl = isMojangVersion && UsesLegacyLwjgl(version);
-                string armLwjglVersion = isMojangVersion ? GetArmLwjglVersion(version) : PortableMinecraftArmLwjgl4Version;
-
-                if (usesLegacyLwjgl && !HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--jvm"))
-                {
-                    processStartInformation.ArgumentList.Add(item: "--jvm");
-                    processStartInformation.ArgumentList.Add(PortableMinecraftLegacyJvmPath);
-                }
-                else if (!usesLegacyLwjgl && !HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--fix-lwjgl"))
-                {
-                    processStartInformation.ArgumentList.Add(item: "--fix-lwjgl");
-                    processStartInformation.ArgumentList.Add(armLwjglVersion);
-
-                    if (armLwjglVersion == PortableMinecraftArmLwjgl4Version)
-                    {
-                        processStartInformation.ArgumentList.Add(item: "--include-class");
-                        processStartInformation.ArgumentList.Add(PortableMinecraftArmLwjgl4ClassPath);
-                        processStartInformation.ArgumentList.Add(item: "--include-class");
-                        processStartInformation.ArgumentList.Add(PortableMinecraftArmLwjgl4NativePath);
-                    }
-                }
-
-                bool vulkanLibraryRequired = armLwjglVersion == PortableMinecraftArmLwjgl4Version
-                                            && !HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--exclude-lib");
-
-                if (vulkanLibraryRequired)
-                {
-                    processStartInformation.ArgumentList.Add(item: "--exclude-lib");
-                    processStartInformation.ArgumentList.Add(PortableMinecraftArmVulkanLibrary);
-                }
-            }
+            foreach (string argument in CreateArmPortableMinecraftArguments(armLaunchOptions, requestedPortableMinecraftArguments, isLaunch: true))
+                processStartInformation.ArgumentList.Add(argument);
 
             foreach (string? argument in requestedPortableMinecraftArguments)
                 processStartInformation.ArgumentList.Add(argument);
@@ -402,7 +384,12 @@ internal sealed partial class GameRuntime
         throw new TimeoutException(message: "A previous Minecraft window did not close before the next launch");
     }
 
-    private async Task PreparePortableMinecraftClientAsync(string minecraftDirectory, string portableMinecraftVersion, CancellationToken cancellationToken)
+    private async Task PreparePortableMinecraftClientAsync(
+        string minecraftDirectory,
+        string portableMinecraftVersion,
+        ArmLaunchOptions? armLaunchOptions,
+        CancellationToken cancellationToken
+    )
     {
         string configurationDirectory = Path.Combine(minecraftDirectory, path2: "config");
         string modsDirectory = Path.Combine(minecraftDirectory, path2: "mods");
@@ -431,16 +418,7 @@ internal sealed partial class GameRuntime
 
         List<string> portableMinecraftArguments = [portableMinecraftVersion, "--demo", "--main-dir", minecraftDirectory, "--output", "machine"];
 
-        bool legacyJavaRequired = File.Exists(PortableMinecraftLegacyJvmExecutablePath)
-                                 && !portableMinecraftVersion.StartsWith(value: "mojang:", StringComparison.Ordinal);
-
-        if (legacyJavaRequired)
-        {
-            portableMinecraftArguments.AddRange(["--fix-lwjgl", PortableMinecraftArmLwjgl4Version]);
-            portableMinecraftArguments.AddRange(["--exclude-lib", PortableMinecraftArmVulkanLibrary]);
-            portableMinecraftArguments.AddRange(["--include-class", PortableMinecraftArmLwjgl4ClassPath]);
-            portableMinecraftArguments.AddRange(["--include-class", PortableMinecraftArmLwjgl4NativePath]);
-        }
+        portableMinecraftArguments.AddRange(CreateArmPortableMinecraftArguments(armLaunchOptions, [], isLaunch: false));
 
         var preparationResult = await RunProcessTextAsync(
             CreateProcessStartInformation(PortableMinecraftDryRunPath, portableMinecraftArguments),
