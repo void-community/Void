@@ -140,7 +140,7 @@ public sealed class NeoForgeVersionSelectionTests
     }
 
     [Fact]
-    public void PrefersNewestSodiumReleaseOverNewerPreRelease()
+    public void SelectsNewestSodiumBuildIncludingPreReleases()
     {
         using var versions = JsonDocument.Parse("""
             [
@@ -152,8 +152,8 @@ public sealed class NeoForgeVersionSelectionTests
         var download = GameRuntime.SelectSodiumDownload(versions.RootElement);
 
         Assert.NotNull(download);
-        Assert.Equal("mc26.3-0.9.2-neoforge", download.VersionNumber);
-        Assert.Equal(new Uri("https://cdn.modrinth.com/release.jar"), download.DownloadUri);
+        Assert.Equal("mc26.3-0.9.3-beta.1-neoforge", download.VersionNumber);
+        Assert.Equal(new Uri("https://cdn.modrinth.com/beta.jar"), download.DownloadUri);
     }
 
     [Fact]

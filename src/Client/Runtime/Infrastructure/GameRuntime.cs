@@ -16,12 +16,11 @@ namespace Void.Client;
 internal sealed partial class GameRuntime
 {
     /// <summary>
-    /// Picks the newest release build from a Modrinth version list (newest first), falling back to the newest pre-release build when no release exists.
+    /// Picks the newest build from a Modrinth version list (newest first), including pre-releases, because older Sodium
+    /// releases can target loader internals that newer NeoForge builds for the same Minecraft version no longer have.
     /// </summary>
     internal static SodiumDownload? SelectSodiumDownload(JsonElement versions)
     {
-        SodiumDownload? preReleaseDownload = null;
-
         foreach (var version in versions.EnumerateArray())
         {
             if (!version.TryGetProperty(propertyName: "files", out var files))
@@ -47,15 +46,11 @@ internal sealed partial class GameRuntime
 
             string versionNumber = version.TryGetProperty(propertyName: "version_number", out var number) ? number.GetString() ?? "unknown" : "unknown";
             string versionType = version.TryGetProperty(propertyName: "version_type", out var type) ? type.GetString() ?? "unknown" : "unknown";
-            SodiumDownload download = new(versionNumber, versionType, new Uri(downloadUrl, UriKind.Absolute));
 
-            if (versionType is "release")
-                return download;
-
-            preReleaseDownload ??= download;
+            return new SodiumDownload(versionNumber, versionType, new Uri(downloadUrl, UriKind.Absolute));
         }
 
-        return preReleaseDownload;
+        return null;
     }
 
     private static async Task<string> InstallModpack(string slug, int fileId, string apiKey, Uri apiBaseUri, string minecraftDirectory, CancellationToken cancellationToken)
