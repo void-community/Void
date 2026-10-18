@@ -17,7 +17,7 @@ JSON property names and enum values use camel case.
 | `GET` | `/api/game/players` | `200` | Read the live local player and client-tracked players. |
 | `PUT` | `/api/game/options` | `204` | Replace Minecraft `options.txt`. |
 | `POST` | `/api/game/start/vanilla` | `202` | Start a Mojang vanilla release. |
-| `POST` | `/api/game/start/neoforge` | `202` | Start a NeoForge release, latest stable by default. |
+| `POST` | `/api/game/start/neoforge` | `202` | Start a NeoForge release, the newest with a stable build by default. |
 | `POST` | `/api/game/start/curseforge` | `202` | Start a CurseForge modpack file. |
 | `POST` | `/api/game/connect` | `200` | Converge the running game on a server connection. |
 | `POST` | `/api/game/send-chat` | `204` | Send chat text or a command. |
@@ -138,7 +138,9 @@ curl --fail-with-body \
 ### NeoForge
 
 `version` is an optional Minecraft release identifier, the same form the vanilla endpoint accepts. Omit it, or send a
-blank value, to resolve and start the latest stable NeoForge release:
+blank value, to start the newest Mojang release that has a stable NeoForge build. While a new Minecraft release only has
+NeoForge beta builds, the client falls back to the newest earlier release that has a stable build. Snapshots and
+pre-releases are never selected.
 
 ```bash
 curl --fail-with-body \
@@ -148,7 +150,19 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
-Supply it to start NeoForge for a specific Minecraft version instead:
+`maximumMinecraftVersion` optionally caps that choice at a Mojang release identifier, for example when the server only
+accepts versions up to that release. It applies only when `version` is omitted: sending both returns `400`, and an
+identifier that is not a Mojang release fails the launch.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"maximumMinecraftVersion":"26.2","memoryMb":4096,"arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/neoforge
+```
+
+Supply `version` to start NeoForge for a specific Minecraft version instead:
 
 ```bash
 curl --fail-with-body \
@@ -158,7 +172,10 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
-Sodium is installed automatically when Modrinth provides a compatible NeoForge build for the resolved Minecraft version.
+Sodium is installed automatically for the exact resolved Minecraft version: the newest release build on Modrinth, or the
+newest beta when no release exists yet. The launch continues without Sodium when Modrinth has no build for that version.
+On ARM64 images the client also selects the LWJGL natives and, when needed, downloads the Java runtime that the resolved
+Minecraft version requires.
 
 ### CurseForge
 

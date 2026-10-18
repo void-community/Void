@@ -3,10 +3,10 @@ title: Images
 description: Choose a Docker client image and configure its storage.
 ---
 
-Client images are hosted in the GitHub Container Registry as `ghcr.io/caunt/portable-minecraft-client`.
+Client images are hosted in the GitHub Container Registry as `ghcr.io/void-community/portable-minecraft-client`.
 Every published image supports `linux/amd64` and `linux/arm64`.
 
-Browse the [**published client images**](https://github.com/caunt/Void/pkgs/container/portable-minecraft-client) for the current tags and digests.
+Browse the [**published client images**](https://github.com/void-community/Void/pkgs/container/portable-minecraft-client) for the current tags and digests.
 
 ## Image Tags
 
@@ -29,25 +29,25 @@ Pin an image digest when a workflow must use identical image contents.
 Pull the current runtime image:
 
 ```bash
-docker pull ghcr.io/caunt/portable-minecraft-client:latest
+docker pull ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
 Pull the multi-version image used by Void integration tests:
 
 ```bash
-docker pull ghcr.io/caunt/portable-minecraft-client:offline
+docker pull ghcr.io/void-community/portable-minecraft-client:offline
 ```
 
 Pull an image prepared for a specific release:
 
 ```bash
-docker pull ghcr.io/caunt/portable-minecraft-client:1.21.8
+docker pull ghcr.io/void-community/portable-minecraft-client:1.21.8
 ```
 
 Pin exact image contents with a digest from the package page:
 
 ```bash
-docker pull ghcr.io/caunt/portable-minecraft-client@sha256:<digest>
+docker pull ghcr.io/void-community/portable-minecraft-client@sha256:<digest>
 ```
 
 ## Persistent Game Directory
@@ -59,7 +59,7 @@ docker volume create void-client-minecraft
 
 docker run --name void-client --rm -d -p 8080:80 \
   --volume void-client-minecraft:/root/.minecraft \
-  ghcr.io/caunt/portable-minecraft-client:latest
+  ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
 Use `MINECRAFT_DIRECTORY` when mounting the data at another container path:
@@ -68,7 +68,7 @@ Use `MINECRAFT_DIRECTORY` when mounting the data at another container path:
 docker run --name void-client --rm -d -p 8080:80 \
   --env MINECRAFT_DIRECTORY=/minecraft \
   --volume void-client-minecraft:/minecraft \
-  ghcr.io/caunt/portable-minecraft-client:latest
+  ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
 ## CurseForge Configuration
@@ -78,7 +78,7 @@ Starting a CurseForge modpack requires `CURSEFORGE_API_KEY`:
 ```bash
 docker run --name void-client --rm -d -p 8080:80 \
   --env CURSEFORGE_API_KEY=your-api-key \
-  ghcr.io/caunt/portable-minecraft-client:latest
+  ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
 `CURSEFORGE_API_BASE_URL` optionally replaces the default `https://api.curseforge.com` API base URL.
