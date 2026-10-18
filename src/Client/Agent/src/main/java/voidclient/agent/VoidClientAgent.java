@@ -1,6 +1,7 @@
 package voidclient.agent;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
 import java.net.BindException;
 import java.net.InetAddress;
@@ -14,6 +15,10 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
 
 public final class VoidClientAgent {
     private static boolean started;
@@ -39,7 +44,10 @@ public final class VoidClientAgent {
             GameAutomationController.initialize(instrumentation);
             instrumentation.addTransformer(new NettyReadInterestTransformer(), true);
             instrumentation.addTransformer(new DataFixerWarmupTransformer(), true);
-            instrumentation.addTransformer(new PlayerTransformer());
+
+            if (installPlayerHook(instrumentation))
+                instrumentation.addTransformer(new PlayerTransformer());
+
             instrumentation.addTransformer(new GameAutomationTransformer(), true);
 
             if (retransformLoadedClasses)
@@ -59,6 +67,49 @@ public final class VoidClientAgent {
         } catch (Throwable exception) {
             System.err.println("Void client state agent failed to start: " + exception.getMessage());
         }
+    }
+
+    /**
+     * Puts PlayerHook on the bootstrap class path, where the calls PlayerTransformer injects can link from every class loader.
+     * Player constructors stay untouched when that fails, and Tracker still finds players through the client.
+     */
+    private static boolean installPlayerHook(Instrumentation instrumentation) {
+        try {
+            instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(writePlayerHookJar().toFile()));
+            Class.forName(PlayerTransformer.HookName.replace('/', '.'), true, null).getMethod("install", Consumer.class).invoke(null, new Consumer<Object>() {
+                @Override
+                public void accept(Object value) {
+                    Tracker.registerPlayer(value);
+                }
+            });
+            return true;
+        } catch (Throwable exception) {
+            System.err.println("Void client player hook failed to install: " + exception);
+            return false;
+        }
+    }
+
+    static Path writePlayerHookJar() throws IOException {
+        String entryName = PlayerTransformer.HookName + ".class";
+        Path jarPath = Files.createTempFile("void-client-player-hook", ".jar");
+        jarPath.toFile().deleteOnExit();
+
+        try (InputStream input = VoidClientAgent.class.getResourceAsStream("/" + entryName);
+             JarOutputStream output = new JarOutputStream(Files.newOutputStream(jarPath))) {
+            if (input == null)
+                throw new IOException("The agent jar does not contain " + entryName);
+
+            output.putNextEntry(new JarEntry(entryName));
+            byte[] buffer = new byte[8192];
+            int length;
+
+            while ((length = input.read(buffer)) != -1)
+                output.write(buffer, 0, length);
+
+            output.closeEntry();
+        }
+
+        return jarPath;
     }
 
     /**

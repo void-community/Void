@@ -119,7 +119,7 @@ public final class PositionSourceDiscoveryTest {
             for (AbstractInsnNode instruction = method.instructions.getFirst(); instruction != null; instruction = instruction.getNext()) {
                 if (instruction instanceof MethodInsnNode) {
                     MethodInsnNode invocation = (MethodInsnNode) instruction;
-                    registrationFound |= "voidclient/agent/Tracker".equals(invocation.owner) && "registerPlayer".equals(invocation.name);
+                    registrationFound |= PlayerTransformer.HookName.equals(invocation.owner) && "registerPlayer".equals(invocation.name);
                 }
             }
         }

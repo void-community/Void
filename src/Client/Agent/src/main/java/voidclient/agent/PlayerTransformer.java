@@ -16,7 +16,7 @@ import org.objectweb.asm.tree.VarInsnNode;
 
 final class PlayerTransformer implements ClassFileTransformer {
     private static final String GameProfileDescriptor = "Lcom/mojang/authlib/GameProfile;";
-    private static final String TrackerName = "voidclient/agent/Tracker";
+    static final String HookName = "voidclient/bootstrap/PlayerHook";
 
     @Override
     public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined, ProtectionDomain protectionDomain, byte[] classFileBuffer) {
@@ -37,7 +37,8 @@ final class PlayerTransformer implements ClassFileTransformer {
         reader.accept(new ClassVisitor(Opcodes.ASM9) {
             @Override
             public FieldVisitor visitField(int access, String name, String descriptor, String signature, Object value) {
-                declaresProfile[0] |= GameProfileDescriptor.equals(descriptor);
+                // Static profiles are constants such as fake-player identities of mod singletons, never a player instance.
+                declaresProfile[0] |= (access & Opcodes.ACC_STATIC) == 0 && GameProfileDescriptor.equals(descriptor);
                 return null;
             }
         }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
@@ -59,7 +60,7 @@ final class PlayerTransformer implements ClassFileTransformer {
 
                 InsnList registration = new InsnList();
                 registration.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                registration.add(new MethodInsnNode(Opcodes.INVOKESTATIC, TrackerName, "registerPlayer", "(Ljava/lang/Object;)V", false));
+                registration.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HookName, "registerPlayer", "(Ljava/lang/Object;)V", false));
                 method.instructions.insertBefore(instruction, registration);
                 changed = true;
             }
