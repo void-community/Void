@@ -51,7 +51,7 @@ public class CrossStitchModArgumentSerializer : IArgumentSerializer
 
         // The backend's parser ID is written back as read, not resolved through the proxy's parser table where -1 means removed.
         // An argument type the backend never registered arrives as -1, and the client skips it just as on a direct connection.
-        if (protocolVersion >= ProtocolVersion.MINECRAFT_1_19 && modArgumentType.ParserId is { } parserId)
+        if (modArgumentType.ParserId is { } parserId)
             buffer.WriteVarInt(parserId);
         else
             ArgumentSerializerRegistry.WriteParserIdentifier(ref buffer, unwrappedMapping, protocolVersion);
