@@ -67,6 +67,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AsyncLock _windowOperations = new();
     private readonly ConcurrentDictionary<int, Task> _outputTasks = new();
+    private readonly ConcurrentDictionary<int, string> _launchedProcessGroups = new();
     private long _nextWindowGeneration;
     private Guid? _windowSessionId;
 

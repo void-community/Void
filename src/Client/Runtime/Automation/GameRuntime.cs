@@ -114,6 +114,25 @@ internal sealed partial class GameRuntime
         await Console.Error.WriteLineAsync($"Minecraft agent navigated to and joined {JsonSerializer.Serialize(serverAddress)} through discovered UI actions").ConfigureAwait(continueOnCapturedContext: false);
     }
 
+    private async Task<string> DescribeWindowAsync(string display, string windowId, CancellationToken cancellationToken)
+    {
+        var nameResult = await RunProcessTextAsync(
+            CreateProcessStartInformation(fileName: "xdotool", ["getwindowname", windowId], display),
+            TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        var processResult = await RunProcessTextAsync(
+            CreateProcessStartInformation(fileName: "xdotool", ["getwindowpid", windowId], display),
+            TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        string processDescription = processResult.ExitCode is 0 ? $"process {processResult.StandardOutput.Trim()}" : "unknown process";
+
+        return $"window {windowId} \"{nameResult.StandardOutput.Trim()}\" owned by {processDescription}";
+    }
+
     private async Task DrainOutputAsync(int processId)
     {
         if (_outputTasks.TryGetValue(processId, out var output))
@@ -233,6 +252,7 @@ internal sealed partial class GameRuntime
         using (await _windowOperations.LockAsync(cancellationToken))
         {
             _windowSessionId = diagnostics?.CurrentSessionId;
+            await TerminateLeftoverProcessGroupsAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             await PrepareDisplayAndWindowAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             await Console.Error.WriteLineAsync($"Launching Minecraft with PortableMC version: {portableMinecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
             var tracker = CreateTrackerConnection(FindUsername(arguments));
@@ -249,6 +269,7 @@ internal sealed partial class GameRuntime
             try
             {
                 process = LaunchPortableMinecraftClient(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, launchArguments, cancellationToken);
+                _launchedProcessGroups[process.Id] = portableMinecraftVersion;
             }
             catch
             {
@@ -372,15 +393,21 @@ internal sealed partial class GameRuntime
         string display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
         var deadline = DateTimeOffset.UtcNow.AddSeconds(seconds: 10);
 
+        string? remainingWindowId = null;
+
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false) is null)
+            remainingWindowId = await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            if (remainingWindowId is null)
                 return;
 
             await Task.Delay(millisecondsDelay: 100, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
 
-        throw new TimeoutException(message: "A previous Minecraft window did not close before the next launch");
+        string remainingWindow = remainingWindowId is null ? "unknown window" : await DescribeWindowAsync(display, remainingWindowId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        throw new TimeoutException($"A previous Minecraft window did not close before the next launch: {remainingWindow}");
     }
 
     private async Task PreparePortableMinecraftClientAsync(
@@ -615,6 +642,18 @@ internal sealed partial class GameRuntime
         await Console.Error.WriteLineAsync($"Minecraft agent submitted the exact chat input through Minecraft's UI handler: {JsonSerializer.Serialize(message)}").ConfigureAwait(continueOnCapturedContext: false);
     }
 
+    private async Task SignalProcessGroupAsync(int processGroupId, string signal, CancellationToken cancellationToken)
+    {
+        var result = await RunProcessTextAsync(
+            CreateProcessStartInformation(fileName: "kill", [$"-{signal}", "--", $"-{processGroupId}"]),
+            TimeSpan.FromSeconds(seconds: 5),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (result.ExitCode is not 0 && IsProcessGroupRunning(processGroupId))
+            await Console.Error.WriteLineAsync($"kill -{signal} for process group {processGroupId} failed: {result.StandardError.Trim()}").ConfigureAwait(continueOnCapturedContext: false);
+    }
+
     private Process StartGameProcess(Action<ProcessStartInfo> configure)
     {
         ProcessStartInfo processStartInformation = new(fileName: "setsid")
@@ -637,6 +676,35 @@ internal sealed partial class GameRuntime
         );
 
         return process;
+    }
+
+    /// <summary>
+    /// Stops processes that outlived earlier games in their process group, such as crash reporters started by mods, because
+    /// they are reparented away from the game and their windows would otherwise block every later launch.
+    /// </summary>
+    private async Task TerminateLeftoverProcessGroupsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var (processGroupId, portableMinecraftVersion) in _launchedProcessGroups)
+        {
+            if (IsProcessGroupRunning(processGroupId))
+            {
+                await Console.Error.WriteLineAsync($"Stopping processes the previous {portableMinecraftVersion} game left in process group {processGroupId}").ConfigureAwait(continueOnCapturedContext: false);
+                await SignalProcessGroupAsync(processGroupId, signal: "TERM", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                try
+                {
+                    await WaitForProcessGroupExitAsync(processGroupId, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                }
+                catch (TimeoutException)
+                {
+                    await SignalProcessGroupAsync(processGroupId, signal: "KILL", CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+                    await WaitForProcessGroupExitAsync(processGroupId, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+                }
+            }
+
+            if (_launchedProcessGroups.TryRemove(processGroupId, out string? forgottenVersion))
+                GC.KeepAlive(forgottenVersion);
+        }
     }
 
     private async Task WaitForDisplayReadyAsync(string display, CancellationToken cancellationToken)
