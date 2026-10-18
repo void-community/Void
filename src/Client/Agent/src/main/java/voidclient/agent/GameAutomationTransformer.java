@@ -19,7 +19,7 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 final class GameAutomationTransformer implements ClassFileTransformer {
-    private static final String ControllerName = "voidclient/agent/GameAutomationController";
+    private static final String HooksName = VoidClientAgent.GameHooksName;
     @Override
     public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined,
                             ProtectionDomain protectionDomain, byte[] classFileBuffer) {
@@ -97,7 +97,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
                     // Preserve the live receiver/value on the operand stack. Optimized
                     // constructor stack maps can legally discard local zero before RETURN.
                     method.instructions.insertBefore(instruction, new InsnNode(Opcodes.DUP2));
-                    method.instructions.insert(instruction, new MethodInsnNode(Opcodes.INVOKESTATIC, ControllerName,
+                    method.instructions.insert(instruction, new MethodInsnNode(Opcodes.INVOKESTATIC, HooksName,
                         "connectionListenerCreated", "(Ljava/lang/Object;Ljava/lang/Object;)V", false));
                     changed = true;
                 }
@@ -106,7 +106,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
                 InsnList call = new InsnList();
                 call.add(new VarInsnNode(Opcodes.ALOAD, 0));
                 call.add(new VarInsnNode(Opcodes.ALOAD, 1));
-                call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, ControllerName, "connectionRejected", "(Ljava/lang/Object;Ljava/lang/Object;)V", false));
+                call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HooksName, "connectionRejected", "(Ljava/lang/Object;Ljava/lang/Object;)V", false));
                 method.instructions.insert(call);
                 changed = true;
             }
@@ -117,7 +117,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
     private static InsnList controllerCall(String controllerMethod) {
         InsnList call = new InsnList();
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, ControllerName, controllerMethod, "(Ljava/lang/Object;)V", false));
+        call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HooksName, controllerMethod, "(Ljava/lang/Object;)V", false));
         return call;
     }
 
@@ -126,7 +126,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
             if (instruction instanceof MethodInsnNode) {
                 MethodInsnNode call = (MethodInsnNode) instruction;
 
-                if (ControllerName.equals(call.owner) && controllerMethod.equals(call.name))
+                if (HooksName.equals(call.owner) && controllerMethod.equals(call.name))
                     return true;
             }
         }

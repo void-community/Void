@@ -5,6 +5,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.FileSystemNotFoundException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -37,7 +44,7 @@ final class GameAutomationIndex {
     }
 
     static synchronized IndexedCode index(URL location) {
-        if (location == null || !"file".equals(location.getProtocol()))
+        if (location == null)
             return null;
 
         String key = location.toExternalForm();
@@ -46,7 +53,7 @@ final class GameAutomationIndex {
 
         try {
             Map<String, ClassNode> types = readTypes(location.toURI());
-            IndexedCode indexed = build(types);
+            IndexedCode indexed = types == null ? null : build(types);
 
             IndexedLocations.put(key, indexed);
 
@@ -59,9 +66,28 @@ final class GameAutomationIndex {
         }
     }
 
-    private static Map<String, ClassNode> readTypes(URI location) throws Exception {
-        File file = new File(location);
+    static Map<String, ClassNode> readTypes(URI location) throws Exception {
         Map<String, ClassNode> types = new HashMap<String, ClassNode>();
+
+        // JDK modules (jrt:) hold no game code.
+        if ("jrt".equals(location.getScheme()))
+            return null;
+
+        if (!"file".equals(location.getScheme())) {
+            Path root;
+
+            try {
+                // Module loaders such as NeoForge 1.21.1 serve game code from their own installed file systems (union:).
+                root = Paths.get(location);
+            } catch (IllegalArgumentException | FileSystemNotFoundException exception) {
+                return null;
+            }
+
+            readTree(types, root);
+            return types;
+        }
+
+        File file = new File(location);
 
         if (file.isDirectory()) {
             readDirectory(types, file, file);
@@ -113,6 +139,25 @@ final class GameAutomationIndex {
                 }
             }
         }
+    }
+
+    private static void readTree(final Map<String, ClassNode> types, Path root) throws IOException {
+        Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                if (file.toString().endsWith(".class")) {
+                    InputStream input = Files.newInputStream(file);
+
+                    try {
+                        addType(types, input);
+                    } finally {
+                        input.close();
+                    }
+                }
+
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     private static void addType(Map<String, ClassNode> types, InputStream input) throws IOException {

@@ -3,6 +3,9 @@ package voidclient.agent;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.net.BindException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -15,12 +18,12 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Consumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 
 public final class VoidClientAgent {
+    static final String GameHooksName = "voidclient/bootstrap/GameHooks";
     private static boolean started;
 
     private VoidClientAgent() {
@@ -45,10 +48,10 @@ public final class VoidClientAgent {
             instrumentation.addTransformer(new NettyReadInterestTransformer(), true);
             instrumentation.addTransformer(new DataFixerWarmupTransformer(), true);
 
-            if (installPlayerHook(instrumentation))
+            if (installGameHooks(instrumentation)) {
                 instrumentation.addTransformer(new PlayerTransformer());
-
-            instrumentation.addTransformer(new GameAutomationTransformer(), true);
+                instrumentation.addTransformer(new GameAutomationTransformer(), true);
+            }
 
             if (retransformLoadedClasses)
                 retransformLoadedClasses(instrumentation);
@@ -70,28 +73,32 @@ public final class VoidClientAgent {
     }
 
     /**
-     * Puts PlayerHook on the bootstrap class path, where the calls PlayerTransformer injects can link from every class loader.
-     * Player constructors stay untouched when that fails, and Tracker still finds players through the client.
+     * Puts GameHooks on the bootstrap class path, where the calls the transformers inject can link from every class loader. Game
+     * classes stay untouched when that fails, so the game still runs without player tracking hooks and UI automation.
      */
-    private static boolean installPlayerHook(Instrumentation instrumentation) {
+    private static boolean installGameHooks(Instrumentation instrumentation) {
         try {
-            instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(writePlayerHookJar().toFile()));
-            Class.forName(PlayerTransformer.HookName.replace('/', '.'), true, null).getMethod("install", Consumer.class).invoke(null, new Consumer<Object>() {
-                @Override
-                public void accept(Object value) {
-                    Tracker.registerPlayer(value);
-                }
-            });
+            instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(writeGameHooksJar().toFile()));
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            MethodType single = MethodType.methodType(void.class, Object.class);
+            MethodType pair = MethodType.methodType(void.class, Object.class, Object.class);
+            Class.forName(GameHooksName.replace('/', '.'), true, null)
+                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
+                .invoke(null,
+                    lookup.findStatic(Tracker.class, "registerPlayer", single),
+                    lookup.findStatic(GameAutomationController.class, "applyClient", single),
+                    lookup.findStatic(GameAutomationController.class, "connectionListenerCreated", pair),
+                    lookup.findStatic(GameAutomationController.class, "connectionRejected", pair));
             return true;
         } catch (Throwable exception) {
-            System.err.println("Void client player hook failed to install: " + exception);
+            GameAutomationController.recordIndexFailure("game hooks", exception.toString());
             return false;
         }
     }
 
-    static Path writePlayerHookJar() throws IOException {
-        String entryName = PlayerTransformer.HookName + ".class";
-        Path jarPath = Files.createTempFile("void-client-player-hook", ".jar");
+    static Path writeGameHooksJar() throws IOException {
+        String entryName = GameHooksName + ".class";
+        Path jarPath = Files.createTempFile("void-client-game-hooks", ".jar");
         jarPath.toFile().deleteOnExit();
 
         try (InputStream input = VoidClientAgent.class.getResourceAsStream("/" + entryName);

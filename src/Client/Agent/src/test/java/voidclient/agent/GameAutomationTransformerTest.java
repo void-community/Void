@@ -28,7 +28,7 @@ public final class GameAutomationTransformerTest {
             for (AbstractInsnNode instruction : method.instructions)
                 if (instruction instanceof MethodInsnNode) {
                     MethodInsnNode call = (MethodInsnNode) instruction;
-                    if (call.owner.equals("voidclient/agent/GameAutomationController")) {
+                    if (call.owner.equals(VoidClientAgent.GameHooksName)) {
                         Assert.assertEquals("loop", method.name);
                         call.owner = Probe.class.getName().replace('.', '/');
                     }

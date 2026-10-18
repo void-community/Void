@@ -3,6 +3,9 @@ package voidclient.agent;
 import com.mojang.authlib.GameProfile;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -10,35 +13,26 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Consumer;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
 public class PlayerTransformerTest {
+    private static final List<Object> Registered = new ArrayList<Object>();
+
     @Test
     public void profileFieldRegistersTheInstanceFromALoaderThatCannotSeeTheAgent() throws Exception {
-        final List<Object> registered = new ArrayList<Object>();
+        Registered.clear();
 
-        Object instance = constructWithBootstrapHookOnly(new Consumer<Object>() {
-            @Override
-            public void accept(Object value) {
-                registered.add(value);
-            }
-        });
+        Object instance = constructWithBootstrapHooksOnly("record");
 
-        assertEquals(Collections.singletonList(instance), registered);
+        assertEquals(Collections.singletonList(instance), Registered);
     }
 
     @Test
     public void failingRegistrationDoesNotBreakTheConstructor() throws Exception {
-        assertNotNull(constructWithBootstrapHookOnly(new Consumer<Object>() {
-            @Override
-            public void accept(Object value) {
-                throw new IllegalStateException("tracker unavailable");
-            }
-        }));
+        assertNotNull(constructWithBootstrapHooksOnly("fail"));
     }
 
     @Test
@@ -51,21 +45,32 @@ public class PlayerTransformerTest {
         assertNull(PlayerTransformer.instrumentPlayerConstructors(bytes(ProfileParameter.class)));
     }
 
+    public static void record(Object value) {
+        Registered.add(value);
+    }
+
+    public static void fail(Object value) {
+        throw new IllegalStateException("tracker unavailable");
+    }
+
     /**
      * Mirrors NeoForge 1.21.1, where mod classes are defined by a loader that can't see the agent jar but reaches the
-     * bootstrap class path, which holds only JDK classes and the player hook jar.
+     * bootstrap class path, which holds only JDK classes and the game hooks jar.
      */
-    private static Object constructWithBootstrapHookOnly(Consumer<Object> registration) throws Exception {
+    private static Object constructWithBootstrapHooksOnly(String registration) throws Exception {
         byte[] transformed = PlayerTransformer.instrumentPlayerConstructors(bytes(ProfileHolder.class));
         assertNotNull(transformed);
-        Path hookJar = VoidClientAgent.writePlayerHookJar();
+        MethodHandle target = MethodHandles.lookup().findStatic(PlayerTransformerTest.class, registration, MethodType.methodType(void.class, Object.class));
+        Path hooksJar = VoidClientAgent.writeGameHooksJar();
 
-        try (URLClassLoader bootstrap = new URLClassLoader(new URL[] { hookJar.toUri().toURL() }, null)) {
-            bootstrap.loadClass(PlayerTransformer.HookName.replace('/', '.')).getMethod("install", Consumer.class).invoke(null, registration);
+        try (URLClassLoader bootstrap = new URLClassLoader(new URL[] { hooksJar.toUri().toURL() }, null)) {
+            bootstrap.loadClass(VoidClientAgent.GameHooksName.replace('/', '.'))
+                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
+                .invoke(null, target, null, null, null);
 
             return new BytecodeLoader(bootstrap).define(transformed).getConstructor().newInstance();
         } finally {
-            Files.delete(hookJar);
+            Files.delete(hooksJar);
         }
     }
 

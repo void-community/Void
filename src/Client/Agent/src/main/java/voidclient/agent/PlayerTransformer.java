@@ -16,7 +16,6 @@ import org.objectweb.asm.tree.VarInsnNode;
 
 final class PlayerTransformer implements ClassFileTransformer {
     private static final String GameProfileDescriptor = "Lcom/mojang/authlib/GameProfile;";
-    static final String HookName = "voidclient/bootstrap/PlayerHook";
 
     @Override
     public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined, ProtectionDomain protectionDomain, byte[] classFileBuffer) {
@@ -60,7 +59,7 @@ final class PlayerTransformer implements ClassFileTransformer {
 
                 InsnList registration = new InsnList();
                 registration.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                registration.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HookName, "registerPlayer", "(Ljava/lang/Object;)V", false));
+                registration.add(new MethodInsnNode(Opcodes.INVOKESTATIC, VoidClientAgent.GameHooksName, "registerPlayer", "(Ljava/lang/Object;)V", false));
                 method.instructions.insertBefore(instruction, registration);
                 changed = true;
             }
