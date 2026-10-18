@@ -21,7 +21,7 @@ tmux() {
 }
 
 # Create the session (detached)
-tmux new-session -d -s main -n shell sh -lc 'unset LD_LIBRARY_PATH; exec /start' || true
+tmux new-session -d -s main -n shell sh -lc 'unset LD_LIBRARY_PATH; while true; do /start; echo "Minecraft server exited with code $?, restarting in 5 seconds"; sleep 5; done' || true
 
 # Set options
 tmux set-option -g -w aggressive-resize off
