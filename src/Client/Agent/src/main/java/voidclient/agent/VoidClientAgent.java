@@ -41,7 +41,9 @@ public final class VoidClientAgent {
             if (retransformLoadedClasses)
                 retransformLoadedClasses(instrumentation);
 
-            ServerSocket serverSocket = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
+            // NeoForge launches with -Djava.net.preferIPv6Addresses=system, where getLoopbackAddress() can return ::1,
+            // while the client API always connects to the IPv4 loopback.
+            ServerSocket serverSocket = new ServerSocket(0, 16, InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }));
             writeDescriptor(parsedArguments.descriptorPath, serverSocket.getLocalPort());
 
             Thread serverThread = new Thread(new AgentServer(serverSocket, parsedArguments.token), "Void client state agent");

@@ -38,6 +38,25 @@ public final class ConnectionOutcomeTest {
         Assert.assertTrue(field(previous.getClass(), "response").get(previous).toString().contains("request.cancelled"));
     }
 
+    @Test
+    public void connectBeforeIndexingWaitsUntilCancelled() throws Exception {
+        final String[] response = new String[1];
+        Thread request = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                response[0] = GameAutomationController.connectJson("early", "server:25565");
+            }
+        });
+        request.start();
+        request.join(1000L);
+        Assert.assertTrue("connect should wait for the UI index", request.isAlive());
+        GameAutomationController.cancel("early");
+        request.join(5000L);
+        Assert.assertFalse(request.isAlive());
+        Assert.assertTrue(response[0].contains("request.cancelled"));
+        Assert.assertNull(field(GameAutomationController.class, "pending").get(null));
+    }
+
     private static Object operation(String requestId) throws Exception {
         Class<?> type = Class.forName("voidclient.agent.GameAutomationController$PendingOperation");
         Constructor<?> constructor = type.getDeclaredConstructor(String.class, String.class, String.class);

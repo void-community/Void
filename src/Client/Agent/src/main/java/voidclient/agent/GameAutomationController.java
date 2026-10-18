@@ -22,6 +22,8 @@ import org.objectweb.asm.Type;
 public final class GameAutomationController {
     private static final Map<ClassLoader, GameAutomationIndex.IndexedCode> LoaderIndexes = Collections.synchronizedMap(new java.util.WeakHashMap<ClassLoader, GameAutomationIndex.IndexedCode>());
     private static final Map<String, String> IndexFailures = new HashMap<String, String>();
+    private static final Set<String> CancelledRequests = new HashSet<String>();
+    private static final long IndexWaitMilliseconds = 600000L;
     private static final ThreadLocal<Boolean> Applying = new ThreadLocal<Boolean>();
     private static volatile PendingOperation pending;
     private static WeakReference<Object> screenSetterReceiver = new WeakReference<Object>(null);
@@ -95,11 +97,30 @@ public final class GameAutomationController {
         if (pending != null && pending.requestId.equals(requestId)) {
             complete(pending, error("request.cancelled", "The agent operation was cancelled"));
             pending = null;
+        } else {
+            CancelledRequests.add(requestId);
         }
     }
 
     private static String await(PendingOperation operation) {
         synchronized (GameAutomationController.class) {
+            if (pending != null)
+                return error("request.pending", "Another game automation operation is already pending");
+
+            // NeoForge shows its loading window before Minecraft's UI classes load, so wait for them to be indexed.
+            long deadline = System.currentTimeMillis() + IndexWaitMilliseconds;
+
+            try {
+                while (LoaderIndexes.isEmpty() && !CancelledRequests.contains(operation.requestId) && System.currentTimeMillis() < deadline)
+                    GameAutomationController.class.wait(500L);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return error("request.interrupted", "The agent operation was interrupted");
+            }
+
+            if (CancelledRequests.remove(operation.requestId))
+                return error("request.cancelled", "The agent operation was cancelled");
+
             if (pending != null)
                 return error("request.pending", "Another game automation operation is already pending");
 
