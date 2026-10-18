@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -53,6 +55,101 @@ internal sealed partial class GameRuntime
 
             throw;
         }
+    }
+
+    /// <summary>
+    /// Lists where a CurseForge file can be downloaded: the API's download URL when the author allows third-party downloads,
+    /// then CurseForge's CDN and website, which also serve files whose authors disallow API distribution.
+    /// </summary>
+    internal static IReadOnlyList<Uri> CreateCurseForgeDownloadUris(int modId, int fileId, string fileName, string? downloadUrl)
+    {
+        List<Uri> candidates = [];
+
+        if (!string.IsNullOrWhiteSpace(downloadUrl))
+        {
+            string escapedDownloadUrl = downloadUrl.Replace(oldValue: "[", newValue: "%5B", StringComparison.Ordinal).Replace(oldValue: "]", newValue: "%5D", StringComparison.Ordinal);
+
+            if (Uri.TryCreate(escapedDownloadUrl, UriKind.Absolute, out var metadataUri))
+                candidates.Add(metadataUri);
+        }
+
+        string fileIdText = fileId.ToString(CultureInfo.InvariantCulture);
+
+        // The CDN stores files with ids of seven or more digits under the first four digits and the remaining digits.
+        if (fileIdText.Length >= 7)
+            candidates.Add(new Uri($"{CurseForgeCdnUrl}/files/{fileIdText[..4]}/{fileIdText[4..]}/{Uri.EscapeDataString(fileName)}", UriKind.Absolute));
+
+        candidates.Add(
+            new Uri(
+                string.Create(CultureInfo.InvariantCulture, $"{CurseForgeWebsiteUrl}/api/v1/mods/{modId}/files/{fileId}/download"),
+                UriKind.Absolute
+            )
+        );
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Downloads the first candidate that answers successfully with content matching the published SHA-1, recording why the others were skipped.
+    /// </summary>
+    internal static async Task<CurseForgeDownloadResult> DownloadCurseForgeFileAsync(HttpClient httpClient, IReadOnlyList<Uri> candidates, string? expectedSha1, string apiKey, CancellationToken cancellationToken)
+    {
+        List<string> failures = [];
+
+        foreach (var candidate in candidates)
+        {
+            using HttpRequestMessage request = new(HttpMethod.Get, candidate);
+
+            if (candidate.Host.EndsWith(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
+                request.Headers.Add(name: "x-api-key", apiKey);
+
+            try
+            {
+                using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    failures.Add($"{candidate.Host} returned {(int)response.StatusCode}");
+
+                    continue;
+                }
+
+                byte[] content = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                if (IsExpectedSha1(content, expectedSha1))
+                    return new CurseForgeDownloadResult(content, failures);
+
+                failures.Add($"{candidate.Host} served content that does not match SHA-1 {expectedSha1}");
+            }
+            catch (HttpRequestException exception)
+            {
+                failures.Add($"{candidate.Host} failed: {exception.Message}");
+            }
+            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                failures.Add($"{candidate.Host} timed out: {exception.Message}");
+            }
+        }
+
+        return new CurseForgeDownloadResult(Content: null, failures);
+    }
+
+    internal static string? GetCurseForgeSha1(IReadOnlyList<CurseForgeFileHash>? hashes)
+    {
+        return hashes?.FirstOrDefault(static hash => hash.Algo == CurseForgeSha1HashAlgorithm && !string.IsNullOrWhiteSpace(hash.Value))?.Value;
+    }
+
+    /// <summary>
+    /// Checks downloaded bytes against CurseForge's published SHA-1. This is an integrity check, not a security boundary.
+    /// </summary>
+    [SuppressMessage(
+        "Security",
+        "CA5350:Do Not Use Weak Cryptographic Algorithms",
+        Justification = "CurseForge publishes SHA-1 hashes for file integrity checks"
+    )]
+    internal static bool IsExpectedSha1(byte[] content, string? expectedSha1)
+    {
+        return string.IsNullOrWhiteSpace(expectedSha1) || Convert.ToHexString(SHA1.HashData(content)).Equals(expectedSha1.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -107,8 +204,12 @@ internal sealed partial class GameRuntime
                       ?? throw new InvalidOperationException($"modpack not found: {slug}");
 
         await Console.Error.WriteLineAsync(value: "Downloading modpack archive").ConfigureAwait(continueOnCapturedContext: false);
-        string archiveDownloadUrl = await ResolveDownloadUrlAsync(curseForgeClient, project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        byte[] archiveBytes = await DownloadWithFallbackAsync(httpClient, archiveDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var archiveFile = await curseForgeClient.GetModFileAsync(project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var archiveDownloadUris = CreateCurseForgeDownloadUris(project.Id, archiveFile.Id, archiveFile.FileName, archiveFile.DownloadUrl);
+        var archiveDownload = await DownloadCurseForgeFileAsync(httpClient, archiveDownloadUris, GetCurseForgeSha1(archiveFile.Hashes), apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        byte[] archiveBytes = archiveDownload.Content
+                              ?? throw new InvalidOperationException($"Modpack archive {slug} file {fileId} could not be downloaded: {string.Join(separator: "; ", archiveDownload.Failures)}");
 
         await Console.Error.WriteLineAsync(value: "Reading modpack manifest").ConfigureAwait(continueOnCapturedContext: false);
 
@@ -205,6 +306,7 @@ internal sealed partial class GameRuntime
 
                 int totalFileCount = allFileMetadata.Count;
                 int downloadIndex = 0;
+                List<string> missingFiles = [];
 
                 foreach (var fileMeta in allFileMetadata)
                 {
@@ -226,11 +328,24 @@ internal sealed partial class GameRuntime
 
                     await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
 
-                    string fileDownloadUrl = await ResolveModFileDownloadUrlAsync(curseForgeClient, fileMeta.ModId, fileMeta.Id, fileMeta.DownloadUrl, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                    byte[] fileBytes = await DownloadWithFallbackAsync(httpClient, fileDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    var fileDownloadUris = CreateCurseForgeDownloadUris(fileMeta.ModId, fileMeta.Id, fileMeta.FileName, fileMeta.DownloadUrl);
+                    var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, GetCurseForgeSha1(fileMeta.Hashes), apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-                    await File.WriteAllBytesAsync(destinationPath, fileBytes, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    if (fileDownload.Content is null)
+                    {
+                        string missingFile = $"{fileMeta.FileName} (mod {fileMeta.ModId}, file {fileMeta.Id})";
+                        missingFiles.Add(missingFile);
+
+                        await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Could not download {missingFile}: {string.Join(separator: "; ", fileDownload.Failures)}").ConfigureAwait(continueOnCapturedContext: false);
+
+                        continue;
+                    }
+
+                    await File.WriteAllBytesAsync(destinationPath, fileDownload.Content, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                 }
+
+                if (missingFiles.Count > 0)
+                    throw new InvalidOperationException($"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFiles)}");
             }
             else
             {
@@ -434,41 +549,6 @@ internal sealed partial class GameRuntime
         return portablemcVersion;
     }
 
-    private static async Task<string> ResolveDownloadUrlAsync(CurseForgeApiClient curseForgeClient, int projectId, int modFileId, CancellationToken cancellationToken)
-    {
-        var file = await curseForgeClient.GetModFileAsync(projectId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (!string.IsNullOrEmpty(file.DownloadUrl))
-            return file.DownloadUrl;
-
-        string? downloadUrl = await curseForgeClient.GetModFileDownloadUrlAsync(projectId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        return !string.IsNullOrEmpty(downloadUrl)
-            ? downloadUrl
-            : $"https://www.curseforge.com/api/v1/mods/{projectId}/files/{modFileId}/download";
-    }
-
-    private static async Task<string> ResolveModFileDownloadUrlAsync(
-        CurseForgeApiClient curseForgeClient,
-        int modId,
-        int modFileId,
-        string? softwareDevelopmentKitDownloadUrl,
-        CancellationToken cancellationToken
-    )
-    {
-        if (!string.IsNullOrEmpty(softwareDevelopmentKitDownloadUrl))
-            return softwareDevelopmentKitDownloadUrl;
-
-        string? downloadUrl = await curseForgeClient.GetModFileDownloadUrlAsync(modId, modFileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        return !string.IsNullOrEmpty(downloadUrl)
-            ? downloadUrl
-            : $"https://www.curseforge.com/api/v1/mods/{modId}/files/{modFileId}/download";
-    }
-
     private static async Task<ProcessBytesResult> RunProcessBytesAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var process = Process.Start(processStartInformation)
@@ -630,6 +710,8 @@ internal sealed partial class GameRuntime
             await Task.Delay(millisecondsDelay: 50, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
     }
+
+    internal sealed record CurseForgeDownloadResult(byte[]? Content, IReadOnlyList<string> Failures);
 
     internal sealed record SodiumDownload(string VersionNumber, string VersionType, Uri DownloadUri);
 }

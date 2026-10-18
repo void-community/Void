@@ -5,6 +5,8 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
+    internal sealed record CurseForgeFileHash([property: JsonPropertyName("value")] string? Value, [property: JsonPropertyName("algo")] int Algo);
+
     private sealed class CurseForgeApiClient(HttpClient httpClient, Uri baseUri, string apiKey)
     {
         private readonly string _apiKey = apiKey;
@@ -24,13 +26,6 @@ internal sealed partial class GameRuntime
             var response = await GetAsync<CurseForgeApiResponse<CurseForgeFile>>($"v1/mods/{modId}/files/{fileId}", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             return response.Data ?? throw new InvalidOperationException($"CurseForge file not found: mod {modId}, file {fileId}");
-        }
-
-        public async Task<string?> GetModFileDownloadUrlAsync(int modId, int fileId, CancellationToken cancellationToken)
-        {
-            var response = await GetAsync<CurseForgeApiResponse<string?>>($"v1/mods/{modId}/files/{fileId}/download-url", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            return response.Data;
         }
 
         public async Task<List<CurseForgeProject>> SearchModsAsync(int gameId, string slug, CancellationToken cancellationToken)
@@ -79,7 +74,8 @@ internal sealed partial class GameRuntime
         [property: JsonPropertyName("id")] int Id,
         [property: JsonPropertyName("modId")] int ModId,
         string FileName,
-        [property: JsonPropertyName("downloadUrl")] string? DownloadUrl
+        [property: JsonPropertyName("downloadUrl")] string? DownloadUrl,
+        [property: JsonPropertyName("hashes")] List<CurseForgeFileHash>? Hashes
     );
 
     private record CurseForgeFilesRequest([property: JsonPropertyName("fileIds")] List<int> FileIds);

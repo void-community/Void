@@ -23,7 +23,10 @@ namespace Void.Client;
 internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null) : IGameRuntime
 {
     private const string AzulPackagesUrl = "https://api.azul.com/metadata/v1/zulu/packages/";
+    private const string CurseForgeCdnUrl = "https://edge.forgecdn.net";
     private const int CurseForgeFilesBatchSize = 50;
+    private const int CurseForgeSha1HashAlgorithm = 1;
+    private const string CurseForgeWebsiteUrl = "https://www.curseforge.com";
     private const string DefaultCurseForgeApiBaseUrl = "https://api.curseforge.com";
     private const string DefaultDisplay = ":99";
     private const string DefaultMinecraftDirectory = "/root/.minecraft";
@@ -402,20 +405,6 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                     ? Path.Combine(minecraftDirectory, path2: "shaderpacks")
                     : Path.Combine(minecraftDirectory, path2: "resourcepacks")
                 : Path.Combine(minecraftDirectory, path2: "mods");
-    }
-
-    private static async Task<byte[]> DownloadWithFallbackAsync(HttpClient httpClient, string downloadUrl, string apiKey, CancellationToken cancellationToken)
-    {
-        using HttpRequestMessage request = new(HttpMethod.Get, downloadUrl);
-
-        if (downloadUrl.Contains(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
-            request.Headers.Add(name: "x-api-key", apiKey);
-
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-        var successfulResponse = response.EnsureSuccessStatusCode();
-
-        return await successfulResponse.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private static string EncodeAgentArgument(string value)
