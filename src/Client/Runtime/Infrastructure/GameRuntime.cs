@@ -16,6 +16,46 @@ namespace Void.Client;
 internal sealed partial class GameRuntime
 {
     /// <summary>
+    /// Connects to the agent's control port on the IPv4 loopback, falling back to the IPv6 loopback where the agent may be the only listener.
+    /// </summary>
+    internal static async Task<TcpClient> ConnectToAgentAsync(int port, CancellationToken cancellationToken)
+    {
+        TcpClient ipv4Client = new(AddressFamily.InterNetwork);
+
+        try
+        {
+            await ipv4Client.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            return ipv4Client;
+        }
+        catch (SocketException)
+        {
+            ipv4Client.Dispose();
+        }
+        catch
+        {
+            ipv4Client.Dispose();
+
+            throw;
+        }
+
+        TcpClient ipv6Client = new(AddressFamily.InterNetworkV6);
+
+        try
+        {
+            await ipv6Client.ConnectAsync(IPAddress.IPv6Loopback, port, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            return ipv6Client;
+        }
+        catch
+        {
+            ipv6Client.Dispose();
+
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Picks the newest build from a Modrinth version list (newest first), including pre-releases, because older Sodium
     /// releases can target loader internals that newer NeoForge builds for the same Minecraft version no longer have.
     /// </summary>
@@ -459,9 +499,7 @@ internal sealed partial class GameRuntime
     {
         try
         {
-            using TcpClient client = new();
-
-            await client.ConnectAsync(IPAddress.Loopback, port, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+            using TcpClient client = await ConnectToAgentAsync(port, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
 
             using var stream = client.GetStream();
 

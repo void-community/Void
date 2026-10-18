@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -565,9 +564,7 @@ internal sealed partial class GameRuntime
 
         try
         {
-            using TcpClient client = new();
-
-            await client.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            using TcpClient client = await ConnectToAgentAsync(port, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             using var stream = client.GetStream();
 

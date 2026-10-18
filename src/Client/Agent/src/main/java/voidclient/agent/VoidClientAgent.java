@@ -2,6 +2,7 @@ package voidclient.agent;
 
 import java.io.IOException;
 import java.lang.instrument.Instrumentation;
+import java.net.BindException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
@@ -9,7 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.List;
 
 public final class VoidClientAgent {
     private static boolean started;
@@ -41,18 +45,55 @@ public final class VoidClientAgent {
             if (retransformLoadedClasses)
                 retransformLoadedClasses(instrumentation);
 
-            // NeoForge launches with -Djava.net.preferIPv6Addresses=system, where getLoopbackAddress() can return ::1,
-            // while the client API always connects to the IPv4 loopback.
-            ServerSocket serverSocket = new ServerSocket(0, 16, InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }));
-            writeDescriptor(parsedArguments.descriptorPath, serverSocket.getLocalPort());
+            List<ServerSocket> serverSockets = bindLoopbackServerSockets();
+            writeDescriptor(parsedArguments.descriptorPath, serverSockets.get(0).getLocalPort());
 
-            Thread serverThread = new Thread(new AgentServer(serverSocket, parsedArguments.token), "Void client state agent");
-            serverThread.setDaemon(true);
-            serverThread.setPriority(Thread.MIN_PRIORITY);
-            serverThread.start();
+            for (ServerSocket serverSocket : serverSockets) {
+                Thread serverThread = new Thread(new AgentServer(serverSocket, parsedArguments.token), "Void client state agent " + serverSocket.getInetAddress().getHostAddress());
+                serverThread.setDaemon(true);
+                serverThread.setPriority(Thread.MIN_PRIORITY);
+                serverThread.start();
+            }
+
             started = true;
         } catch (Throwable exception) {
             System.err.println("Void client state agent failed to start: " + exception.getMessage());
+        }
+    }
+
+    /**
+     * Listens on the IPv4 and IPv6 loopbacks with one port, because launchers differ in which loopback the JVM prefers
+     * (NeoForge sets java.net.preferIPv6Addresses=system) and a container may provide only one of them.
+     */
+    static List<ServerSocket> bindLoopbackServerSockets() throws IOException {
+        InetAddress ipv4Loopback = InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 });
+        InetAddress ipv6Loopback = InetAddress.getByAddress(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 });
+
+        if (!canBind(ipv6Loopback))
+            return Collections.singletonList(new ServerSocket(0, 16, ipv4Loopback));
+
+        if (!canBind(ipv4Loopback))
+            return Collections.singletonList(new ServerSocket(0, 16, ipv6Loopback));
+
+        for (int attempt = 1; attempt <= 10; attempt++) {
+            ServerSocket ipv4ServerSocket = new ServerSocket(0, 16, ipv4Loopback);
+
+            try {
+                return Arrays.asList(ipv4ServerSocket, new ServerSocket(ipv4ServerSocket.getLocalPort(), 16, ipv6Loopback));
+            } catch (BindException portTaken) {
+                ipv4ServerSocket.close();
+            }
+        }
+
+        // The client API tries the IPv4 loopback first, so it still connects when no shared port was free.
+        return Collections.singletonList(new ServerSocket(0, 16, ipv4Loopback));
+    }
+
+    private static boolean canBind(InetAddress address) {
+        try (ServerSocket probe = new ServerSocket(0, 1, address)) {
+            return probe.isBound();
+        } catch (IOException exception) {
+            return false;
         }
     }
 

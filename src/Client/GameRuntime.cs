@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -138,9 +137,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
             if (!int.TryParse(descriptor, NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
                 throw PlayersUnavailable(message: "The Minecraft player tracker published an invalid endpoint");
 
-            using TcpClient client = new();
-
-            await client.ConnectAsync(IPAddress.Loopback, port, linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
+            using TcpClient client = await ConnectToAgentAsync(port, linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
 
             using var stream = client.GetStream();
 
