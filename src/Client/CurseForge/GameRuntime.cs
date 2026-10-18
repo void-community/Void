@@ -5,11 +5,11 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
-    private sealed class CurseForgeApiClient(HttpClient hypertextTransferProtocolClient, Uri baseUri, string apiKey)
+    private sealed class CurseForgeApiClient(HttpClient httpClient, Uri baseUri, string apiKey)
     {
         private readonly string _apiKey = apiKey;
         private readonly Uri _baseUri = baseUri;
-        private readonly HttpClient _hypertextTransferProtocolClient = hypertextTransferProtocolClient;
+        private readonly HttpClient _httpClient = httpClient;
         private readonly JsonSerializerOptions _javaScriptObjectNotationOptions = new(JsonSerializerDefaults.Web);
 
         public async Task<List<CurseForgeFile>> GetFilesAsync(List<int> fileIds, CancellationToken cancellationToken)
@@ -62,7 +62,7 @@ internal sealed partial class GameRuntime
         {
             request.Headers.Add(name: "x-api-key", _apiKey);
 
-            using var response = await _hypertextTransferProtocolClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var successfulResponse = response.EnsureSuccessStatusCode();
 

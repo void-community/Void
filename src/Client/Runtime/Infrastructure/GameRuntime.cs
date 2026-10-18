@@ -60,9 +60,9 @@ internal sealed partial class GameRuntime
 
     private static async Task<string> InstallModpack(string slug, int fileId, string apiKey, Uri apiBaseUri, string minecraftDirectory, CancellationToken cancellationToken)
     {
-        using HttpClient hypertextTransferProtocolClient = new();
+        using HttpClient httpClient = new();
 
-        CurseForgeApiClient curseForgeClient = new(hypertextTransferProtocolClient, apiBaseUri, apiKey);
+        CurseForgeApiClient curseForgeClient = new(httpClient, apiBaseUri, apiKey);
 
         await Console.Error.WriteLineAsync(value: "Resolving CurseForge project").ConfigureAwait(continueOnCapturedContext: false);
         var searchResult = await curseForgeClient.SearchModsAsync(MinecraftGameId, slug, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -73,7 +73,7 @@ internal sealed partial class GameRuntime
 
         await Console.Error.WriteLineAsync(value: "Downloading modpack archive").ConfigureAwait(continueOnCapturedContext: false);
         string archiveDownloadUrl = await ResolveDownloadUrlAsync(curseForgeClient, project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        byte[] archiveBytes = await DownloadWithFallbackAsync(hypertextTransferProtocolClient, archiveDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        byte[] archiveBytes = await DownloadWithFallbackAsync(httpClient, archiveDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         await Console.Error.WriteLineAsync(value: "Reading modpack manifest").ConfigureAwait(continueOnCapturedContext: false);
 
@@ -192,7 +192,7 @@ internal sealed partial class GameRuntime
                     await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
 
                     string fileDownloadUrl = await ResolveModFileDownloadUrlAsync(curseForgeClient, fileMeta.ModId, fileMeta.Id, fileMeta.DownloadUrl, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                    byte[] fileBytes = await DownloadWithFallbackAsync(hypertextTransferProtocolClient, fileDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    byte[] fileBytes = await DownloadWithFallbackAsync(httpClient, fileDownloadUrl, apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
                     await File.WriteAllBytesAsync(destinationPath, fileBytes, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                 }
@@ -263,13 +263,13 @@ internal sealed partial class GameRuntime
 
         try
         {
-            using HttpClient hypertextTransferProtocolClient = new();
+            using HttpClient httpClient = new();
 
-            hypertextTransferProtocolClient.DefaultRequestHeaders.UserAgent.ParseAdd(input: "caunt/Void");
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(input: "caunt/Void");
 
             Uri versionsUri = new($"https://api.modrinth.com/v2/project/AANobbMI/version?loaders={loaders}&game_versions={gameVersions}", UriKind.Absolute);
 
-            using var versionsResponse = await hypertextTransferProtocolClient.GetAsync(versionsUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            using var versionsResponse = await httpClient.GetAsync(versionsUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var successfulVersionsResponse = versionsResponse.EnsureSuccessStatusCode();
 
@@ -284,7 +284,7 @@ internal sealed partial class GameRuntime
                 return;
             }
 
-            using var sodiumResponse = await hypertextTransferProtocolClient.GetAsync(sodiumDownload.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            using var sodiumResponse = await httpClient.GetAsync(sodiumDownload.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var successfulSodiumResponse = sodiumResponse.EnsureSuccessStatusCode();
 

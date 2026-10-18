@@ -151,14 +151,14 @@ internal sealed partial class GameRuntime
         return null;
     }
 
-    private static async Task DownloadFileAsync(HttpClient hypertextTransferProtocolClient, Uri downloadUri, string destinationPath, CancellationToken cancellationToken)
+    private static async Task DownloadFileAsync(HttpClient httpClient, Uri downloadUri, string destinationPath, CancellationToken cancellationToken)
     {
         var destinationDirectoryInformation = Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? ".");
         string temporaryPath = Path.Combine(destinationDirectoryInformation.FullName, $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}");
 
         try
         {
-            using var response = await hypertextTransferProtocolClient.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            using var response = await httpClient.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var successfulResponse = response.EnsureSuccessStatusCode();
 
@@ -174,7 +174,7 @@ internal sealed partial class GameRuntime
     }
 
     private static async Task<string> EnsureLwjglCoreFileAsync(
-        HttpClient hypertextTransferProtocolClient,
+        HttpClient httpClient,
         string minecraftDirectory,
         string lwjglVersion,
         string fileName,
@@ -190,7 +190,7 @@ internal sealed partial class GameRuntime
         string libraryPath = Path.Combine([minecraftDirectory, "libraries", "org", "lwjgl", "lwjgl", lwjglVersion, fileName]);
 
         if (!File.Exists(libraryPath))
-            await DownloadFileAsync(hypertextTransferProtocolClient, downloadUri, libraryPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await DownloadFileAsync(httpClient, downloadUri, libraryPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return libraryPath;
     }
@@ -207,13 +207,7 @@ internal sealed partial class GameRuntime
         return gameVersion == "1.7.10_pre4" ? "1.7.10-pre4" : gameVersion;
     }
 
-    private static async Task<bool> HasArmNativesAsync(
-        HttpClient hypertextTransferProtocolClient,
-        string minecraftDirectory,
-        string module,
-        string lwjglVersion,
-        CancellationToken cancellationToken
-    )
+    private static async Task<bool> HasArmNativesAsync(HttpClient httpClient, string minecraftDirectory, string module, string lwjglVersion, CancellationToken cancellationToken)
     {
         string fileName = $"{module}-{lwjglVersion}-{PortableMinecraftArmNativesClassifier}.jar";
 
@@ -233,7 +227,7 @@ internal sealed partial class GameRuntime
             {
                 using HttpRequestMessage request = new(HttpMethod.Head, nativesUri);
 
-                using var response = await hypertextTransferProtocolClient.SendAsync(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
                 if (response.StatusCode is HttpStatusCode.NotFound || response.IsSuccessStatusCode)
                 {
@@ -285,12 +279,7 @@ internal sealed partial class GameRuntime
         return new LwjglLibrary(parts[1], parts[2], parts.Length > 3 ? parts[3] : null, downloadUrl);
     }
 
-    private static async Task<JsonDocument> ReadVersionMetadataAsync(
-        HttpClient hypertextTransferProtocolClient,
-        string minecraftDirectory,
-        string minecraftVersion,
-        CancellationToken cancellationToken
-    )
+    private static async Task<JsonDocument> ReadVersionMetadataAsync(HttpClient httpClient, string minecraftDirectory, string minecraftVersion, CancellationToken cancellationToken)
     {
         Uri manifestUri = new(MojangVersionManifestUrl, UriKind.Absolute);
         MojangVersionManifest? manifest = null;
@@ -298,9 +287,7 @@ internal sealed partial class GameRuntime
 
         if (versionId is "release" or "snapshot")
         {
-            manifest = ParseMojangVersionManifest(
-                await GetStringWithRetriesAsync(hypertextTransferProtocolClient, manifestUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
-            );
+            manifest = ParseMojangVersionManifest(await GetStringWithRetriesAsync(httpClient, manifestUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false));
             versionId = versionId is "release" ? manifest.LatestRelease : manifest.LatestSnapshot;
         }
 
@@ -309,19 +296,17 @@ internal sealed partial class GameRuntime
         if (File.Exists(localPath))
             return JsonDocument.Parse(await File.ReadAllTextAsync(localPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false));
 
-        manifest ??= ParseMojangVersionManifest(
-            await GetStringWithRetriesAsync(hypertextTransferProtocolClient, manifestUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
-        );
+        manifest ??= ParseMojangVersionManifest(await GetStringWithRetriesAsync(httpClient, manifestUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false));
 
         var version = manifest.Versions.FirstOrDefault(candidate => candidate.Id == versionId)
                       ?? throw new InvalidOperationException($"Minecraft {versionId} is not listed in the Mojang version manifest");
 
         return JsonDocument.Parse(
-            await GetStringWithRetriesAsync(hypertextTransferProtocolClient, version.MetadataUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
+            await GetStringWithRetriesAsync(httpClient, version.MetadataUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
         );
     }
 
-    private async Task EnsureArmJavaRuntimeAsync(HttpClient hypertextTransferProtocolClient, int javaMajorVersion, string minecraftVersion, CancellationToken cancellationToken)
+    private async Task EnsureArmJavaRuntimeAsync(HttpClient httpClient, int javaMajorVersion, string minecraftVersion, CancellationToken cancellationToken)
     {
         IEnumerable<string> javaDirectories = Directory.Exists(PortableMinecraftJvmDirectory) ? Directory.EnumerateDirectories(PortableMinecraftJvmDirectory, searchPattern: "zulu-*") : [];
 
@@ -346,7 +331,7 @@ internal sealed partial class GameRuntime
         );
 
         using JsonDocument packages = JsonDocument.Parse(
-            await GetStringWithRetriesAsync(hypertextTransferProtocolClient, new Uri(AzulPackagesUrl + packagesQuery, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
+            await GetStringWithRetriesAsync(httpClient, new Uri(AzulPackagesUrl + packagesQuery, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
         );
 
         string downloadUrl = SelectAzulJreDownloadUrl(packages.RootElement)
@@ -358,7 +343,7 @@ internal sealed partial class GameRuntime
 
         try
         {
-            await DownloadFileAsync(hypertextTransferProtocolClient, new Uri(downloadUrl, UriKind.Absolute), archivePath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await DownloadFileAsync(httpClient, new Uri(downloadUrl, UriKind.Absolute), archivePath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var stagingDirectoryInformation = Directory.CreateDirectory(stagingDirectory);
 
@@ -398,13 +383,13 @@ internal sealed partial class GameRuntime
             return null;
         }
 
-        using HttpClient hypertextTransferProtocolClient = CreateUpstreamHttpClient();
+        using HttpClient httpClient = CreateUpstreamHttpClient();
 
-        using var versionMetadata = await ReadVersionMetadataAsync(hypertextTransferProtocolClient, minecraftDirectory, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        using var versionMetadata = await ReadVersionMetadataAsync(httpClient, minecraftDirectory, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         var plan = CreateArmLwjglPlan(versionMetadata.RootElement);
 
-        await EnsureArmJavaRuntimeAsync(hypertextTransferProtocolClient, plan.JavaMajorVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await EnsureArmJavaRuntimeAsync(httpClient, plan.JavaMajorVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         if (plan.UsesLegacyLwjgl)
         {
@@ -419,7 +404,7 @@ internal sealed partial class GameRuntime
 
         foreach (string module in plan.Modules)
         {
-            bool nativesAvailable = await HasArmNativesAsync(hypertextTransferProtocolClient, minecraftDirectory, module, fixVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            bool nativesAvailable = await HasArmNativesAsync(httpClient, minecraftDirectory, module, fixVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             if (!nativesAvailable)
                 excludedLibraries.Add($"org.lwjgl:{module}:*:{PortableMinecraftArmNativesClassifier}");
@@ -432,17 +417,10 @@ internal sealed partial class GameRuntime
             Uri nativesUri = new($"{MavenCentralRepositoryUrl}/org/lwjgl/lwjgl/{fixVersion}/{nativesFileName}", UriKind.Absolute);
 
             includedClassPaths.Add(
-                await EnsureLwjglCoreFileAsync(
-                    hypertextTransferProtocolClient,
-                    minecraftDirectory,
-                    fixVersion,
-                    $"lwjgl-{fixVersion}-unsafe.jar",
-                    unsafeCoreDownloadUri,
-                    cancellationToken
-                ).ConfigureAwait(continueOnCapturedContext: false)
+                await EnsureLwjglCoreFileAsync(httpClient, minecraftDirectory, fixVersion, $"lwjgl-{fixVersion}-unsafe.jar", unsafeCoreDownloadUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
             );
             includedClassPaths.Add(
-                await EnsureLwjglCoreFileAsync(hypertextTransferProtocolClient, minecraftDirectory, fixVersion, nativesFileName, nativesUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
+                await EnsureLwjglCoreFileAsync(httpClient, minecraftDirectory, fixVersion, nativesFileName, nativesUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
             );
         }
 

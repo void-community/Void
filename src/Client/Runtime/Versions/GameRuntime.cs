@@ -177,18 +177,18 @@ internal sealed partial class GameRuntime
 
     private static HttpClient CreateUpstreamHttpClient()
     {
-        HttpClient hypertextTransferProtocolClient = new() { Timeout = TimeSpan.FromSeconds(seconds: 30) };
+        HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(seconds: 30) };
 
-        hypertextTransferProtocolClient.DefaultRequestHeaders.UserAgent.ParseAdd(UpstreamUserAgent);
+        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(UpstreamUserAgent);
 
-        return hypertextTransferProtocolClient;
+        return httpClient;
     }
 
-    private static async Task<IReadOnlyList<string>> GetLegacyNeoForgeVersionsAsync(HttpClient hypertextTransferProtocolClient, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> GetLegacyNeoForgeVersionsAsync(HttpClient httpClient, CancellationToken cancellationToken)
     {
         try
         {
-            string metadataXml = await GetStringWithRetriesAsync(hypertextTransferProtocolClient, new Uri(LegacyNeoForgeMavenMetadataUrl, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            string metadataXml = await GetStringWithRetriesAsync(httpClient, new Uri(LegacyNeoForgeMavenMetadataUrl, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             return ParseMavenMetadataVersions(metadataXml);
         }
@@ -200,13 +200,13 @@ internal sealed partial class GameRuntime
         }
     }
 
-    private static async Task<string> GetStringWithRetriesAsync(HttpClient hypertextTransferProtocolClient, Uri uri, CancellationToken cancellationToken)
+    private static async Task<string> GetStringWithRetriesAsync(HttpClient httpClient, Uri uri, CancellationToken cancellationToken)
     {
         for (int attempt = 1; attempt <= UpstreamRequestAttempts; attempt++)
         {
             try
             {
-                return await hypertextTransferProtocolClient.GetStringAsync(uri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                return await httpClient.GetStringAsync(uri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             }
             catch (Exception exception) when (attempt < UpstreamRequestAttempts && IsTransientUpstreamFailure(exception, cancellationToken))
             {
@@ -225,11 +225,11 @@ internal sealed partial class GameRuntime
 
     private static async Task<NeoForgeSelection> ResolveLatestStableNeoForgeAsync(string? maximumMinecraftVersion, CancellationToken cancellationToken)
     {
-        using HttpClient hypertextTransferProtocolClient = CreateUpstreamHttpClient();
+        using HttpClient httpClient = CreateUpstreamHttpClient();
 
-        string manifestJson = await GetStringWithRetriesAsync(hypertextTransferProtocolClient, new Uri(MojangVersionManifestUrl, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        string neoForgeMetadataXml = await GetStringWithRetriesAsync(hypertextTransferProtocolClient, new Uri(NeoForgeMavenMetadataUrl, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        var legacyNeoForgeVersions = await GetLegacyNeoForgeVersionsAsync(hypertextTransferProtocolClient, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string manifestJson = await GetStringWithRetriesAsync(httpClient, new Uri(MojangVersionManifestUrl, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string neoForgeMetadataXml = await GetStringWithRetriesAsync(httpClient, new Uri(NeoForgeMavenMetadataUrl, UriKind.Absolute), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var legacyNeoForgeVersions = await GetLegacyNeoForgeVersionsAsync(httpClient, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         var manifest = ParseMojangVersionManifest(manifestJson);
         IReadOnlyList<string> neoForgeVersions = [.. ParseMavenMetadataVersions(neoForgeMetadataXml), .. legacyNeoForgeVersions];
 

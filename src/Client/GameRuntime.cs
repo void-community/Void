@@ -407,14 +407,14 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 : Path.Combine(minecraftDirectory, path2: "mods");
     }
 
-    private static async Task<byte[]> DownloadWithFallbackAsync(HttpClient hypertextTransferProtocolClient, string downloadUrl, string apiKey, CancellationToken cancellationToken)
+    private static async Task<byte[]> DownloadWithFallbackAsync(HttpClient httpClient, string downloadUrl, string apiKey, CancellationToken cancellationToken)
     {
         using HttpRequestMessage request = new(HttpMethod.Get, downloadUrl);
 
         if (downloadUrl.Contains(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
             request.Headers.Add(name: "x-api-key", apiKey);
 
-        using var response = await hypertextTransferProtocolClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         var successfulResponse = response.EnsureSuccessStatusCode();
 
