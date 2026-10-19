@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 
 namespace Void.Minecraft;
@@ -101,5 +102,49 @@ public record ReleaseVersion(int Major, int Minor, int Patch) : IComparable<Rele
     public static implicit operator string(ReleaseVersion version)
     {
         return version.ToString();
+    }
+
+    /// <summary>
+    /// Determines whether one release version is greater than another. <see langword="null"/> sorts before any version.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true" /> when <paramref name="left" /> is a later release; otherwise, <see langword="false" />.</returns>
+    public static bool operator >(ReleaseVersion? left, ReleaseVersion? right)
+    {
+        return Comparer<ReleaseVersion>.Default.Compare(left, right) > 0;
+    }
+
+    /// <summary>
+    /// Determines whether one release version is less than another. <see langword="null"/> sorts before any version.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true" /> when <paramref name="left" /> is an earlier release; otherwise, <see langword="false" />.</returns>
+    public static bool operator <(ReleaseVersion? left, ReleaseVersion? right)
+    {
+        return Comparer<ReleaseVersion>.Default.Compare(left, right) < 0;
+    }
+
+    /// <summary>
+    /// Determines whether one release version is greater than or equal to another. <see langword="null"/> sorts before any version.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true" /> when <paramref name="left" /> is not an earlier release; otherwise, <see langword="false" />.</returns>
+    public static bool operator >=(ReleaseVersion? left, ReleaseVersion? right)
+    {
+        return Comparer<ReleaseVersion>.Default.Compare(left, right) >= 0;
+    }
+
+    /// <summary>
+    /// Determines whether one release version is less than or equal to another. <see langword="null"/> sorts before any version.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true" /> when <paramref name="left" /> is not a later release; otherwise, <see langword="false" />.</returns>
+    public static bool operator <=(ReleaseVersion? left, ReleaseVersion? right)
+    {
+        return Comparer<ReleaseVersion>.Default.Compare(left, right) <= 0;
     }
 }
