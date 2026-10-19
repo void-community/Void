@@ -32,7 +32,11 @@ public sealed class GuidConverter : JsonConverter<Guid>
 {
     public override Guid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        return reader.GetGuid();
+        // Guid.Parse accepts UUIDs with and without dashes, unlike Utf8JsonReader.GetGuid, which needs the dashed form.
+        if (reader.TokenType is JsonTokenType.String && !reader.HasValueSequence && !reader.ValueIsEscaped)
+            return Guid.Parse(reader.ValueSpan);
+
+        return Guid.Parse(reader.GetString() ?? throw new JsonException($"{nameof(Guid)} value cannot be null."));
     }
 
     public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options)

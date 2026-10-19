@@ -10,17 +10,25 @@ namespace Void.Minecraft.Profiles.Serializers;
 public sealed class UuidJsonConverter : JsonConverter<Uuid>
 {
     /// <summary>
-    /// Reads a UUID from the current JSON string token.
+    /// Reads a UUID from the current JSON string token, written with or without dashes.
     /// </summary>
+    /// <remarks>
+    /// Mojang's services write UUIDs without dashes, for example the profile the session server returns for a joining player,
+    /// while Minecraft and most tools write them with dashes.
+    /// </remarks>
     /// <param name="reader">The JSON reader positioned at the UUID string.</param>
     /// <param name="typeToConvert">The target type requested by the serializer.</param>
     /// <param name="options">The active serializer options.</param>
     /// <returns>The parsed UUID.</returns>
-    /// <exception cref="InvalidOperationException">The JSON token is not a UUID string.</exception>
+    /// <exception cref="InvalidOperationException">The JSON token is not a string.</exception>
+    /// <exception cref="JsonException">The JSON token is null.</exception>
     /// <exception cref="FormatException">The string is not a recognized UUID representation.</exception>
     public override Uuid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        return reader.GetGuid();
+        if (reader.TokenType is JsonTokenType.String && !reader.HasValueSequence && !reader.ValueIsEscaped)
+            return Uuid.Parse(reader.ValueSpan);
+
+        return Uuid.Parse(reader.GetString() ?? throw new JsonException($"{nameof(Uuid)} value cannot be null."));
     }
 
     /// <summary>
