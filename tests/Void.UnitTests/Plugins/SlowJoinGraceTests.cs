@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Void.Proxy.Plugins.ModsSupport.SlowJoin;
 using Void.Proxy.Plugins.ModsSupport.SlowJoin.Services;
 using Void.UnitTests.Services.Lifecycle;
@@ -15,15 +16,15 @@ public class SlowJoinGraceTests
     {
         var grace = CreateGrace();
 
-        Assert.True(grace.TryStartProbe(5, Joined));
-        Assert.False(grace.TryStartProbe(6, Joined.AddSeconds(15)));
+        Assert.True(grace.TryStartProbe(5, Joined, out _));
+        Assert.False(grace.TryStartProbe(6, Joined.AddSeconds(15), out _));
         Assert.False(grace.TryAnswer(6, Joined.AddSeconds(20), out _, out _));
 
         Assert.True(grace.TryAnswer(5, Joined.AddSeconds(42), out var waited, out int answeredPromptly));
         Assert.Equal(TimeSpan.FromSeconds(42), waited);
         Assert.Equal(0, answeredPromptly);
         Assert.False(grace.TryAnswer(5, Joined.AddSeconds(43), out _, out _));
-        Assert.True(grace.TryStartProbe(7, Joined.AddSeconds(45)));
+        Assert.True(grace.TryStartProbe(7, Joined.AddSeconds(45), out _));
     }
 
     [Fact]
@@ -40,7 +41,7 @@ public class SlowJoinGraceTests
 
         Answer(grace, probeId: 5, sentAfterSeconds: 105, waitedSeconds: 0.01, expectedRun: 3);
         Assert.True(grace.IsOver);
-        Assert.False(grace.TryStartProbe(6, Joined.AddSeconds(120)));
+        Assert.False(grace.TryStartProbe(6, Joined.AddSeconds(120), out _));
     }
 
     [Fact]
@@ -69,10 +70,42 @@ public class SlowJoinGraceTests
         Answer(grace, probeId: 5, sentAfterSeconds: 0, waitedSeconds: 1, expectedRun: 1);
         Assert.False(grace.TryTimeOut(Joined.AddMinutes(10)));
 
-        Assert.True(grace.TryStartProbe(6, Joined.AddMinutes(1)));
+        Assert.True(grace.TryStartProbe(6, Joined.AddMinutes(1), out _));
         Assert.False(grace.TryTimeOut(Joined.AddMinutes(4).AddMilliseconds(-1)));
         Assert.True(grace.TryTimeOut(Joined.AddMinutes(4)));
         Assert.False(grace.TryAnswer(6, Joined.AddMinutes(5), out _, out _));
+    }
+
+    [Fact]
+    public void EveryWayAProbeEndsSettlesItsTimeout()
+    {
+        // A timeout still waiting after its probe would keep the link, and with it the protocol plugin, from unloading.
+        var grace = CreateGrace();
+
+        Assert.True(grace.TryStartProbe(1, Joined, out var answered));
+        Assert.False(answered.IsCancellationRequested);
+        Assert.True(grace.TryAnswer(1, Joined.AddMilliseconds(1), out _, out _));
+        Assert.True(answered.IsCancellationRequested);
+
+        Assert.True(grace.TryStartProbe(2, Joined.AddSeconds(15), out var timedOut));
+        Assert.True(grace.TryTimeOut(Joined.AddMinutes(4)));
+        Assert.True(timedOut.IsCancellationRequested);
+
+        var ended = CreateGrace();
+        Assert.True(ended.TryStartProbe(3, Joined, out var outstanding));
+        ended.End();
+        Assert.True(outstanding.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void AnAnswerBeforeTheTimeoutStartsLeavesNothingWaiting()
+    {
+        // The player can answer before the proxy has finished sending the probe, so the timeout may only start afterwards.
+        var grace = CreateGrace();
+
+        Assert.True(grace.TryStartProbe(1, Joined, out var settled));
+        Assert.True(grace.TryAnswer(1, Joined.AddMilliseconds(1), out _, out _));
+        Assert.True(Task.Delay(grace.Timeout, settled).IsCanceled);
     }
 
     [Fact]
@@ -98,7 +131,7 @@ public class SlowJoinGraceTests
     {
         var sentAt = Joined.AddSeconds(sentAfterSeconds);
 
-        Assert.True(grace.TryStartProbe(probeId, sentAt));
+        Assert.True(grace.TryStartProbe(probeId, sentAt, out _));
         Assert.True(grace.TryAnswer(probeId, sentAt.AddSeconds(waitedSeconds), out _, out int answeredPromptly));
         Assert.Equal(expectedRun, answeredPromptly);
     }

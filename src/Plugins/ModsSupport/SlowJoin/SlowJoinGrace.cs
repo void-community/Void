@@ -17,6 +17,7 @@ public class SlowJoinGrace(ILink link, TimeSpan timeout, int promptAnswers, Time
     private readonly Lock _lock = new();
     private long? _probeId;
     private DateTimeOffset _probeSentAt;
+    private CancellationTokenSource? _probeSettled;
     private int _answeredPromptly;
     private bool _over;
 
@@ -40,16 +41,25 @@ public class SlowJoinGrace(ILink link, TimeSpan timeout, int promptAnswers, Time
     /// <summary>
     /// Records a probe to send, unless one is already waiting for an answer or the grace period is over.
     /// </summary>
+    /// <param name="probeId">The keep-alive id of the probe.</param>
+    /// <param name="now">When the probe is sent.</param>
+    /// <param name="settled">
+    /// Cancelled once the probe is answered, times out or the grace period ends, so a wait for its timeout never outlives the probe.
+    /// </param>
     /// <returns><see langword="true" /> when the probe should be sent; otherwise, <see langword="false" />.</returns>
-    public bool TryStartProbe(long probeId, DateTimeOffset now)
+    public bool TryStartProbe(long probeId, DateTimeOffset now, out CancellationToken settled)
     {
         lock (_lock)
         {
+            settled = CancellationToken.None;
+
             if (_over || _probeId is not null)
                 return false;
 
             _probeId = probeId;
             _probeSentAt = now;
+            _probeSettled = new CancellationTokenSource();
+            settled = _probeSettled.Token;
             return true;
         }
     }
@@ -74,6 +84,7 @@ public class SlowJoinGrace(ILink link, TimeSpan timeout, int promptAnswers, Time
                 return false;
 
             _probeId = null;
+            SettleProbe();
             _answeredPromptly = answeredPromptly = waited <= PromptAnswerTime ? _answeredPromptly + 1 : 0;
             _over = answeredPromptly >= PromptAnswers;
             return true;
@@ -92,6 +103,7 @@ public class SlowJoinGrace(ILink link, TimeSpan timeout, int promptAnswers, Time
                 return false;
 
             _over = true;
+            SettleProbe();
             return true;
         }
     }
@@ -99,6 +111,16 @@ public class SlowJoinGrace(ILink link, TimeSpan timeout, int promptAnswers, Time
     public void End()
     {
         lock (_lock)
+        {
             _over = true;
+            SettleProbe();
+        }
+    }
+
+    private void SettleProbe()
+    {
+        _probeSettled?.Cancel();
+        _probeSettled?.Dispose();
+        _probeSettled = null;
     }
 }

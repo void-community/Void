@@ -24,8 +24,6 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
 {
     private readonly Lock _lock = new();
     private SlowJoinGrace? _grace;
-    private CancellationTokenSource? _timeoutCancellation;
-    private Task? _timeoutTask;
 
     /// <summary>
     /// Chooses a value in seconds: the program argument when given, otherwise the setting, and at least one second.
@@ -77,7 +75,6 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
                 break;
             case KeepAliveResponsePacket keepAliveResponse when grace.TryAnswer(keepAliveResponse.Id, DateTimeOffset.UtcNow, out var waited, out int answeredPromptly):
                 @event.Cancel();
-                CancelTimeout();
 
                 if (grace.IsOver)
                     @event.Player.Logger.LogInformation("Player answered {Count} Keep Alives in a row on {Server} within {PromptAnswerTime}, forwarding Keep Alives", answeredPromptly, @event.Link.Server, grace.PromptAnswerTime);
@@ -114,15 +111,18 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
         var player = @event.Player;
         long probeId = KeepAliveTracker.CreateRequestId(player.ProtocolVersion);
 
-        if (player.Phase is not Phase.Play || !grace.TryStartProbe(probeId, DateTimeOffset.UtcNow))
+        if (player.Phase is not Phase.Play || !grace.TryStartProbe(probeId, DateTimeOffset.UtcNow, out var probeSettled))
         {
             player.Logger.LogTrace("Answered Keep Alive request {Id} from {Server} while the player loads", keepAliveRequest.Id, @event.Link.Server);
             return;
         }
 
         player.Logger.LogTrace("Answered Keep Alive request {Id} from {Server} while the player loads, probing with {ProbeId}", keepAliveRequest.Id, @event.Link.Server, probeId);
+
+        // The timeout waits on the probe itself, so an answer that arrives before the send completes still ends the wait, and the
+        // wait can't keep the link and its plugin's objects alive after the probe.
+        _ = TimeOutAsync(grace, player, probeSettled);
         await player.SendPacketAsync(new KeepAliveRequestPacket { Id = probeId }, cancellationToken);
-        ScheduleTimeout(grace, player);
     }
 
     private int? GetArgument(Option<int> option)
@@ -130,28 +130,11 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
         return console.TryGetOptionValue(option, out var value) ? value : null;
     }
 
-    private void ScheduleTimeout(SlowJoinGrace grace, IPlayer player)
+    private static async Task TimeOutAsync(SlowJoinGrace grace, IPlayer player, CancellationToken probeSettled)
     {
-        var cancellation = new CancellationTokenSource();
+        await Task.Delay(grace.Timeout, probeSettled).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
-        lock (_lock)
-        {
-            if (!ReferenceEquals(_grace, grace))
-            {
-                cancellation.Dispose();
-                return;
-            }
-
-            _timeoutCancellation = cancellation;
-            _timeoutTask = TimeOutAsync(grace, player, cancellation.Token);
-        }
-    }
-
-    private static async Task TimeOutAsync(SlowJoinGrace grace, IPlayer player, CancellationToken cancellationToken)
-    {
-        await Task.Delay(grace.Timeout, cancellationToken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-
-        if (cancellationToken.IsCancellationRequested || !ReferenceEquals(player.Link, grace.Link) || !grace.TryTimeOut(DateTimeOffset.UtcNow))
+        if (probeSettled.IsCancellationRequested || !ReferenceEquals(player.Link, grace.Link) || !grace.TryTimeOut(DateTimeOffset.UtcNow))
             return;
 
         player.Logger.LogInformation("Keep alive timed out while loading on {Server}", grace.Link.Server);
@@ -166,25 +149,12 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
         }
     }
 
-    private void CancelTimeout()
-    {
-        lock (_lock)
-        {
-            _timeoutCancellation?.Cancel();
-            _timeoutCancellation?.Dispose();
-            _timeoutCancellation = null;
-        }
-    }
-
     private void ReplaceGrace(SlowJoinGrace? grace)
     {
         lock (_lock)
         {
             _grace?.End();
             _grace = grace;
-            _timeoutCancellation?.Cancel();
-            _timeoutCancellation?.Dispose();
-            _timeoutCancellation = null;
         }
     }
 }
