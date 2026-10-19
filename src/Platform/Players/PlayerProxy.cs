@@ -18,11 +18,6 @@ public class PlayerProxy(IPlayer player) : IPlayer
     public IPlayerContext Context => Source.Context;
     public IPlayer Source { get; private set; } = player is not PlayerProxy ? player : throw new InvalidOperationException($"PlayerProxy cannot be set as {nameof(Source)}");
 
-    /// <summary>
-    /// Gets or sets whether listeners were already told that the player disconnected.
-    /// </summary>
-    internal bool IsDisconnecting { get; set; }
-
     public void Replace(IPlayer player)
     {
         if (Client != player.Client)

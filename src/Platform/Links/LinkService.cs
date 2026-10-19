@@ -78,9 +78,9 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
                     if (result is ConnectionResult.Connected)
                         return ConnectionResult.Connected;
                 }
-                catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+                catch (StreamException)
                 {
-                    // Try next server, unless the player has left
+                    // Try next server
                 }
             }
 

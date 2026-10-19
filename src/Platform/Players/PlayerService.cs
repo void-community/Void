@@ -68,7 +68,16 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
             if (exception is not StreamException)
                 logger.LogError(exception, "Client {RemoteEndPoint} cannot be proxied", player.RemoteEndPoint);
 
-            await EndAsync(player, "Failed to find a server for you", cancellationToken);
+            if (player.Context.Channel is { IsAlive: true })
+            {
+                await KickPlayerAsync(player, "Failed to find a server for you", cancellationToken);
+            }
+            else
+            {
+                // Disposing the player closes its channel, but a player that failed before getting one would keep its connection open
+                player.Client.Close();
+                await DisconnectAsync(player, cancellationToken);
+            }
         }
     }
 
@@ -133,10 +142,11 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         {
             channel.Close();
             player.Client.Close();
-        }
 
-        if (!HasLiveLink(player))
-            await RaiseDisconnectedOnceAsync(player, cancellationToken);
+            // A live link announces the disconnect when it stops. A link that was stopped for a server switch can still be listed.
+            if (!links.TryGetLink(player, out var link) || !link.IsAlive)
+                await DisconnectAsync(player, cancellationToken);
+        }
 
         logger.LogTrace("Player {Player} kicked", player);
     }
@@ -151,7 +161,7 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
 
         if (!isPlayerAlive)
         {
-            await RaiseDisconnectedOnceAsync(@event.Player, cancellationToken);
+            await DisconnectAsync(@event.Player, cancellationToken);
             return;
         }
 
@@ -176,86 +186,21 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
             else
                 logger.LogError(exception, "Player {Player} cannot be moved to another server", @event.Player);
 
-            await EndAsync(@event.Player, "Failed to find a next server for you", cancellationToken);
+            if (@event.Link.PlayerChannel.IsAlive)
+                await KickPlayerAsync(@event.Player, "Failed to find a next server for you", cancellationToken);
+            else
+                await DisconnectAsync(@event.Player, cancellationToken);
         }
     }
 
-    [Subscribe(PostOrder.Last)]
-    public async ValueTask OnPlayerDisconnected(PlayerDisconnectedEvent @event, CancellationToken cancellationToken)
-    {
-        await RemovePlayerAsync(@event.Player, cancellationToken);
-    }
-
-    /// <summary>
-    /// Ends a connection attempt that failed. A player that is still connected is kicked, and one that has already left is
-    /// disconnected, so the player never stays in the list, where its name would still count as online.
-    /// </summary>
-    private async ValueTask EndAsync(IPlayer player, string kickText, CancellationToken cancellationToken)
+    private async ValueTask DisconnectAsync(IPlayer player, CancellationToken cancellationToken)
     {
         player = player.Unwrap();
 
-        if (HasLiveLink(player))
-            return;
-
-        // Kicking a player without a channel would first try to build one, which waits for bytes a closed client never sends.
-        if (player.Context.Channel is { IsAlive: true })
-        {
-            try
-            {
-                await KickPlayerAsync(player, kickText, cancellationToken);
-            }
-            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(exception, "Player {Player} could not be kicked after a failed connection", player);
-            }
-        }
-        else
-        {
-            player.Context.Channel?.Close();
-            player.Client.Close();
-        }
-
-        await RaiseDisconnectedOnceAsync(player, cancellationToken);
-    }
-
-    private bool HasLiveLink(IPlayer player)
-    {
-        return links.TryGetLink(player, out var link) && link.IsAlive;
-    }
-
-    /// <summary>
-    /// Tells listeners that the player has disconnected, once per player. A kick and a link that stops can both end the same player.
-    /// </summary>
-    private async ValueTask RaiseDisconnectedOnceAsync(IPlayer player, CancellationToken cancellationToken)
-    {
-        player = player.Unwrap();
-
+        // Whoever takes the player off the list announces it, so a kick racing a link stop can't announce it twice
         using (await _lock.LockAsync(cancellationToken))
         {
-            var proxy = _players.FirstOrDefault(proxy => proxy.Source == player);
-
-            if (proxy is null || proxy.IsDisconnecting)
-                return;
-
-            proxy.IsDisconnecting = true;
-        }
-
-        try
-        {
-            await events.ThrowAsync(new PlayerDisconnectedEvent(player), cancellationToken);
-        }
-        finally
-        {
-            // A listener that throws would otherwise skip the removal and leave the player in the list.
-            await RemovePlayerAsync(player, CancellationToken.None);
-        }
-    }
-
-    private async ValueTask RemovePlayerAsync(IPlayer player, CancellationToken cancellationToken)
-    {
-        using (var sync = await _lock.LockAsync(cancellationToken))
-        {
-            var count = _players.RemoveAll(proxy => proxy == player || proxy.Source == player);
+            var count = _players.RemoveAll(proxy => proxy.Source == player);
 
             if (count is 0)
                 return;
@@ -264,9 +209,16 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
                 logger.LogWarning("Multiple instances of same player disconnected at once");
         }
 
-        logger.LogInformation("Player {Player} disconnected", player);
+        try
+        {
+            await events.ThrowAsync(new PlayerDisconnectedEvent(player), cancellationToken);
+        }
+        finally
+        {
+            logger.LogInformation("Player {Player} disconnected", player);
 
-        dependencies.DisposePlayerScope(player.Context);
-        await player.DisposeAsync();
+            dependencies.DisposePlayerScope(player.Context);
+            await player.DisposeAsync();
+        }
     }
 }
