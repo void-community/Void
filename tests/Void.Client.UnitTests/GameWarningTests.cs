@@ -44,20 +44,32 @@ public sealed class GameWarningTests
         GameRuntime.VisibleWindow dialog = new("14680103", "Memory Settings");
         GameRuntime.VisibleWindow crashReporter = new("14680071", "Crash Assistant", ProcessId: 200);
 
-        var first = GameRuntime.TrackForeignWindows([game, dialog, crashReporter], gameProcessId: 100, new Dictionary<string, DateTimeOffset>(), start);
+        var first = GameRuntime.TrackForeignWindows([game, dialog, crashReporter], gameProcessId: 100, game.Id, new Dictionary<string, DateTimeOffset>(), start);
         Assert.Equal(new Dictionary<string, DateTimeOffset> { [dialog.Id] = start, [crashReporter.Id] = start }, first);
 
-        var later = GameRuntime.TrackForeignWindows([game, dialog], gameProcessId: 100, first, start.AddSeconds(10));
+        var later = GameRuntime.TrackForeignWindows([game, dialog], gameProcessId: 100, game.Id, first, start.AddSeconds(10));
         Assert.Equal(new Dictionary<string, DateTimeOffset> { [dialog.Id] = start }, later);
 
-        var reopened = GameRuntime.TrackForeignWindows([game, dialog, crashReporter], gameProcessId: 100, later, start.AddSeconds(12));
+        var reopened = GameRuntime.TrackForeignWindows([game, dialog, crashReporter], gameProcessId: 100, game.Id, later, start.AddSeconds(12));
         Assert.Equal(start.AddSeconds(12), reopened[crashReporter.Id]);
+    }
+
+    [Fact]
+    public void TheGameWindowOfLwjgl2IsNotForeignWithoutAProcess()
+    {
+        // LWJGL2 games (Minecraft 1.12 and older) don't set _NET_WM_PID, so only the window id tells their window apart.
+        GameRuntime.VisibleWindow game = new("16777218", "Minecraft 1.10");
+        GameRuntime.VisibleWindow dialog = new("14680103", "Memory Settings");
+
+        var foreign = GameRuntime.TrackForeignWindows([game, dialog], gameProcessId: 100, game.Id, new Dictionary<string, DateTimeOffset>(), DateTimeOffset.UnixEpoch);
+
+        Assert.Equal([dialog.Id], foreign.Keys);
     }
 
     [Fact]
     public void TracksNothingWhileTheGameProcessIsUnknown()
     {
-        Assert.Empty(GameRuntime.TrackForeignWindows([new("14680103", "Memory Settings")], gameProcessId: null, new Dictionary<string, DateTimeOffset>(), DateTimeOffset.UnixEpoch));
+        Assert.Empty(GameRuntime.TrackForeignWindows([new("14680103", "Memory Settings")], gameProcessId: null, gameWindowId: null, new Dictionary<string, DateTimeOffset>(), DateTimeOffset.UnixEpoch));
     }
 
     private sealed class ChunkedReader(string text) : StringReader(text)

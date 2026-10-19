@@ -18,9 +18,14 @@ internal sealed partial class GameRuntime
     /// Returns the visible windows that don't belong to the game JVM, such as dialogs of other programs, each with the time it has
     /// been seen since. A window drops out once it closes or turns out to be the game's.
     /// </summary>
+    /// <remarks>
+    /// LWJGL2, which Minecraft 1.12 and older use, doesn't set _NET_WM_PID on the game window, so the game window also counts as the
+    /// game's by its id.
+    /// </remarks>
     internal static Dictionary<string, DateTimeOffset> TrackForeignWindows(
         IReadOnlyList<VisibleWindow> windows,
         int? gameProcessId,
+        string? gameWindowId,
         IReadOnlyDictionary<string, DateTimeOffset> firstSeen,
         DateTimeOffset now
     )
@@ -29,7 +34,7 @@ internal sealed partial class GameRuntime
         return gameProcessId is null
             ? []
             : windows
-            .Where(window => window.ProcessId != gameProcessId)
+            .Where(window => window.ProcessId != gameProcessId && window.Id != gameWindowId)
             .DistinctBy(window => window.Id)
             .ToDictionary(window => window.Id, window => firstSeen.GetValueOrDefault(window.Id, now), StringComparer.Ordinal);
     }
@@ -829,8 +834,10 @@ internal sealed partial class GameRuntime
                 );
             }
 
+            // The game window is the largest one, as for screenshots, because dialogs are smaller than the display-sized game window.
+            string? gameWindowId = await FindLargestWindow(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             var now = DateTimeOffset.UtcNow;
-            foreignWindows = TrackForeignWindows(windows, FindJavaProcessId(game.Process.Id), foreignWindows, now);
+            foreignWindows = TrackForeignWindows(windows, FindJavaProcessId(game.Process.Id), gameWindowId, foreignWindows, now);
             blockingWindowId = foreignWindows.Where(window => now - window.Value >= timeout).Select(window => window.Key).FirstOrDefault();
         }
 
