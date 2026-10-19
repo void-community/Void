@@ -186,7 +186,8 @@ RUN test -n "$MINECRAFT_VERSION"
 RUN portablemc-dry-run-with-retries "mojang:$MINECRAFT_VERSION"
 
 # Publish the API once during the image build. Runtime startup never restores or compiles source code.
-FROM debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 AS dotnet-builder
+# The API and agent are platform independent, so they build once on the build machine instead of under emulation per platform.
+FROM --platform=$BUILDPLATFORM debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 AS dotnet-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl default-jdk-headless libicu-dev maven \
  && rm -rf /var/lib/apt/lists/* \
@@ -199,9 +200,14 @@ ENV DOTNET_ROOT=/usr/share/dotnet
 ENV PATH="${DOTNET_ROOT}:${PATH}"
 
 WORKDIR /source
-COPY . .
+# The agent builds from its own directory and the API restores from its project file before the rest is copied, so a change to
+# one reuses the other's layers.
+COPY Agent/ Agent/
 RUN mvn --batch-mode --file Agent/pom.xml package
-RUN dotnet publish PortableMinecraftClient.csproj --configuration Release --output /publish /p:UseAppHost=false
+COPY PortableMinecraftClient.csproj ./
+RUN dotnet restore PortableMinecraftClient.csproj
+COPY . .
+RUN dotnet publish PortableMinecraftClient.csproj --configuration Release --output /publish /p:UseAppHost=false --no-restore
 
 FROM scratch AS application-files
 
