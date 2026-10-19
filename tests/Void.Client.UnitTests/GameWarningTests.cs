@@ -21,7 +21,7 @@ public sealed class GameWarningTests
 
         await new GameRuntime().PumpOutputAsync(reader, console, sessionId: null, stream: "stderr", warnings.Writer, TestContext.Current.CancellationToken);
 
-        Assert.Equal(text, console.ToString());
+        Assert.Equal(text.Replace("\r\n", "\n", StringComparison.Ordinal), console.ToString());
         Assert.True(warnings.Reader.TryRead(out string? warning));
         Assert.Equal(DialogWarning, warning);
         Assert.False(warnings.Reader.TryRead(out _));

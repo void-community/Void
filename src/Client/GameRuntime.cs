@@ -335,6 +335,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         char[] buffer = new char[4096];
         string pending = "";
         string unfinishedLine = "";
+        ConsoleTextNormalizer normalizer = new();
 
         try
         {
@@ -342,7 +343,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
             while (count > 0)
             {
-                string text = new(buffer, startIndex: 0, count);
+                string text = normalizer.Normalize(buffer.AsSpan(start: 0, count));
                 await console.WriteAsync(text).ConfigureAwait(continueOnCapturedContext: false);
                 pending += text;
 
@@ -372,6 +373,10 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         }
         finally
         {
+            string remainder = normalizer.Flush();
+            await console.WriteAsync(remainder).ConfigureAwait(continueOnCapturedContext: false);
+            pending += remainder;
+
             if (sessionId is { } id)
                 await (diagnostics?.WriteOutputAsync(id, stream, pending, cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
         }
