@@ -21,7 +21,6 @@ namespace Void.Proxy.Commands;
 public class CommandService(ILogger<ICommandService> logger, IEventService events) : ICommandService, IEventListener
 {
     private readonly CommandDispatcher _dispatcher = new();
-    private readonly Dictionary<ParseResults, Task<int>> _executions = [];
 
     public ICommandDispatcher Dispatcher => _dispatcher;
 
@@ -51,39 +50,23 @@ public class CommandService(ILogger<ICommandService> logger, IEventService event
                 return CommandExecutionResult.Forwarded;
             }
 
-            var commandTask = Task.Run(async () =>
+            _ = Task.Run(async () =>
             {
                 try
                 {
-                    return await _dispatcher.ExecuteAsync(results, cancellationToken);
+                    // TODO: Handle error codes appropriately
+                    _ = await _dispatcher.ExecuteAsync(results, cancellationToken);
                 }
                 catch (StreamException)
                 {
                     // Ignore
-                    return int.MinValue;
                 }
                 catch (Exception exception)
                 {
                     logger.LogCritical(exception, "An exception occurred while executing command {Command} from {Source}", command, source);
-                    return int.MinValue;
-                }
-                finally
-                {
-                    if (!_executions.Remove(results, out var resultTask))
-                    {
-                        logger.LogCritical("Failed to remove command {Command} execution task from {Source} in tracking dictionary", command, source);
-                    }
-                    else
-                    {
-                        // TODO: Do not await - deadlock here
-                        // var commandCode = await resultTask;
-
-                        // TODO: Handle error codes appropriately
-                    }
                 }
             }, cancellationToken);
 
-            _executions.Add(results, commandTask);
             return CommandExecutionResult.Executed;
         }
         catch (CommandSyntaxException exception)
