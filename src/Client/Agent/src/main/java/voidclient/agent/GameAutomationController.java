@@ -24,6 +24,7 @@ public final class GameAutomationController {
     private static final Map<String, String> IndexFailures = new HashMap<String, String>();
     private static final Set<String> CancelledRequests = new HashSet<String>();
     private static final long IndexWaitMilliseconds = 600000L;
+    private static final long DisconnectReasonWaitMilliseconds = 2000L;
     private static final ThreadLocal<Boolean> Applying = new ThreadLocal<Boolean>();
     private static volatile PendingOperation pending;
     private static WeakReference<Object> screenSetterReceiver = new WeakReference<Object>(null);
@@ -232,10 +233,16 @@ public final class GameAutomationController {
 
         if ("connect".equals(operation.kind)) {
             if (operation.submitted) {
+                boolean closed = Boolean.FALSE.equals(JoinedConnection.isOpen(operation.connection));
+
                 if (operation.rejection != null)
                     complete(operation, error("connection.rejected", operation.rejection));
-                else if (Tracker.activePlayer(client) != null)
+                else if (closed)
+                    awaitDisconnectReason(operation);
+                else if (Tracker.activePlayer(client) != null) {
+                    JoinedConnection.joined(operation.connection);
                     complete(operation, "{\"status\":\"ok\",\"stage\":\"world.ready\",\"value\":" + quote(operation.value) + "}");
+                }
                 else if (Tracker.describeUnexpectedPlayer(client) != null)
                     complete(operation, error("player.unexpected", Tracker.describeUnexpectedPlayer(client)));
                 return;
@@ -256,8 +263,22 @@ public final class GameAutomationController {
             return;
 
         Applying.set(Boolean.TRUE);
+        Object previousScreen = findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName);
 
         try {
+            // The chat screen builds its suggestions from the player's connection, so it can't open once the game has left the server.
+            String closedReason = JoinedConnection.closedReason();
+
+            if (closedReason != null) {
+                complete(operation, disconnected("connection.closed", "The game left the server: " + closedReason));
+                return;
+            }
+
+            if (Tracker.activePlayer(client) == null) {
+                complete(operation, disconnected("world.absent", "The game has no player in a world to chat from"));
+                return;
+            }
+
             Object chatScreen = constructChatScreen(index.plan.chat, client.getClass().getClassLoader());
             setScreen(index.plan, chatScreen);
             submitChat(chatScreen, index.plan.chat, operation.value);
@@ -265,10 +286,23 @@ public final class GameAutomationController {
 
             complete(operation, "{\"status\":\"ok\",\"stage\":\"chat.submit\",\"value\":" + quote(operation.value) + "}");
         } catch (Throwable exception) {
+            // Minecraft makes a screen current before setting it up, so a chat screen whose setup threw would crash the next frame.
+            restoreScreen(index.plan, previousScreen);
             fail(operation, "chat.submit", exception, index, null);
         } finally {
             Applying.remove();
         }
+    }
+
+    static String connectionJson() {
+        if (!JoinedConnection.hasJoined())
+            return error("connection.unknown", "The game has not joined a server");
+
+        String closedReason = JoinedConnection.closedReason();
+
+        return closedReason == null
+            ? "{\"status\":\"ok\",\"stage\":\"connection.open\"}"
+            : disconnected("connection.closed", closedReason);
     }
 
     public static synchronized void connectionListenerCreated(Object listener, Object connection) {
@@ -278,10 +312,40 @@ public final class GameAutomationController {
     }
 
     public static synchronized void connectionRejected(Object listener, Object reason) {
-        if (pending == null || !pending.submitted || pending.connection == null
-            || pending.connection != nativeConnection(listener))
+        boolean connecting = pending != null && pending.submitted && pending.connection != null;
+
+        if (!connecting && !JoinedConnection.hasJoined())
             return;
-        pending.rejection = String.valueOf(reason);
+
+        Object connection = nativeConnection(listener);
+        JoinedConnection.disconnected(connection, reason);
+
+        if (connecting && pending.connection == connection)
+            pending.rejection = JoinedConnection.reasonText(reason);
+    }
+
+    /**
+     * Waits for the disconnect callback after the connection closed. The game handles a closed connection on its next tick, so a
+     * player can still be in the world on the frame after a server dropped it, and the callback brings the reason.
+     */
+    private static void awaitDisconnectReason(PendingOperation operation) {
+        long now = System.currentTimeMillis();
+
+        if (operation.closedAt == 0L)
+            operation.closedAt = now;
+        else if (now - operation.closedAt > DisconnectReasonWaitMilliseconds)
+            complete(operation, error("connection.rejected", "The connection to the server closed"));
+    }
+
+    private static void restoreScreen(AutomationPlan plan, Object screen) {
+        if (isCurrentScreen(screenSetterReceiver.get(), screen, plan.screenBaseName))
+            return;
+
+        try {
+            setScreen(plan, screen);
+        } catch (Throwable exception) {
+            System.err.println("Void client agent could not restore the screen after a failed automation step: " + exception);
+        }
     }
 
     private static Object nativeConnection(Object listener) {
@@ -815,6 +879,10 @@ public final class GameAutomationController {
         return "{\"status\":\"unavailable\",\"stage\":" + quote(stage) + ",\"message\":" + quote(message) + "}";
     }
 
+    private static String disconnected(String stage, String message) {
+        return "{\"status\":\"disconnected\",\"stage\":" + quote(stage) + ",\"message\":" + quote(message) + "}";
+    }
+
     private static String quote(String value) {
         if (value == null)
             return "null";
@@ -850,6 +918,7 @@ public final class GameAutomationController {
         volatile boolean submitted;
         volatile Object connection;
         volatile String rejection;
+        volatile long closedAt;
 
         PendingOperation(String requestId, String kind, String value) {
             this.requestId = requestId;

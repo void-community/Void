@@ -132,6 +132,38 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return LaunchPortableAsync($"mojang:{version}", minecraftVersion: null, arguments, memoryMb, cancellationToken);
     }
 
+    public async Task<string?> ReadDisconnectReasonAsync(RunningGame game, CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource timeoutSource = new(TimeSpan.FromMilliseconds(PlayerReadTimeoutMilliseconds));
+
+        using CancellationTokenSource linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+
+        string descriptor = await File.ReadAllTextAsync(game.Tracker.DescriptorPath, linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
+
+        if (!int.TryParse(descriptor, NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
+            throw new InvalidOperationException(message: "The Minecraft agent published an invalid endpoint");
+
+        using TcpClient client = await ConnectToAgentAsync(port, linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
+
+        using var stream = client.GetStream();
+
+        using StreamWriter writer = new(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true) { AutoFlush = true };
+
+        using StreamReader reader = new(stream, Encoding.UTF8, leaveOpen: true);
+
+        await writer.WriteLineAsync($"{game.Tracker.Token}\tconnection".AsMemory(), linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
+        string? responseJson = await reader.ReadLineAsync(linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
+
+        var response = string.IsNullOrWhiteSpace(responseJson) ? null : JsonSerializer.Deserialize<TrackerResponse>(responseJson, TrackerJsonOptions);
+
+        return response?.Status switch
+        {
+            "ok" => null,
+            "disconnected" => response.Message ?? "The game left the server",
+            _ => throw new InvalidOperationException(response?.Message ?? "The Minecraft agent did not report the connection")
+        };
+    }
+
     public async Task<GamePlayers> ReadPlayersAsync(RunningGame game, CancellationToken cancellationToken)
     {
         using CancellationTokenSource timeoutSource = new(TimeSpan.FromMilliseconds(PlayerReadTimeoutMilliseconds));

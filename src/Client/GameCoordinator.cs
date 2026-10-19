@@ -79,6 +79,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     public override void Dispose()
     {
         _activeCancellation?.Dispose();
+        _connectionMonitor?.Dispose();
         base.Dispose();
     }
 
@@ -372,6 +373,12 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
                     break;
                 }
+            case ConnectionLost lost:
+                {
+                    await HandleConnectionLostAsync(lost).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case SendChatMessage chat:
                 {
                     await HandleSendChatAsync(chat).ConfigureAwait(continueOnCapturedContext: false);
@@ -557,6 +564,10 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         }
 
         _connectedResponse = new(completed.Server, DateTimeOffset.UtcNow);
+
+        if (_game is not null)
+            StartConnectionMonitor(_game, completed.Server);
+
         await PublishAsync(
             Status with { State = GameState.Connected, Server = completed.Server, OperationState = OperationState.Succeeded, Message = "Interactive game connection confirmed", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
         ).ConfigureAwait(continueOnCapturedContext: false);
@@ -861,6 +872,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         if (_activeCancellation is not null)
             await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
 
+        await StopConnectionMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
         CancelConnectWaiters();
         long operationId = ++_nextOperationId;
         CancellationTokenSource operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);

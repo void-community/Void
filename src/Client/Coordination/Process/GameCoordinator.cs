@@ -38,6 +38,7 @@ internal sealed partial class GameCoordinator
             ? new GameProcessExitException(exited.ExitCode, exited.WasOutOfMemoryKilled, exited.MemoryMb)
             : null;
 
+        await StopConnectionMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
         _game.Dispose();
         _game = null;
         _connectedResponse = null;

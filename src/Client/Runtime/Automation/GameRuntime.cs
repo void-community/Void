@@ -711,6 +711,9 @@ internal sealed partial class GameRuntime
     {
         var response = await SendAgentCommandAsync(game, command: "chat", message, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
+        if (response.Status is "disconnected")
+            throw new GameCommandException(StatusCodes.Status409Conflict, response.Message ?? "The game is not connected to a server");
+
         if (response.Status is not "ok")
         {
             throw new GameClientException(

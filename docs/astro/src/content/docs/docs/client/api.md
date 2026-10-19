@@ -206,6 +206,8 @@ The game must be running. `port` must be between `1` and `65535`. Connection nav
 
 Canceling an HTTP caller stops only that caller's wait. The background navigation continues from whichever Minecraft screen is currently visible until the game connects, exits, or is stopped through the API. If the server lets the game in under a different name than the one it was started with, the connection fails with stage `player.unexpected` and names both players.
 
+A connection is confirmed only while its network connection is still open, so a game the server dropped while it was busy loading fails with stage `connection.rejected` and the disconnect reason. Once connected, the client checks the connection every second. When the game leaves the server, because it was kicked, timed out or lost its connection, `state` goes back to `ready`, `server` becomes `null`, and `message` names the server and the reason. A proxy's server switch keeps the connection, so the game stays `connected` through it.
+
 ```bash
 curl --fail-with-body \
   --request POST \
@@ -228,7 +230,7 @@ The confirmed connection returns:
 
 ## Sending Chat
 
-The game must be `connected`. A leading `/` sends a Minecraft command.
+The game must be `connected`. A leading `/` sends a Minecraft command. If the game has left the server, or has no player in a world yet, such as during a proxy's server switch, the request fails with `409 Conflict` and leaves the screen untouched.
 
 ```bash
 curl --fail-with-body \

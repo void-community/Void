@@ -21,6 +21,8 @@ internal interface IGameRuntime
 
     Task<RunningGame> LaunchVanillaAsync(string version, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
 
+    Task<string?> ReadDisconnectReasonAsync(RunningGame game, CancellationToken cancellationToken);
+
     Task<GamePlayers> ReadPlayersAsync(RunningGame game, CancellationToken cancellationToken);
 
     Task SendChatAsync(RunningGame game, string message, CancellationToken cancellationToken);

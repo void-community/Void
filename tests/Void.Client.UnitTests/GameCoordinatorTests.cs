@@ -439,6 +439,59 @@ public sealed class GameCoordinatorTests
         await coordinator.StopAsync(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task ConnectedGameReturnsToReadyWhenItLeavesTheServer()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+
+        runtime.DisconnectReason = "Timed out";
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        Assert.Null(coordinator.Status.Server);
+        Assert.Equal("Disconnected from server:25565: Timed out", coordinator.Status.Message);
+        var chat = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.SendChatAsync(new("hello"), CancellationToken.None));
+        Assert.Equal(409, chat.StatusCode);
+
+        runtime.DisconnectReason = null;
+        var reconnect = await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+
+        Assert.Equal("server", reconnect.Server.Host);
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+        Assert.Equal(2, runtime.ConnectCount);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task UnansweredConnectionChecksKeepTheGameConnected()
+    {
+        var runtime = new FakeGameRuntime { FailDisconnectReads = true };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        while (runtime.DisconnectReads < 2)
+            await Task.Delay(10, timeout.Token);
+
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
     [Theory]
     [InlineData(137, true, "client.process.out_of_memory")]
     [InlineData(137, false, "client.process.exited")]
@@ -596,7 +649,11 @@ public sealed class GameCoordinatorTests
         private TaskCompletionSource<StopMode>? _stop;
         private TaskCompletionSource? _connect;
         private FakeManagedProcess? _process;
+        private int _disconnectReads;
 
+        public string? DisconnectReason { get; set; }
+        public bool FailDisconnectReads { get; init; }
+        public int DisconnectReads => Volatile.Read(ref _disconnectReads);
         public bool BlockStop { get; init; }
         public bool BlockConnect { get; init; }
         public bool FailScreenshot { get; init; }
@@ -687,6 +744,15 @@ public sealed class GameCoordinatorTests
         public Task<byte[]> CaptureScreenshotAsync(CancellationToken cancellationToken) => FailScreenshot
             ? Task.FromException<byte[]>(new InvalidOperationException("Screenshot unavailable"))
             : Task.FromResult(Array.Empty<byte>());
+
+        public Task<string?> ReadDisconnectReasonAsync(RunningGame game, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _disconnectReads);
+
+            return FailDisconnectReads
+                ? Task.FromException<string?>(new InvalidOperationException("The Minecraft agent did not report the connection"))
+                : Task.FromResult(DisconnectReason);
+        }
 
         public Task<GamePlayers> ReadPlayersAsync(RunningGame game, CancellationToken cancellationToken)
         {
