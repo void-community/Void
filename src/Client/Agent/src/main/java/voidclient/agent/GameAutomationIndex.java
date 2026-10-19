@@ -251,7 +251,7 @@ final class GameAutomationIndex {
         AutomationPlan plan = new AutomationPlan(screenBaseName, screenSetter.owner, screenSetter.name,
             directCandidate.type.name,
             frame, ConnectionFailureDiscovery.discover(types), networkTypes,
-            presentationOverlay, directCandidate.plan, chat, transitions);
+            presentationOverlay, directCandidate.plan, chat, transitions, ProceedButtons.discover(types));
         return new IndexedCode(plan, superTypes);
     }
 

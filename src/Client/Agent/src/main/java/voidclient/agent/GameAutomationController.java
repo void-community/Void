@@ -325,6 +325,15 @@ public final class GameAutomationController {
 
         TransitionPlan transition = selectTransition(index, className);
 
+        // Screens outside the UI graph, such as warnings mods show before the title screen, are left through their Proceed button.
+        if (transition == null && ProceedButtons.press(screen, index.plan.proceedLabels) != null)
+        {
+            waitingScreenName = null;
+            System.err.println("Void client warning: Screen " + screen.getClass().getName() + " answered with Proceed");
+            consumedScreen = screen;
+            return;
+        }
+
         if (transition == null)
         {
             consumedScreen = screen;

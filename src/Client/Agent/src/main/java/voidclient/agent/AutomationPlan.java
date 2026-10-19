@@ -15,8 +15,10 @@ final class AutomationPlan {
     final DirectConnectPlan directConnect;
     final ChatPlan chat;
     final java.util.Map<String, List<TransitionPlan>> transitions;
+    /** Owner and name of each static field holding the Proceed button label, see {@link ProceedButtons}. */
+    final List<String[]> proceedLabels;
 
-    AutomationPlan(String screenBaseName, String clientClassName, String screenSetterName, String directScreenName, FramePlan frame, java.util.Map<String, List<String>> rejectionCallbacks, java.util.Set<String> networkTypes, PresentationOverlayPlan presentationOverlay, DirectConnectPlan directConnect, ChatPlan chat, java.util.Map<String, List<TransitionPlan>> transitions) {
+    AutomationPlan(String screenBaseName, String clientClassName, String screenSetterName, String directScreenName, FramePlan frame, java.util.Map<String, List<String>> rejectionCallbacks, java.util.Set<String> networkTypes, PresentationOverlayPlan presentationOverlay, DirectConnectPlan directConnect, ChatPlan chat, java.util.Map<String, List<TransitionPlan>> transitions, List<String[]> proceedLabels) {
         this.screenBaseName = screenBaseName;
         this.clientClassName = clientClassName;
         this.screenSetterName = screenSetterName;
@@ -28,6 +30,7 @@ final class AutomationPlan {
         this.directConnect = directConnect;
         this.chat = chat;
         this.transitions = transitions;
+        this.proceedLabels = proceedLabels;
     }
 
 }

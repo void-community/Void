@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 using Nito.AsyncEx;
 
@@ -24,6 +25,8 @@ namespace Void.Client;
 internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null) : IGameRuntime
 {
     private const string AzulPackagesUrl = "https://api.azul.com/metadata/v1/zulu/packages/";
+    private const int BlockingWindowPollMilliseconds = 2000;
+    private const int BlockingWindowTimeoutMilliseconds = 10000;
     private const string CurseForgeCdnUrl = "https://edge.forgecdn.net";
     private const int CurseForgeFilesBatchSize = 50;
     private const int CurseForgeSha1HashAlgorithm = 1;
@@ -36,9 +39,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string DisplayScreenResolution = $"{DisplayScreenWidth}x{DisplayScreenHeight}";
     private const string DisplayScreenWidth = "854";
     private const int ExternalProcessTimeoutMilliseconds = 5000;
+    // Helpers in the image, such as the xmessage shim, report non-fatal problems on the game's output with this prefix.
+    private const string GameWarningPrefix = "Void client warning: ";
     private const string LauncherSplashWindowTitle = "Void Client Startup";
     private const string LegacyNeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml";
     private const string MavenCentralRepositoryUrl = "https://repo1.maven.org/maven2";
+    private const int MaximumGameOutputLineLength = 64 * 1024;
     private const int MinecraftGameId = 432;
     private const string MojangVersionManifestUrl = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private const string NeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
@@ -67,6 +73,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AsyncLock _windowOperations = new();
     private readonly ConcurrentDictionary<int, Task> _outputTasks = new();
+    private readonly ConcurrentDictionary<int, ChannelReader<string>> _outputWarnings = new();
     private readonly ConcurrentDictionary<int, string> _launchedProcessGroups = new();
     private long _nextWindowGeneration;
     private Guid? _windowSessionId;
@@ -289,10 +296,43 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return $"--jvm-arg=-Xmx{memoryMb.ToString(CultureInfo.InvariantCulture)}M";
     }
 
-    internal async Task PumpOutputAsync(TextReader reader, TextWriter console, Guid? sessionId, string stream, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Reports each complete line that starts with <see cref="GameWarningPrefix"/> and returns the unfinished last line.
+    /// </summary>
+    internal static string ReadGameWarnings(string text, ChannelWriter<string> warnings)
+    {
+        int lineStart = 0;
+        int lineEnd = text.IndexOf(value: '\n', lineStart);
+
+        while (lineEnd >= 0)
+        {
+            var line = text.AsSpan(lineStart, lineEnd - lineStart).TrimEnd(trimChar: '\r');
+            bool isWarning = line.StartsWith(GameWarningPrefix, StringComparison.Ordinal);
+
+            // The channel only refuses warnings once the game's output has ended, so nothing would read the rest either.
+            if (isWarning && !warnings.TryWrite(line[GameWarningPrefix.Length..].ToString()))
+                return "";
+
+            lineStart = lineEnd + 1;
+            lineEnd = text.IndexOf(value: '\n', lineStart);
+        }
+
+        // Output without line breaks keeps growing, but only a short unfinished line can still become a warning.
+        return text.Length - lineStart > MaximumGameOutputLineLength ? "" : text[lineStart..];
+    }
+
+    internal async Task PumpOutputAsync(
+        TextReader reader,
+        TextWriter console,
+        Guid? sessionId,
+        string stream,
+        ChannelWriter<string>? warnings = null,
+        CancellationToken cancellationToken = default
+    )
     {
         char[] buffer = new char[4096];
         string pending = "";
+        string unfinishedLine = "";
 
         try
         {
@@ -303,6 +343,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 string text = new(buffer, startIndex: 0, count);
                 await console.WriteAsync(text).ConfigureAwait(continueOnCapturedContext: false);
                 pending += text;
+
+                if (warnings is not null)
+                    unfinishedLine = ReadGameWarnings(unfinishedLine + text, warnings);
 
                 if (sessionId is { } id && diagnostics is not null)
                 {

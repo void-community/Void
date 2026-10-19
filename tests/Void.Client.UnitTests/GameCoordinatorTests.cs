@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging.Abstractions;
 using Void.Client;
 using Xunit;
@@ -6,6 +7,36 @@ namespace Void.Client.UnitTests;
 
 public sealed class GameCoordinatorTests
 {
+    [Fact]
+    public async Task GameWarningsReachStatusOnlyForTheCurrentGame()
+    {
+        const string DialogWarning = "Dialog \"Memory Settings\" answered with Cancel: low memory";
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        await coordinator.StartVanillaAsync(new("1.21.1", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        var firstGameWarnings = runtime.Warnings;
+        Assert.True(firstGameWarnings.Writer.TryWrite(DialogWarning));
+        Assert.True(firstGameWarnings.Writer.TryWrite(DialogWarning));
+        await WaitForWarningsAsync(coordinator, count: 1);
+        Assert.Equal([DialogWarning], coordinator.Status.Warnings);
+
+        await coordinator.StopGameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await coordinator.StartVanillaAsync(new("1.21.1", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        Assert.True(firstGameWarnings.Writer.TryWrite("late warning from the stopped game"));
+        Assert.True(runtime.Warnings.Writer.TryWrite("current warning"));
+        await WaitForWarningsAsync(coordinator, count: 1);
+        Assert.Equal(["current warning"], coordinator.Status.Warnings);
+
+        await coordinator.StopGameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
     [Fact]
     public async Task CoordinatorSupportsMultipleConfirmedGameSessions()
     {
@@ -527,6 +558,14 @@ public sealed class GameCoordinatorTests
         }
     }
 
+    private static async Task WaitForWarningsAsync(GameCoordinator coordinator, int count)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        while (coordinator.Status.Warnings.Count < count)
+            await Task.Delay(10, timeout.Token);
+    }
+
     private static async Task WaitForStateAsync(GameCoordinator coordinator, GameState expected)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -570,13 +609,15 @@ public sealed class GameCoordinatorTests
         public string? LastNeoForgeVersion { get; private set; }
         public string? LastNeoForgeMaximumMinecraftVersion { get; private set; }
         public RunningGame? LastConnectGame { get; private set; }
+        public Channel<string> Warnings { get; private set; } = Channel.CreateUnbounded<string>();
 
         public void FailLaunch(Exception exception) => _launch.SetException(exception);
 
         public void CompleteLaunch()
         {
             _process = new FakeManagedProcess(LaunchCount, LastMemoryMb);
-            _launch.SetResult(new(_process, $"test:{LaunchCount}", DateTimeOffset.UtcNow, new("test.port", "token", null)));
+            Warnings = Channel.CreateUnbounded<string>();
+            _launch.SetResult(new(_process, $"test:{LaunchCount}", DateTimeOffset.UtcNow, new("test.port", "token", null), Warnings.Reader));
         }
 
         public void CompleteStop()

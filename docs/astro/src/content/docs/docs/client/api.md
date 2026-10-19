@@ -68,6 +68,8 @@ Stop polling with a failure if the identifier changes or the operation becomes `
 
 Runtime failures are also returned in the `failure` extension of HTTP Problem Details responses. An unexpected Minecraft process exit uses `client.process.exited`; a cgroup-confirmed OOM kill uses `client.process.out_of_memory` and reports the exit code and configured heap. Stack traces intentionally expose container implementation details and should not be forwarded to untrusted consumers.
 
+Mods sometimes open native message boxes while Minecraft loads, and nobody can click them inside the container. The client answers every message box opened through `xmessage`, which LWJGL's dialogs use, with its negative button (Cancel or No) and adds a warning such as `Dialog "Memory Settings" answered with Cancel: …` to `warnings`. When `connect` meets a mod screen it can't navigate, such as a memory warning shown before the title screen, it presses the screen's Proceed button and reports that in `warnings` too. If a window from another process stays over the game for 10 seconds during `connect` or `send-chat`, the operation fails with stage `window.blocked` and names that window instead of waiting forever.
+
 ## Live Players
 
 `GET /api/game/players` reads players from the running Minecraft client. It does not require a mod, server plugin, or protocol-specific configuration.

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 using Void.Client.Failures;
 using Void.Client.Models;
@@ -13,6 +14,26 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
+    /// <summary>
+    /// Returns the visible windows that don't belong to the game JVM, such as dialogs of other programs, each with the time it has
+    /// been seen since. A window drops out once it closes or turns out to be the game's.
+    /// </summary>
+    internal static Dictionary<string, DateTimeOffset> TrackForeignWindows(
+        IReadOnlyList<VisibleWindow> windows,
+        int? gameProcessId,
+        IReadOnlyDictionary<string, DateTimeOffset> firstSeen,
+        DateTimeOffset now
+    )
+    {
+        // Every window would look foreign while the JVM is unknown, so nothing is tracked until it is found.
+        return gameProcessId is null
+            ? []
+            : windows
+            .Where(window => window.ProcessId != gameProcessId)
+            .DistinctBy(window => window.Id)
+            .ToDictionary(window => window.Id, window => firstSeen.GetValueOrDefault(window.Id, now), StringComparer.Ordinal);
+    }
+
     private async Task<MinecraftWindowLease> AcquirePreparedWindowLeaseAsync(string display, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -153,29 +174,12 @@ internal sealed partial class GameRuntime
 
     private async Task<string?> FindLargestWindow(string display, CancellationToken cancellationToken = default)
     {
-        var searchProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["search", "--onlyvisible", "--name", ".*"], display);
-        var searchResult = await RunProcessTextAsync(searchProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-        if (searchResult.ExitCode != 0)
-            return null;
-
         string? largestWindowId = null;
         long largestArea = 0;
 
-        foreach (string candidateWindowId in searchResult.StandardOutput.Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var window in await ListNamedWindowsAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
         {
-            string trimmedCandidateId = candidateWindowId.Trim();
-            var nameProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["getwindowname", trimmedCandidateId], display);
-            var nameResult = await RunProcessTextAsync(nameProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            bool windowNameAccepted = nameResult.ExitCode is 0
-                                     && !string.IsNullOrWhiteSpace(nameResult.StandardOutput)
-                                     && nameResult.StandardOutput.Trim() != LauncherSplashWindowTitle;
-
-            if (!windowNameAccepted)
-                continue;
-
-            var geometryProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["getwindowgeometry", "--shell", trimmedCandidateId], display);
+            var geometryProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["getwindowgeometry", "--shell", window.Id], display);
             var geometryResult = await RunProcessTextAsync(geometryProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             if (geometryResult.ExitCode != 0)
@@ -194,7 +198,7 @@ internal sealed partial class GameRuntime
             if ((long)width * height > largestArea)
             {
                 largestArea = (long)width * height;
-                largestWindowId = trimmedCandidateId;
+                largestWindowId = window.Id;
             }
         }
 
@@ -223,6 +227,20 @@ internal sealed partial class GameRuntime
 
             return null;
         }
+    }
+
+    private async Task<int?> GetWindowProcessIdAsync(string display, string windowId, CancellationToken cancellationToken)
+    {
+        var result = await RunProcessTextAsync(
+            CreateProcessStartInformation(fileName: "xdotool", ["getwindowpid", windowId], display),
+            TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        // Windows of programs such as xmessage carry no _NET_WM_PID, so getwindowpid fails for them.
+        return result.ExitCode is not 0
+            ? null
+            : int.TryParse(result.StandardOutput.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int processId) ? processId : null;
     }
 
     private async Task<bool> IsDisplayReadyAsync(string display, CancellationToken cancellationToken)
@@ -287,6 +305,7 @@ internal sealed partial class GameRuntime
                     memoryMb,
                     initialOutOfMemoryKillCount,
                     DrainOutputAsync(process.Id),
+                    TakeOutputWarnings(process.Id),
                     portableMinecraftVersion,
                     DateTimeOffset.UtcNow,
                     tracker
@@ -318,6 +337,9 @@ internal sealed partial class GameRuntime
                 KillProcess(process);
                 await WaitForKilledProcessAsync(process).ConfigureAwait(continueOnCapturedContext: false);
                 await DrainOutputAsync(process.Id).ConfigureAwait(continueOnCapturedContext: false);
+
+                if (_outputWarnings.TryRemove(process.Id, out var abandonedWarnings))
+                    GC.KeepAlive(abandonedWarnings);
 
                 if (runningGame is null)
                     process.Dispose();
@@ -383,6 +405,33 @@ internal sealed partial class GameRuntime
         );
 
         return process;
+    }
+
+    /// <summary>Lists visible windows that have a name, leaving out the launcher splash.</summary>
+    private async Task<List<VisibleWindow>> ListNamedWindowsAsync(string display, CancellationToken cancellationToken)
+    {
+        var searchProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["search", "--onlyvisible", "--name", ".*"], display);
+        var searchResult = await RunProcessTextAsync(searchProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        List<VisibleWindow> windows = [];
+
+        if (searchResult.ExitCode != 0)
+            return windows;
+
+        foreach (string candidateWindowId in searchResult.StandardOutput.Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string trimmedCandidateId = candidateWindowId.Trim();
+            var nameProcessStartInformation = CreateProcessStartInformation(fileName: "xdotool", ["getwindowname", trimmedCandidateId], display);
+            var nameResult = await RunProcessTextAsync(nameProcessStartInformation, TimeSpan.FromMilliseconds(ExternalProcessTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            bool windowNameAccepted = nameResult.ExitCode is 0
+                                     && !string.IsNullOrWhiteSpace(nameResult.StandardOutput)
+                                     && nameResult.StandardOutput.Trim() != LauncherSplashWindowTitle;
+
+            if (windowNameAccepted)
+                windows.Add(new VisibleWindow(trimmedCandidateId, nameResult.StandardOutput.Trim()));
+        }
+
+        return windows;
     }
 
     private async Task PrepareDisplayAndWindowAsync(CancellationToken cancellationToken)
@@ -469,6 +518,22 @@ internal sealed partial class GameRuntime
             throw new InvalidOperationException(message: "Portable Minecraft preparation did not report a Minecraft version");
 
         await InstallSodiumAsync(modsDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    private async Task PumpGameOutputAsync(Process process, Guid? sessionId, ChannelWriter<string> warnings)
+    {
+        try
+        {
+            // PortableMC may merge the game's streams, so warnings are read from both.
+            await Task.WhenAll(
+                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings),
+                PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr", warnings)
+            ).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        finally
+        {
+            warnings.Complete();
+        }
     }
 
     private async Task ResizeWindowToDisplayAsync(string windowId, CancellationToken cancellationToken = default)
@@ -600,7 +665,34 @@ internal sealed partial class GameRuntime
             using StreamReader reader = new(stream, Encoding.UTF8, leaveOpen: true);
 
             await writer.WriteLineAsync($"{game.Tracker.Token}\t{command}\t{requestId}\t{encodedValue}".AsMemory(), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            string? responseJson = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            using CancellationTokenSource responseCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            var responseTask = reader.ReadLineAsync(responseCancellationTokenSource.Token).AsTask();
+            var blockingWindowTask = WaitForBlockingWindowAsync(game, responseCancellationTokenSource.Token);
+
+            var firstCompletedTask = await Task.WhenAny((Task)responseTask, blockingWindowTask).ConfigureAwait(continueOnCapturedContext: false);
+            bool windowBlocked = firstCompletedTask == blockingWindowTask && blockingWindowTask.IsCompletedSuccessfully;
+
+            await responseCancellationTokenSource.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
+            await ((Task)blockingWindowTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+            if (windowBlocked)
+            {
+                await ((Task)responseTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                await TryCancelAgentCommandAsync(game.Tracker, port, requestId).ConfigureAwait(continueOnCapturedContext: false);
+
+                return new TrackerResponse(
+                    Status: "error",
+                    Stage: "window.blocked",
+                    await blockingWindowTask.ConfigureAwait(continueOnCapturedContext: false),
+                    Value: null,
+                    Local: null,
+                    Remote: null
+                );
+            }
+
+            string? responseJson = await responseTask.ConfigureAwait(continueOnCapturedContext: false);
 
             return string.IsNullOrWhiteSpace(responseJson)
                 ? throw new InvalidOperationException(message: "The Minecraft agent returned an empty response")
@@ -670,12 +762,16 @@ internal sealed partial class GameRuntime
                       ?? throw new InvalidOperationException(message: "Failed to start the PortableMC process group");
 
         var sessionId = diagnostics?.CurrentSessionId;
-        _outputTasks[process.Id] = Task.WhenAll(
-            PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout"),
-            PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr")
-        );
+        Channel<string> warnings = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+        _outputWarnings[process.Id] = warnings.Reader;
+        _outputTasks[process.Id] = PumpGameOutputAsync(process, sessionId, warnings.Writer);
 
         return process;
+    }
+
+    private ChannelReader<string> TakeOutputWarnings(int processId)
+    {
+        return _outputWarnings.TryRemove(processId, out var warnings) ? warnings : RunningGame.NoWarnings;
     }
 
     /// <summary>
@@ -705,6 +801,37 @@ internal sealed partial class GameRuntime
             if (_launchedProcessGroups.TryRemove(processGroupId, out string? forgottenVersion))
                 GC.KeepAlive(forgottenVersion);
         }
+    }
+
+    /// <summary>
+    /// Returns once a window of another process has stayed over the game, because nobody can answer it in the container and the
+    /// game would wait behind it forever. Dialogs opened through xmessage never get that far, because the shim answers them.
+    /// </summary>
+    private async Task<string> WaitForBlockingWindowAsync(RunningGame game, CancellationToken cancellationToken)
+    {
+        string display = Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay;
+        TimeSpan timeout = TimeSpan.FromMilliseconds(BlockingWindowTimeoutMilliseconds);
+        Dictionary<string, DateTimeOffset> foreignWindows = [];
+        string? blockingWindowId = null;
+
+        while (blockingWindowId is null)
+        {
+            await Task.Delay(BlockingWindowPollMilliseconds, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            List<VisibleWindow> windows = [];
+
+            foreach (var window in await ListNamedWindowsAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false))
+            {
+                windows.Add(
+                    window with { ProcessId = await GetWindowProcessIdAsync(display, window.Id, cancellationToken).ConfigureAwait(continueOnCapturedContext: false) }
+                );
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            foreignWindows = TrackForeignWindows(windows, FindJavaProcessId(game.Process.Id), foreignWindows, now);
+            blockingWindowId = foreignWindows.Where(window => now - window.Value >= timeout).Select(window => window.Key).FirstOrDefault();
+        }
+
+        return $"A window from another process is blocking Minecraft: {await DescribeWindowAsync(display, blockingWindowId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)}";
     }
 
     private async Task WaitForDisplayReadyAsync(string display, CancellationToken cancellationToken)
@@ -742,9 +869,11 @@ internal sealed partial class GameRuntime
         return (await AcquirePreparedWindowLeaseAsync(display, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Id;
     }
 
+    internal sealed record VisibleWindow(string Id, string Name, int? ProcessId = null);
+
+
+
     private record ProcessBytesResult(int ExitCode, byte[] StandardOutput, string StandardError);
-
-
 
     private record ProcessTextResult(int ExitCode, string StandardOutput, string StandardError);
 

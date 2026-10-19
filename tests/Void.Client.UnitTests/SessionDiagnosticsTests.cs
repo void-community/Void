@@ -175,7 +175,7 @@ public class SessionDiagnosticsTests : IDisposable
         using var reader = new ChunkedReader(text);
         using var console = new StringWriter();
         var runtime = new GameRuntime(diagnostics);
-        await runtime.PumpOutputAsync(reader, console, id, "stderr", TestContext.Current.CancellationToken);
+        await runtime.PumpOutputAsync(reader, console, id, "stderr", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(text, console.ToString());
         var retained = (await ReadArchiveAsync(diagnostics, id))["console-stderr.log"];
         Assert.DoesNotContain(token, retained);

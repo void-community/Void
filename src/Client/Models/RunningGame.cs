@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading.Channels;
 
 using Void.Client.Abstractions;
 
@@ -6,12 +7,19 @@ namespace Void.Client.Models;
 
 internal sealed record RunningGame : IDisposable
 {
-    public RunningGame(IManagedProcess process, string version, DateTimeOffset startedAt, GameTrackerConnection tracker)
+    public RunningGame(
+        IManagedProcess process,
+        string version,
+        DateTimeOffset startedAt,
+        GameTrackerConnection tracker,
+        ChannelReader<string>? warnings = null
+    )
     {
         Process = process;
         Version = version;
         StartedAt = startedAt;
         Tracker = tracker;
+        Warnings = warnings ?? NoWarnings;
     }
 
     public RunningGame(
@@ -19,6 +27,7 @@ internal sealed record RunningGame : IDisposable
         int? memoryMb,
         long? initialOutOfMemoryKillCount,
         Task outputTask,
+        ChannelReader<string> warnings,
         string version,
         DateTimeOffset startedAt,
         GameTrackerConnection tracker
@@ -28,7 +37,10 @@ internal sealed record RunningGame : IDisposable
         Version = version;
         StartedAt = startedAt;
         Tracker = tracker;
+        Warnings = warnings;
     }
+
+    public static ChannelReader<string> NoWarnings { get; } = CreateNoWarnings();
 
     public IManagedProcess Process { get; }
 
@@ -38,8 +50,19 @@ internal sealed record RunningGame : IDisposable
 
     public string Version { get; }
 
+    /// <summary>Non-fatal problems reported on the game's output, such as native dialogs the image answered.</summary>
+    public ChannelReader<string> Warnings { get; }
+
     public void Dispose()
     {
         Process.Dispose();
+    }
+
+    private static ChannelReader<string> CreateNoWarnings()
+    {
+        Channel<string> channel = Channel.CreateUnbounded<string>();
+        channel.Writer.Complete();
+
+        return channel.Reader;
     }
 }

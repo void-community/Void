@@ -10,6 +10,7 @@ internal sealed partial class GameCoordinator
     private sealed record ConnectMessage(ConnectGameRequest Request, TaskCompletionSource<ConnectGameResponse> Completion, CancellationToken RequestCancellation) : Message;
     private sealed record ConnectWaiter(TaskCompletionSource<ConnectGameResponse> Completion, CancellationTokenRegistration CancellationRegistration);
     private sealed record ConnectWaiterCanceled(TaskCompletionSource<ConnectGameResponse> Completion, CancellationToken CancellationToken) : Message;
+    private sealed record GameWarning(int ProcessId, string Text) : Message;
     private abstract record Message;
     private sealed record OptionsMessage(string Options, TaskCompletionSource Completion, CancellationToken RequestCancellation) : Message;
     private sealed record PlayersMessage(TaskCompletionSource<GamePlayers> Completion, CancellationToken RequestCancellation) : Message;

@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+
 using Void.Client.Models;
 using Void.Client.States;
 
@@ -5,10 +7,22 @@ namespace Void.Client;
 
 internal sealed partial class GameCoordinator
 {
+    private async Task ForwardWarningsAsync(int processId, ChannelReader<string> warnings)
+    {
+        await foreach (string warning in warnings.ReadAllAsync(_stoppingToken).ConfigureAwait(continueOnCapturedContext: false))
+            await WriteCompletionAsync(new GameWarning(processId, warning)).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
     private async Task MonitorProcessAsync(RunningGame game)
     {
         await game.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
         await WriteCompletionAsync(new ProcessExited(game.Process.Id, game.Process.ExitCode ?? -1, game.Process.WasOutOfMemoryKilled, game.Process.MemoryMb)).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    private async Task MonitorWarningsAsync(RunningGame game)
+    {
+        // Reading ends with the game's output or at shutdown, which output a child process still holds open must not delay.
+        await ForwardWarningsAsync(game.Process.Id, game.Warnings).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
 
     private async Task<OperationObservation> ObserveAsync(Task operation, CancellationTokenSource cancellation, long operationId)

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Stands in for xmessage, which LWJGL's TinyFileDialogs runs for message boxes that mods open while Minecraft loads.
+# Nobody can click a dialog in the container, so it is answered at once with its negative button and reported to the
+# client on standard error. The positive button is never chosen, because mods such as Memory Settings quit the game on OK.
+# Keep this script compatible with bash 3.2, because the client unit tests also run it on macOS.
+
+buttons="okay:0"
+title=""
+message=""
+print_label=false
+
+while [[ "$#" -gt 0 ]]; do
+  option="$1"
+  shift
+
+  case "$option" in
+    -buttons | -title | -file | -default | -timeout | -geometry | -bg | -background | -fg | -foreground | -fn | -font | -bd | -bordercolor | -bw | -borderwidth | -display | -name | -xrm | -selectionTimeout)
+      value="${1-}"
+
+      if [[ "$#" -gt 0 ]]; then
+        shift
+      fi
+
+      case "$option" in
+        -buttons) buttons="$value" ;;
+        -title) title="$value" ;;
+        -file) message="$(cat -- "$value" 2>/dev/null || true)" ;;
+      esac
+      ;;
+    -print)
+      print_label=true
+      ;;
+    -*)
+      ;;
+    *)
+      message="${message:+$message }$option"
+      ;;
+  esac
+done
+
+IFS=',' read -r -a button_specs <<< "$buttons" || true
+label=""
+value=0
+
+if [[ "${#button_specs[@]}" -gt 0 ]]; then
+  # Cancel first, then No, otherwise the last button, which is also the only one of a plain message.
+  chosen=$((${#button_specs[@]} - 1))
+
+  for negative_label in cancel no; do
+    for index in "${!button_specs[@]}"; do
+      if [[ "$(printf '%s' "${button_specs[$index]%%:*}" | tr '[:upper:]' '[:lower:]')" == "$negative_label" ]]; then
+        chosen=$index
+        break 2
+      fi
+    done
+  done
+
+  button_spec="${button_specs[$chosen]}"
+  label="${button_spec%%:*}"
+
+  if [[ "$button_spec" == *:* ]]; then
+    value="${button_spec#*:}"
+  else
+    # xmessage exits with 100 plus the button's position, counting from one, when the button has no explicit value.
+    value=$((chosen + 101))
+  fi
+
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    value=0
+  fi
+fi
+
+warning="Dialog"
+
+if [[ -n "$title" ]]; then
+  warning="$warning \"$title\""
+fi
+
+warning="$warning answered with ${label:-no button}"
+
+if [[ -n "$message" ]]; then
+  warning="$warning: $(printf '%s' "$message" | tr '\r\n\t' '   ')"
+fi
+
+printf 'Void client warning: %s\n' "$warning" >&2
+
+if [[ "$print_label" == true ]]; then
+  printf '%s\n' "$label"
+fi
+
+exit "$value"
