@@ -206,6 +206,8 @@ The game must be running. `port` must be between `1` and `65535`. Connection nav
 
 Canceling an HTTP caller stops only that caller's wait. The background navigation continues from whichever Minecraft screen is currently visible until the game connects, exits, or is stopped through the API. If the server lets the game in under a different name than the one it was started with, the connection fails with stage `player.unexpected` and names both players.
 
+Mods can replace the title screen with their own menu. A menu that extends a vanilla screen uses that screen's routes even when it hides the vanilla buttons. For any other screen without a route, the client waits 5 seconds and then opens the nearest screen on the way to Direct Connection, usually the multiplayer screen, with that screen as its parent, and adds a warning to `warnings`. If no route has been found after 60 seconds, the connection fails with stage `ui.route` and names the screen.
+
 A connection is confirmed only while its network connection is still open, so a game the server dropped while it was busy loading fails with stage `connection.rejected` and the disconnect reason. Once connected, the client checks the connection every second. When the game leaves the server, because it was kicked, timed out or lost its connection, `state` goes back to `ready`, `server` becomes `null`, and `message` names the server and the reason. A proxy's server switch keeps the connection, so the game stays `connected` through it.
 
 ```bash

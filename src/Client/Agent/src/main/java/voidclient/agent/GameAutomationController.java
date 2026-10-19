@@ -25,6 +25,8 @@ public final class GameAutomationController {
     private static final Set<String> CancelledRequests = new HashSet<String>();
     private static final long IndexWaitMilliseconds = 600000L;
     private static final long DisconnectReasonWaitMilliseconds = 2000L;
+    private static final long RouteGraceMilliseconds = 5000L;
+    private static final long RouteDeadlineMilliseconds = 60000L;
     private static final ThreadLocal<Boolean> Applying = new ThreadLocal<Boolean>();
     private static volatile PendingOperation pending;
     private static WeakReference<Object> screenSetterReceiver = new WeakReference<Object>(null);
@@ -256,6 +258,13 @@ public final class GameAutomationController {
                     break;
                 screen = nextScreen;
             }
+            if (pending == operation && !operation.submitted) {
+                try {
+                    checkRoute(index, operation, client.getClass().getClassLoader());
+                } catch (Throwable exception) {
+                    fail(operation, "ui.route", exception, index, findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName));
+                }
+            }
             return;
         }
 
@@ -389,12 +398,13 @@ public final class GameAutomationController {
             return;
         }
 
-        TransitionPlan transition = selectTransition(index, className);
+        TransitionPlan transition = selectTransition(index, transitions(index, screen.getClass()));
 
         // Screens outside the UI graph, such as warnings mods show before the title screen, are left through their Proceed button.
         if (transition == null && ProceedButtons.press(screen, index.plan.proceedLabels) != null)
         {
             waitingScreenName = null;
+            operation.unroutableSince = 0L;
             System.err.println("Void client warning: Screen " + screen.getClass().getName() + " answered with Proceed");
             consumedScreen = screen;
             return;
@@ -403,24 +413,135 @@ public final class GameAutomationController {
         if (transition == null)
         {
             consumedScreen = screen;
-            if (!className.equals(waitingScreenName))
-            {
-                waitingScreenName = className;
-                System.err.println("Void client agent is waiting for a routable screen after " + className);
-            }
+            awaitRoute(operation, className);
             return;
         }
 
-        waitingScreenName = null;
         System.err.println("Void client agent invoking UI transition " + transition.describe());
+        consumedScreen = screen;
+
+        // A mod menu can leave out the button an older route clicks, which counts as having no route.
         if (invokeTransition(screen, transition)) {
-            consumedScreen = screen;
+            waitingScreenName = null;
+            operation.unroutableSince = 0L;
+        } else {
+            awaitRoute(operation, className);
         }
     }
 
-    private static TransitionPlan selectTransition(GameAutomationIndex.IndexedCode index, String source) {
-        List<TransitionPlan> transitions = transitions(index, source);
+    private static void awaitRoute(PendingOperation operation, String className) {
+        if (operation.unroutableSince == 0L)
+            operation.unroutableSince = System.currentTimeMillis();
 
+        if (!className.equals(waitingScreenName))
+        {
+            waitingScreenName = className;
+            System.err.println("Void client agent is waiting for a routable screen after " + className);
+        }
+    }
+
+    /**
+     * Keeps a connect from waiting forever on a screen without a route. After a short grace period, which lets screens that move on
+     * by themselves do so, it opens the nearest screen on the route with the current screen as its parent, and after the deadline it
+     * fails with the screen's name.
+     */
+    private static void checkRoute(GameAutomationIndex.IndexedCode index, PendingOperation operation, ClassLoader loader) throws Exception {
+        if (operation.unroutableSince == 0L)
+            return;
+
+        long waited = System.currentTimeMillis() - operation.unroutableSince;
+        Object screen = findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName);
+        String screenName = screen == null ? "no screen" : screen.getClass().getName();
+
+        if (waited >= RouteDeadlineMilliseconds) {
+            complete(operation, error("ui.route", "No route to the direct connect screen from " + screenName));
+            return;
+        }
+
+        if (waited < RouteGraceMilliseconds || operation.routeScreen != null || screen == null)
+            return;
+
+        Constructor<?> constructor = routeScreenConstructor(index, loader);
+
+        if (constructor == null)
+            return;
+
+        operation.routeScreen = constructor.newInstance(screen);
+        System.err.println("Void client warning: Screen " + screenName + " has no route to direct connect, opened "
+            + constructor.getDeclaringClass().getName() + " with it as parent");
+        Applying.set(Boolean.TRUE);
+
+        try {
+            setScreen(index.plan, operation.routeScreen);
+        } finally {
+            Applying.remove();
+        }
+    }
+
+    /**
+     * Finds the screen nearest to direct connect that opens with just a parent screen, such as the multiplayer screen. A mod menu
+     * that doesn't extend a vanilla menu has no route of its own, but such a screen accepts it as its parent.
+     *
+     * @return the screen's one-parameter constructor, or {@code null} when no screen on the route has one
+     */
+    static Constructor<?> routeScreenConstructor(GameAutomationIndex.IndexedCode index, ClassLoader loader) {
+        Class<?> screenBase;
+
+        try {
+            screenBase = loadClass(loader, index.plan.screenBaseName);
+        } catch (ClassNotFoundException exception) {
+            return null;
+        }
+
+        Constructor<?> nearest = null;
+        int nearestDistance = Integer.MAX_VALUE;
+        Set<String> seen = new HashSet<String>();
+
+        for (List<TransitionPlan> transitions : index.plan.transitions.values())
+            for (TransitionPlan transition : transitions)
+                for (String target : transition.targetScreenNames) {
+                    if (!seen.add(target))
+                        continue;
+
+                    int distance = index.plan.directScreenName.equals(target) ? 0 : distanceFrom(index, target, new HashSet<String>());
+
+                    if (distance >= nearestDistance)
+                        continue;
+
+                    Constructor<?> constructor = parentConstructor(loader, target, screenBase);
+
+                    if (constructor != null) {
+                        nearest = constructor;
+                        nearestDistance = distance;
+                    }
+                }
+
+        return nearest;
+    }
+
+    private static Constructor<?> parentConstructor(ClassLoader loader, String className, Class<?> screenBase) {
+        try {
+            Class<?> type = loadClass(loader, className);
+
+            if (Modifier.isAbstract(type.getModifiers()))
+                return null;
+
+            for (Constructor<?> constructor : type.getDeclaredConstructors()) {
+                Class<?>[] parameters = constructor.getParameterTypes();
+
+                if (parameters.length == 1 && parameters[0] == screenBase) {
+                    constructor.setAccessible(true);
+                    return constructor;
+                }
+            }
+        } catch (Throwable exception) {
+            // A screen that can't be loaded can't be opened either.
+        }
+
+        return null;
+    }
+
+    private static TransitionPlan selectTransition(GameAutomationIndex.IndexedCode index, List<TransitionPlan> transitions) {
         if (transitions.isEmpty())
             return null;
 
@@ -491,6 +612,21 @@ public final class GameAutomationController {
 
         visited.remove(source);
         return best;
+    }
+
+    /**
+     * Finds the transitions of a live screen. A mod can replace a menu with its own subclass, which the index has never seen, so the
+     * runtime superclasses lead to the menu whose routes still apply.
+     */
+    static List<TransitionPlan> transitions(GameAutomationIndex.IndexedCode index, Class<?> screenType) {
+        for (Class<?> type = screenType; type != null; type = type.getSuperclass()) {
+            List<TransitionPlan> transitions = transitions(index, type.getName().replace('.', '/'));
+
+            if (!transitions.isEmpty())
+                return transitions;
+        }
+
+        return Collections.emptyList();
     }
 
     private static List<TransitionPlan> transitions(GameAutomationIndex.IndexedCode index, String className) {
@@ -919,6 +1055,8 @@ public final class GameAutomationController {
         volatile Object connection;
         volatile String rejection;
         volatile long closedAt;
+        volatile long unroutableSince;
+        volatile Object routeScreen;
 
         PendingOperation(String requestId, String kind, String value) {
             this.requestId = requestId;
