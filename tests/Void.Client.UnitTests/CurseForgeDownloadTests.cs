@@ -5,9 +5,12 @@ using Xunit;
 
 namespace Void.Client.UnitTests;
 
-public sealed class CurseForgeDownloadTests
+public sealed class CurseForgeDownloadTests : IDisposable
 {
     private const string AbcSha1 = "a9993e364706816aba3e25717850c26c9cd0d89d";
+    private readonly string _directory = Directory.CreateTempSubdirectory(prefix: "void-curseforge-").FullName;
+
+    private string DestinationPath => Path.Combine(_directory, "tombstone-neoforge-1.21.1-9.5.6.jar");
 
     [Fact]
     public void ListsCdnAndWebsiteWhenApiHasNoDownloadUrl()
@@ -62,9 +65,34 @@ public sealed class CurseForgeDownloadTests
     [InlineData("A9993E364706816ABA3E25717850C26C9CD0D89D", true)]
     [InlineData("0000000000000000000000000000000000000000", false)]
     [InlineData(null, true)]
-    public void ChecksContentAgainstSha1(string? expectedSha1, bool expectedMatch)
+    public async Task ChecksContentAgainstSha1(string? expectedSha1, bool expectedMatch)
     {
-        Assert.Equal(expectedMatch, GameRuntime.IsExpectedSha1(Encoding.ASCII.GetBytes("abc"), expectedSha1));
+        using var source = new MemoryStream(Encoding.ASCII.GetBytes("abc"));
+        string actualSha1 = await GameRuntime.CopyWithSha1Async(source, Stream.Null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expectedMatch, GameRuntime.IsExpectedSha1(actualSha1, expectedSha1));
+    }
+
+    [Theory]
+    [InlineData(null, 4)]
+    [InlineData("", 4)]
+    [InlineData("1", 1)]
+    [InlineData(" 8 ", 8)]
+    public void ReadsParallelDownloads(string? configured, int expected)
+    {
+        Assert.Equal(expected, GameRuntime.GetCurseForgeParallelDownloads(configured));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-2")]
+    [InlineData("four")]
+    [InlineData("1.5")]
+    public void RejectsParallelDownloadsThatAreNotPositiveIntegers(string configured)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => GameRuntime.GetCurseForgeParallelDownloads(configured));
+
+        Assert.Equal("CURSEFORGE_PARALLEL_DOWNLOADS must be a positive integer", exception.Message);
     }
 
     [Fact]
@@ -73,10 +101,12 @@ public sealed class CurseForgeDownloadTests
         StubHandler handler = new(request => request.RequestUri?.Host == "edge.forgecdn.net" ? new HttpResponseMessage(HttpStatusCode.Forbidden) : Content("abc"));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
 
-        Assert.Equal("abc", Encoding.ASCII.GetString(result.Content ?? []));
+        Assert.True(result.Downloaded);
+        Assert.Equal("abc", await File.ReadAllTextAsync(DestinationPath, TestContext.Current.CancellationToken));
         Assert.Equal(["edge.forgecdn.net returned 403"], result.Failures);
+        Assert.Equal([DestinationPath], Directory.GetFiles(_directory));
     }
 
     [Fact]
@@ -85,22 +115,25 @@ public sealed class CurseForgeDownloadTests
         StubHandler handler = new(request => Content(request.RequestUri?.Host == "edge.forgecdn.net" ? "tampered" : "abc"));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
 
-        Assert.Equal("abc", Encoding.ASCII.GetString(result.Content ?? []));
+        Assert.True(result.Downloaded);
+        Assert.Equal("abc", await File.ReadAllTextAsync(DestinationPath, TestContext.Current.CancellationToken));
         Assert.Contains("does not match SHA-1", result.Failures.Single(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task ReportsEveryFailedCandidate()
+    public async Task ReportsEveryFailedCandidateAndLeavesNothingBehind()
     {
-        StubHandler handler = new(request => new HttpResponseMessage(HttpStatusCode.NotFound));
+        StubHandler handler = new(request => request.RequestUri?.Host == "edge.forgecdn.net" ? Content("tampered") : new HttpResponseMessage(HttpStatusCode.NotFound));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
 
-        Assert.Null(result.Content);
-        Assert.Equal(["edge.forgecdn.net returned 404", "www.curseforge.com returned 404"], result.Failures);
+        Assert.False(result.Downloaded);
+        Assert.Equal(2, result.Failures.Count);
+        Assert.Equal("www.curseforge.com returned 404", result.Failures[1]);
+        Assert.Empty(Directory.GetFiles(_directory));
     }
 
     [Fact]
@@ -109,10 +142,32 @@ public sealed class CurseForgeDownloadTests
         StubHandler handler = new(request => new HttpResponseMessage(HttpStatusCode.Forbidden));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
 
         Assert.Equal([("edge.forgecdn.net", false), ("www.curseforge.com", true)], handler.Requests);
-        Assert.Null(result.Content);
+        Assert.False(result.Downloaded);
+    }
+
+    [Fact]
+    public async Task CancellingRemovesThePartialDownload()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var stalledStream = new StalledStream(Encoding.ASCII.GetBytes("partial"));
+        StubHandler handler = new(request => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stalledStream) });
+        using HttpClient httpClient = new(handler);
+
+        var download = GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, cancellation.Token);
+        await stalledStream.Stalled.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Single(Directory.GetFiles(_directory));
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+        Assert.Empty(Directory.GetFiles(_directory));
+    }
+
+    public void Dispose()
+    {
+        Directory.Delete(_directory, recursive: true);
     }
 
     private static IReadOnlyList<Uri> Candidates()
@@ -134,6 +189,27 @@ public sealed class CurseForgeDownloadTests
             Requests.Add((request.RequestUri?.Host ?? "", request.Headers.Contains(name: "x-api-key")));
 
             return Task.FromResult(respond(request));
+        }
+    }
+
+    /// <summary>Serves a first chunk, then waits until the download is cancelled, like a connection that stops mid-file.</summary>
+    private sealed class StalledStream(byte[] firstChunk) : MemoryStream(firstChunk)
+    {
+        private readonly TaskCompletionSource _stalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Stalled => _stalled.Task;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            int read = await base.ReadAsync(buffer, cancellationToken);
+
+            if (read > 0)
+                return read;
+
+            _stalled.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+
+            return 0;
         }
     }
 }

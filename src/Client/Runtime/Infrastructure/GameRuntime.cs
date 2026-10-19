@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -58,6 +59,31 @@ internal sealed partial class GameRuntime
     }
 
     /// <summary>
+    /// Copies <paramref name="source" /> to <paramref name="destination" /> and returns the SHA-1 of the copied bytes as hexadecimal.
+    /// </summary>
+    [SuppressMessage(
+        "Security",
+        "CA5350:Do Not Use Weak Cryptographic Algorithms",
+        Justification = "CurseForge publishes SHA-1 hashes for file integrity checks"
+    )]
+    internal static async Task<string> CopyWithSha1Async(Stream source, Stream destination, CancellationToken cancellationToken)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+
+        byte[] buffer = new byte[81920];
+        int read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        while (read > 0)
+        {
+            hash.AppendData(buffer, offset: 0, read);
+            await destination.WriteAsync(buffer.AsMemory(start: 0, read), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    /// <summary>
     /// Lists where a CurseForge file can be downloaded: the API's download URL when the author allows third-party downloads,
     /// then CurseForge's CDN and website, which also serve files whose authors disallow API distribution.
     /// </summary>
@@ -90,48 +116,57 @@ internal sealed partial class GameRuntime
     }
 
     /// <summary>
-    /// Downloads the first candidate that answers successfully with content matching the published SHA-1, recording why the others were skipped.
+    /// Downloads the first candidate that answers successfully with content matching the published SHA-1 to <paramref name="destinationPath" />,
+    /// recording why the others were skipped. Content streams through a temporary file next to the destination and only replaces it once its
+    /// hash matches, so several large files can download at once without being held in memory, and nothing partial is left behind.
     /// </summary>
-    internal static async Task<CurseForgeDownloadResult> DownloadCurseForgeFileAsync(HttpClient httpClient, IReadOnlyList<Uri> candidates, string? expectedSha1, string apiKey, CancellationToken cancellationToken)
+    internal static async Task<CurseForgeDownloadResult> DownloadCurseForgeFileAsync(
+        HttpClient httpClient,
+        IReadOnlyList<Uri> candidates,
+        string? expectedSha1,
+        string apiKey,
+        string destinationPath,
+        CancellationToken cancellationToken
+    )
     {
         List<string> failures = [];
+        string temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.download";
 
-        foreach (var candidate in candidates)
+        try
         {
-            using HttpRequestMessage request = new(HttpMethod.Get, candidate);
-
-            if (candidate.Host.EndsWith(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
-                request.Headers.Add(name: "x-api-key", apiKey);
-
-            try
+            foreach (var candidate in candidates)
             {
-                using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                string? failure = await TryDownloadCurseForgeCandidateAsync(httpClient, candidate, expectedSha1, apiKey, temporaryPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-                if (!response.IsSuccessStatusCode)
+                if (failure is null)
                 {
-                    failures.Add($"{candidate.Host} returned {(int)response.StatusCode}");
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
 
-                    continue;
+                    return new CurseForgeDownloadResult(Downloaded: true, failures);
                 }
 
-                byte[] content = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                failures.Add(failure);
+            }
 
-                if (IsExpectedSha1(content, expectedSha1))
-                    return new CurseForgeDownloadResult(content, failures);
-
-                failures.Add($"{candidate.Host} served content that does not match SHA-1 {expectedSha1}");
-            }
-            catch (HttpRequestException exception)
-            {
-                failures.Add($"{candidate.Host} failed: {exception.Message}");
-            }
-            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                failures.Add($"{candidate.Host} timed out: {exception.Message}");
-            }
+            return new CurseForgeDownloadResult(Downloaded: false, failures);
         }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
+    }
 
-        return new CurseForgeDownloadResult(Content: null, failures);
+    /// <summary>
+    /// Reads how many CurseForge files download at the same time, which defaults to 4 like itzg's CF_PARALLEL_DOWNLOADS.
+    /// </summary>
+    internal static int GetCurseForgeParallelDownloads(string? configured)
+    {
+        if (string.IsNullOrWhiteSpace(configured))
+            return DefaultCurseForgeParallelDownloads;
+
+        bool valid = int.TryParse(configured.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int parallelDownloads) && parallelDownloads > 0;
+
+        return valid ? parallelDownloads : throw new InvalidOperationException(message: "CURSEFORGE_PARALLEL_DOWNLOADS must be a positive integer");
     }
 
     internal static string? GetCurseForgeSha1(IReadOnlyList<CurseForgeFileHash>? hashes)
@@ -140,16 +175,11 @@ internal sealed partial class GameRuntime
     }
 
     /// <summary>
-    /// Checks downloaded bytes against CurseForge's published SHA-1. This is an integrity check, not a security boundary.
+    /// Checks a downloaded file's SHA-1 against CurseForge's published one. This is an integrity check, not a security boundary.
     /// </summary>
-    [SuppressMessage(
-        "Security",
-        "CA5350:Do Not Use Weak Cryptographic Algorithms",
-        Justification = "CurseForge publishes SHA-1 hashes for file integrity checks"
-    )]
-    internal static bool IsExpectedSha1(byte[] content, string? expectedSha1)
+    internal static bool IsExpectedSha1(string actualSha1, string? expectedSha1)
     {
-        return string.IsNullOrWhiteSpace(expectedSha1) || Convert.ToHexString(SHA1.HashData(content)).Equals(expectedSha1.Trim(), StringComparison.OrdinalIgnoreCase);
+        return string.IsNullOrWhiteSpace(expectedSha1) || actualSha1.Equals(expectedSha1.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -190,7 +220,15 @@ internal sealed partial class GameRuntime
         return null;
     }
 
-    private static async Task<string> InstallModpack(string slug, int fileId, string apiKey, Uri apiBaseUri, string minecraftDirectory, CancellationToken cancellationToken)
+    private static async Task<string> InstallModpack(
+        string slug,
+        int fileId,
+        string apiKey,
+        Uri apiBaseUri,
+        int parallelDownloads,
+        string minecraftDirectory,
+        CancellationToken cancellationToken
+    )
     {
         using HttpClient httpClient = new();
 
@@ -206,14 +244,19 @@ internal sealed partial class GameRuntime
         await Console.Error.WriteLineAsync(value: "Downloading modpack archive").ConfigureAwait(continueOnCapturedContext: false);
         var archiveFile = await curseForgeClient.GetModFileAsync(project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         var archiveDownloadUris = CreateCurseForgeDownloadUris(project.Id, archiveFile.Id, archiveFile.FileName, archiveFile.DownloadUrl);
-        var archiveDownload = await DownloadCurseForgeFileAsync(httpClient, archiveDownloadUris, GetCurseForgeSha1(archiveFile.Hashes), apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string archivePath = Path.Combine(Path.GetTempPath(), $"void-curseforge-{project.Id}-{archiveFile.Id}-{Guid.NewGuid():N}.zip");
+        var archiveDownload = await DownloadCurseForgeFileAsync(httpClient, archiveDownloadUris, GetCurseForgeSha1(archiveFile.Hashes), apiKey, archivePath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        byte[] archiveBytes = archiveDownload.Content
-                              ?? throw new InvalidOperationException($"Modpack archive {slug} file {fileId} could not be downloaded: {string.Join(separator: "; ", archiveDownload.Failures)}");
+        if (!archiveDownload.Downloaded)
+            throw new InvalidOperationException($"Modpack archive {slug} file {fileId} could not be downloaded: {string.Join(separator: "; ", archiveDownload.Failures)}");
 
         await Console.Error.WriteLineAsync(value: "Reading modpack manifest").ConfigureAwait(continueOnCapturedContext: false);
 
-        using ZipArchive archive = new(new MemoryStream(archiveBytes), ZipArchiveMode.Read);
+        // The archive is removed from the temporary directory as soon as it is closed.
+        using ZipArchive archive = new(
+            new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, bufferSize: 81920, FileOptions.DeleteOnClose),
+            ZipArchiveMode.Read
+        );
 
         var manifestEntry = archive.GetEntry(entryName: "manifest.json")
                             ?? throw new InvalidOperationException(message: "manifest.json not found");
@@ -306,46 +349,54 @@ internal sealed partial class GameRuntime
 
                 int totalFileCount = allFileMetadata.Count;
                 int downloadIndex = 0;
-                List<string> missingFiles = [];
+                ConcurrentDictionary<int, string> missingFiles = [];
+                ParallelOptions parallelOptions = new() { MaxDegreeOfParallelism = parallelDownloads, CancellationToken = cancellationToken };
 
-                foreach (var fileMeta in allFileMetadata)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
+                await Console.Error.WriteLineAsync($"Downloading {totalFileCount} CurseForge files, {parallelDownloads} at a time").ConfigureAwait(continueOnCapturedContext: false);
 
-                    downloadIndex++;
-                    ValidateFileName(fileMeta.FileName, fileMeta.ModId, fileMeta.Id);
-
-                    string targetDirectory = DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory);
-                    var targetDirectoryInformation = Directory.CreateDirectory(targetDirectory);
-                    string destinationPath = Path.Combine(targetDirectory, fileMeta.FileName);
-
-                    if (File.Exists(destinationPath))
+                // Most of a file's download time is request latency, so a few downloads in flight finish a large pack much sooner.
+                await Parallel.ForEachAsync(
+                    allFileMetadata.Index(),
+                    parallelOptions,
+                    async (entry, downloadCancellationToken) =>
                     {
-                        await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Already exists: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
+                        var (position, fileMeta) = entry;
+                        int fileNumber = Interlocked.Increment(ref downloadIndex);
+                        ValidateFileName(fileMeta.FileName, fileMeta.ModId, fileMeta.Id);
 
-                        continue;
-                    }
+                        string targetDirectory = DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory);
+                        var targetDirectoryInformation = Directory.CreateDirectory(targetDirectory);
+                        string destinationPath = Path.Combine(targetDirectory, fileMeta.FileName);
 
-                    await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
+                        if (File.Exists(destinationPath))
+                        {
+                            await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Already exists: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
 
-                    var fileDownloadUris = CreateCurseForgeDownloadUris(fileMeta.ModId, fileMeta.Id, fileMeta.FileName, fileMeta.DownloadUrl);
-                    var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, GetCurseForgeSha1(fileMeta.Hashes), apiKey, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                            return;
+                        }
 
-                    if (fileDownload.Content is null)
-                    {
+                        await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
+
+                        var fileDownloadUris = CreateCurseForgeDownloadUris(fileMeta.ModId, fileMeta.Id, fileMeta.FileName, fileMeta.DownloadUrl);
+
+                        var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, GetCurseForgeSha1(fileMeta.Hashes), apiKey, destinationPath, downloadCancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                        if (fileDownload.Downloaded)
+                            return;
+
                         string missingFile = $"{fileMeta.FileName} (mod {fileMeta.ModId}, file {fileMeta.Id})";
-                        missingFiles.Add(missingFile);
+                        missingFiles[position] = missingFile;
 
-                        await Console.Error.WriteLineAsync($"[{downloadIndex}/{totalFileCount}] Could not download {missingFile}: {string.Join(separator: "; ", fileDownload.Failures)}").ConfigureAwait(continueOnCapturedContext: false);
-
-                        continue;
+                        await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Could not download {missingFile}: {string.Join(separator: "; ", fileDownload.Failures)}").ConfigureAwait(continueOnCapturedContext: false);
                     }
+                ).ConfigureAwait(continueOnCapturedContext: false);
 
-                    await File.WriteAllBytesAsync(destinationPath, fileDownload.Content, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                if (!missingFiles.IsEmpty)
+                {
+                    var missingFilesInManifestOrder = missingFiles.OrderBy(static missingFile => missingFile.Key).Select(static missingFile => missingFile.Value);
+
+                    throw new InvalidOperationException($"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFilesInManifestOrder)}");
                 }
-
-                if (missingFiles.Count > 0)
-                    throw new InvalidOperationException($"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFiles)}");
             }
             else
             {
@@ -513,6 +564,7 @@ internal sealed partial class GameRuntime
         int fileId,
         string curseForgeApiKey,
         Uri curseForgeApiBaseUri,
+        int parallelDownloads,
         string minecraftDirectory,
         CancellationToken cancellationToken
     )
@@ -538,7 +590,7 @@ internal sealed partial class GameRuntime
         }
         else
         {
-            portablemcVersion = await InstallModpack(slug, fileId, curseForgeApiKey, curseForgeApiBaseUri, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            portablemcVersion = await InstallModpack(slug, fileId, curseForgeApiKey, curseForgeApiBaseUri, parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             await File.WriteAllTextAsync(versionFile, portablemcVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             await File.WriteAllTextAsync(markerFile, marker, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -590,6 +642,58 @@ internal sealed partial class GameRuntime
         catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException or ObjectDisposedException)
         {
             await Console.Error.WriteLineAsync($"Minecraft agent command cancellation was unavailable: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
+        }
+    }
+
+    /// <summary>
+    /// Streams one candidate to <paramref name="temporaryPath" /> and checks it against the published SHA-1.
+    /// </summary>
+    /// <returns><see langword="null" /> when the file matches; otherwise, why the candidate was skipped.</returns>
+    private static async Task<string?> TryDownloadCurseForgeCandidateAsync(
+        HttpClient httpClient,
+        Uri candidate,
+        string? expectedSha1,
+        string apiKey,
+        string temporaryPath,
+        CancellationToken cancellationToken
+    )
+    {
+        using HttpRequestMessage request = new(HttpMethod.Get, candidate);
+
+        if (candidate.Host.EndsWith(value: "curseforge.com", StringComparison.OrdinalIgnoreCase))
+            request.Headers.Add(name: "x-api-key", apiKey);
+
+        try
+        {
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            if (!response.IsSuccessStatusCode)
+                return $"{candidate.Host} returned {(int)response.StatusCode}";
+
+            string actualSha1;
+            var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            await using (source.ConfigureAwait(continueOnCapturedContext: false))
+            {
+                FileStream target = new(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 81920, useAsync: true);
+
+                await using (target.ConfigureAwait(continueOnCapturedContext: false))
+                    actualSha1 = await CopyWithSha1Async(source, target, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            }
+
+            return IsExpectedSha1(actualSha1, expectedSha1) ? null : $"{candidate.Host} served content that does not match SHA-1 {expectedSha1}";
+        }
+        catch (HttpRequestException exception)
+        {
+            return $"{candidate.Host} failed: {exception.Message}";
+        }
+        catch (IOException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return $"{candidate.Host} failed: {exception.Message}";
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return $"{candidate.Host} timed out: {exception.Message}";
         }
     }
 
@@ -711,7 +815,7 @@ internal sealed partial class GameRuntime
         }
     }
 
-    internal sealed record CurseForgeDownloadResult(byte[]? Content, IReadOnlyList<string> Failures);
+    internal sealed record CurseForgeDownloadResult(bool Downloaded, IReadOnlyList<string> Failures);
 
     internal sealed record SodiumDownload(string VersionNumber, string VersionType, Uri DownloadUri);
 }

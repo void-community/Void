@@ -32,6 +32,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int CurseForgeSha1HashAlgorithm = 1;
     private const string CurseForgeWebsiteUrl = "https://www.curseforge.com";
     private const string DefaultCurseForgeApiBaseUrl = "https://api.curseforge.com";
+    private const int DefaultCurseForgeParallelDownloads = 4;
     private const string DefaultDisplay = ":99";
     private const string DefaultMinecraftDirectory = "/root/.minecraft";
     private const int DisplayProbeTimeoutMilliseconds = 1000;
@@ -100,9 +101,10 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException(message: "CURSEFORGE_API_KEY is not set");
 
+        int parallelDownloads = GetCurseForgeParallelDownloads(Environment.GetEnvironmentVariable(variable: "CURSEFORGE_PARALLEL_DOWNLOADS"));
         string minecraftDirectory = GetMinecraftDirectory();
 
-        string portableMinecraftVersion = await PrepareCurseForgeAsync(slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string portableMinecraftVersion = await PrepareCurseForgeAsync(slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);

@@ -83,6 +83,8 @@ docker run --name void-client --rm -d -p 8080:80 \
 
 `CURSEFORGE_API_BASE_URL` optionally replaces the default `https://api.curseforge.com` API base URL.
 
+`CURSEFORGE_PARALLEL_DOWNLOADS` sets how many modpack files download at the same time and defaults to `4`, like itzg's `CF_PARALLEL_DOWNLOADS`. It must be a positive integer.
+
 
 ## Launcher Retry Configuration
 
