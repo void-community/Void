@@ -13,7 +13,7 @@ public class PluginAssemblyLoadContext : AssemblyLoadContext
 
     public Assembly PluginAssembly { get; }
 
-    public PluginAssemblyLoadContext(ILogger<PluginAssemblyLoadContext> logger, IDependencyService dependencies, string name, Stream assemblyStream, IReadOnlyCollection<WeakPluginContainer> containers) : base(name, true)
+    public PluginAssemblyLoadContext(ILogger<PluginAssemblyLoadContext> logger, IDependencyService dependencies, string name, Stream assemblyStream, CopyOnWriteCollection<WeakPluginContainer> containers) : base(name, true)
     {
         _logger = logger;
         _resolver = dependencies.CreateInstance<ManagedResolver>(default, this, containers);

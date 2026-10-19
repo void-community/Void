@@ -21,15 +21,16 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private static readonly Option<string[]> PluginsOption = new("--plugin", "-p") { Description = "Provides a path to the file, directory or URL to load plugin." };
 
-    private readonly List<WeakPluginContainer> _containers = [];
+    // Plugins load concurrently while their dependencies resolve from other containers, so readers work on snapshots instead of locks.
+    private readonly CopyOnWriteCollection<WeakPluginContainer> _containers = new();
     private readonly TimeSpan _gcRate = TimeSpan.FromMilliseconds(500);
 
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
 
-    public IEnumerable<IPlugin> All => _containers.SelectMany(container => container.Plugins);
+    public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.Plugins);
 
-    public IEnumerable<string> Containers => _containers
+    public IEnumerable<string> Containers => _containers.Snapshot
         .Select(container => container.Context.Name)
         .WhereNotNull();
 
@@ -193,10 +194,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public async ValueTask LoadPluginAsync(Type pluginType, CancellationToken cancellationToken = default)
     {
-        WeakPluginContainer container;
-
-        lock (_containers)
-            container = _containers.FirstOrDefault(reference => reference.Context.PluginAssembly == pluginType.Assembly) ??
+        var container = _containers.Snapshot.FirstOrDefault(reference => reference.Context.PluginAssembly == pluginType.Assembly) ??
                         throw new Exception($"No container found for {pluginType.Name} plugin");
 
         var plugin = dependencies.CreateInstance<IPlugin>(pluginType, container.CancellationTokenSource.Token);
@@ -218,7 +216,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     public async ValueTask UnloadContainersAsync(CancellationToken cancellationToken = default)
     {
         logger.LogInformation("Unloading all plugins");
-        await _containers
+        await _containers.Snapshot
             .Select(reference => reference.Context.Name)
             .WhereNotNull()
             .Select(async name => await UnloadContainerAsync(name, cancellationToken))
@@ -227,10 +225,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public async ValueTask UnloadContainerAsync(string name, CancellationToken cancellationToken = default)
     {
-        WeakPluginContainer container;
-
-        lock (_containers)
-            container = _containers.FirstOrDefault(reference => reference.Context.Name == name) ??
+        var container = _containers.Snapshot.FirstOrDefault(reference => reference.Context.Name == name) ??
                         throw new Exception($"Plugin container {name} not found");
 
         if (!container.IsAlive)
@@ -273,8 +268,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
 
-        lock (_containers)
-            _containers.RemoveAll(reference => !reference.IsAlive);
+        _containers.RemoveAll(reference => !reference.IsAlive);
     }
 
     public IEnumerable<Type> LoadContainer(string name, Stream stream, bool ignoreEmpty = false)
@@ -283,7 +277,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         try
         {
-            var context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers.AsReadOnly());
+            var context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers);
 
             var plugins = GetPlugins(context.PluginAssembly);
 
@@ -293,8 +287,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
                 return plugins;
             }
 
-            lock (_containers)
-                _containers.Add(new WeakPluginContainer(context));
+            _containers.Add(new WeakPluginContainer(context));
 
             return plugins;
         }

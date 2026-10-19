@@ -6,17 +6,19 @@ namespace Void.Proxy.Plugins.Containers;
 
 public class WeakPluginContainer
 {
-    private readonly List<WeakReference<IPlugin>> _references;
+    private readonly CopyOnWriteCollection<WeakReference<IPlugin>> _references = new();
 
     [SuppressMessage("Style", "IDE0290:Use primary constructor", Justification = "They keep a strict reference to parameters")]
     public WeakPluginContainer(PluginAssemblyLoadContext context, params IPlugin[] plugins)
     {
         Context = context;
-        _references = [.. plugins.Select(plugin => new WeakReference<IPlugin>(plugin, true))];
+
+        foreach (var plugin in plugins)
+            _references.Add(new WeakReference<IPlugin>(plugin, true));
     }
 
     public IEnumerable<IPlugin> Plugins => GetReferences();
-    public bool IsAlive => _references.All(plugin => plugin.TryGetTarget(out _));
+    public bool IsAlive => _references.Snapshot.All(plugin => plugin.TryGetTarget(out _));
     public PluginAssemblyLoadContext Context { get; }
     public CancellationTokenSource CancellationTokenSource { get; } = new();
 
@@ -30,7 +32,7 @@ public class WeakPluginContainer
 
     private IEnumerable<IPlugin> GetReferences()
     {
-        foreach (var reference in _references)
+        foreach (var reference in _references.Snapshot)
         {
             yield return !reference.TryGetTarget(out var plugin)
                 ? throw new ObjectDisposedException(Context.Name)

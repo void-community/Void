@@ -11,7 +11,7 @@ public class ManagedResolver(
     IEmbeddedDependencyResolver embedded,
     IFileDependencyResolver file,
     AssemblyLoadContext context,
-    IReadOnlyCollection<WeakPluginContainer> containers)
+    CopyOnWriteCollection<WeakPluginContainer> containers)
 {
     private static readonly string[] VoidDependencies = [nameof(Void)];
     private static readonly string[] SharedDependencies = [nameof(Microsoft)];
@@ -33,7 +33,8 @@ public class ManagedResolver(
 
     public Assembly? ResolveContainerAssembly(AssemblyName assemblyName)
     {
-        foreach (var reference in containers)
+        // Other plugins may load meanwhile; the snapshot includes every container added so far and never changes during the lookup.
+        foreach (var reference in containers.Snapshot)
         {
             var assembly = reference.Context.Assemblies.FirstOrDefault(loadedAssembly => loadedAssembly.GetName().Name == assemblyName.Name);
 
