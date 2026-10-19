@@ -25,6 +25,7 @@ Project directories:
 - `src/Plugins/ForwardingSupport/Velocity` — Velocity forwarding support plugin.
 - `src/Plugins/ModsSupport/CrossStitch` — CrossStitch mod integration plugin.
 - `src/Plugins/ModsSupport/Forge` — Forge mod integration plugin.
+- `src/Plugins/ModsSupport/SlowJoin` — keeps slow-loading modded clients connected after they join a server.
 - `src/Plugins/ProtocolSupport/Java/v1_7_2_to_1_12_2` — Java protocol support for 1.7.2 through 1.12.2.
 - `src/Plugins/ProtocolSupport/Java/v1_13_to_1_20_1` — Java protocol support for 1.13 through 1.20.1.
 - `src/Plugins/ProtocolSupport/Java/v1_20_2_to_latest` — Java protocol support for 1.20.2 through latest.

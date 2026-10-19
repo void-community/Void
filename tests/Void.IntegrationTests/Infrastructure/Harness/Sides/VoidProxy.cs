@@ -138,10 +138,8 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
 
     public async Task WaitForServerConnectionAndKeepAliveAsync(string username, string serverName, CancellationToken cancellationToken = default)
     {
-        const string keepAliveRequestMarker = "Sending Keep Alive request ";
         var stateLock = new Lock();
         var connected = false;
-        long? requestId = null;
 
         using var waiterCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var readyTask = LogWriter.WaitForLineAsync(line =>
@@ -157,22 +155,10 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
                 return false;
             }
 
-            if (requestId is null)
-            {
-                var markerIndex = line.IndexOf(keepAliveRequestMarker, StringComparison.Ordinal);
+            // The player answered a keep-alive of the server: forwarded to it, or the first answer SlowJoin waits for after the join.
+            bool answerForwarded = line.Contains("Forwarding Keep Alive response ", StringComparison.Ordinal) && line.Contains($" to {serverName}", StringComparison.Ordinal);
 
-                if (markerIndex < 0)
-                    return false;
-
-                var requestIdText = line[(markerIndex + keepAliveRequestMarker.Length)..].Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
-
-                if (long.TryParse(requestIdText, out var parsedRequestId))
-                    requestId = parsedRequestId;
-
-                return false;
-            }
-
-            return line.Contains($"Keep Alive hit {requestId.Value} received", StringComparison.Ordinal);
+            return answerForwarded || line.Contains($"answered its first Keep Alive on {serverName}", StringComparison.Ordinal);
         }, waiterCancellationTokenSource.Token);
         var disconnectedTask = LogWriter.WaitForLineAsync(
             line => line.Contains($"Player {username} disconnected", StringComparison.Ordinal),
@@ -203,7 +189,7 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
         string GetState()
         {
             using var _ = stateLock.EnterScope();
-            return $"Connected: {connected}; request id: {requestId?.ToString() ?? "not observed"}.";
+            return $"Connected: {connected}.";
         }
     }
 

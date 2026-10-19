@@ -27,8 +27,7 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
 {
     private const string DefaultKickMessage = "You were kicked from proxy";
 
-    private readonly TimeSpan _keepAliveInterval = TimeSpan.FromSeconds(5);
-    private readonly Dictionary<int, KeepAliveTracker> _keepAliveTrackers = [];
+    private readonly KeepAliveForwarding _keepAliveForwarding = new();
 
     [Subscribe]
     public void OnPlayerConnecting(PlayerConnectingEvent @event)
@@ -38,25 +37,10 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     }
 
     [Subscribe]
-    public void OnPlayerDisconnected(PlayerDisconnectedEvent @event)
-    {
-        if (!@event.Player.IsMinecraft)
-            return;
-
-        if (!IsSupportedVersion(@event.Player.ProtocolVersion))
-            return;
-
-        RemoveKeepAliveTracker(@event.Player);
-    }
-
-    [Subscribe]
     public async ValueTask OnPhaseChanged(PhaseChangedEvent @event, CancellationToken cancellationToken)
     {
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
-
-        if (@event.Phase is Phase.Configuration or Phase.Play)
-            await PongKeepAliveTracker(@event.Player, cancellationToken: cancellationToken);
 
         if (@event.Phase is Phase.Play && @event.Side is Side.Server && @event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_20_2)
         {
@@ -89,21 +73,17 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
 
+        // Plugins such as SlowJoin may answer keep-alives on the player's behalf.
+        if (@event.Result)
+            return;
+
         switch (@event.Message)
         {
             case KeepAliveRequestPacket keepAliveRequest:
-                @event.Cancel();
-                await @event.Link.SendPacketAsync(new KeepAliveResponsePacket { Id = keepAliveRequest.Id }, cancellationToken);
+                await HandleKeepAliveRequestAsync(@event, keepAliveRequest, cancellationToken);
                 break;
             case KeepAliveResponsePacket keepAliveResponse:
-                if (KeepAliveTracker.UsesLegacyRequestIdWidth(@event.Player.ProtocolVersion) && keepAliveResponse.Id is 0)
-                {
-                    await PongKeepAliveTracker(@event.Player, acknowledgeOutstandingRequest: true, cancellationToken: cancellationToken);
-                    break;
-                }
-
-                @event.Cancel();
-                await PongKeepAliveTracker(@event.Player, keepAliveResponse.Id, cancellationToken: cancellationToken);
+                HandleKeepAliveResponse(@event, keepAliveResponse);
                 break;
         }
     }
@@ -163,46 +143,39 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     protected abstract ValueTask<bool> SendChatMessageAsync(IPlayer player, Component text, CancellationToken cancellationToken);
     protected abstract bool IsSupportedVersion(ProtocolVersion version);
 
-    private async ValueTask PongKeepAliveTracker(IPlayer player, long? id = null, bool acknowledgeOutstandingRequest = false, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Forwards the backend's keep-alive to the player, so that the backend decides when the player has timed out, as with a
+    /// direct connection. A link that is still joining has no player waiting behind it yet, so the proxy answers for the player.
+    /// </summary>
+    private async ValueTask HandleKeepAliveRequestAsync(MessageReceivedEvent @event, KeepAliveRequestPacket keepAliveRequest, CancellationToken cancellationToken)
     {
-        var key = player.GetStableHashCode();
+        bool linkForwards = ReferenceEquals(@event.Player.Link, @event.Link) && @event.Link.IsAlive;
 
-        if (!_keepAliveTrackers.TryGetValue(key, out var tracker))
+        if (!linkForwards)
         {
-            tracker = _keepAliveTrackers[key] = new KeepAliveTracker(async requestId =>
-            {
-                player.Logger.LogTrace("Sending Keep Alive request {Id}", requestId);
-
-                try
-                {
-                    await player.SendPacketAsync(new KeepAliveRequestPacket { Id = requestId }, cancellationToken);
-                }
-                catch (StreamClosedException)
-                {
-                    // Ignored
-                }
-                catch (Exception exception)
-                {
-                    player.Logger.LogError(exception, "Failed to send Keep Alive request {Id}", requestId);
-                }
-            }, _keepAliveInterval, keepAliveResponseTimeout: default, createRequestIdFunction: () => KeepAliveTracker.CreateRequestId(player.ProtocolVersion), canSendKeepAliveFunction: () => player.Link is { IsAlive: true });
+            @event.Cancel();
+            await @event.Link.SendPacketAsync(new KeepAliveResponsePacket { Id = keepAliveRequest.Id }, cancellationToken);
+            return;
         }
 
-        if (id is { } responseId)
-            await tracker.PongAsync(player, responseId, cancellationToken);
-        else if (acknowledgeOutstandingRequest)
-            await tracker.PongAsync(player, cancellationToken);
-        else
-            await tracker.RefreshAsync(player, cancellationToken);
+        _keepAliveForwarding.Remember(@event.Link, keepAliveRequest.Id);
+        @event.Player.Logger.LogTrace("Forwarding Keep Alive request {Id} from {Server}", keepAliveRequest.Id, @event.Link.Server);
     }
 
-    private void RemoveKeepAliveTracker(IPlayer player)
+    private void HandleKeepAliveResponse(MessageReceivedEvent @event, KeepAliveResponsePacket keepAliveResponse)
     {
-        var key = player.GetStableHashCode();
+        // Clients older than 1.12.2 answer 0 while they load terrain, which backends accept as a sign of life.
+        if (KeepAliveTracker.UsesLegacyRequestIdWidth(@event.Player.ProtocolVersion) && keepAliveResponse.Id is 0)
+            return;
 
-        if (_keepAliveTrackers.Remove(key, out var tracker))
-            tracker.Dispose();
+        if (_keepAliveForwarding.TryAccept(@event.Link, keepAliveResponse.Id))
+        {
+            @event.Player.Logger.LogTrace("Forwarding Keep Alive response {Id} to {Server}", keepAliveResponse.Id, @event.Link.Server);
+            return;
+        }
 
-        // Otherwise player was connected with Status phase only and never had a tracker created
+        // Answers to a backend the player has left would otherwise reach the next backend as unexpected ids.
+        @event.Cancel();
+        @event.Player.Logger.LogDebug("Dropping Keep Alive response {Id} that {Server} did not request", keepAliveResponse.Id, @event.Link.Server);
     }
 }

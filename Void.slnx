@@ -19,6 +19,7 @@
   <Folder Name="/Plugins/Minecraft/ModsSupport/">
     <Project Path="src/Plugins/ModsSupport/CrossStitch/Void.Proxy.Plugins.ModsSupport.CrossStitch.csproj" />
     <Project Path="src/Plugins/ModsSupport/Forge/Void.Proxy.Plugins.ModsSupport.Forge.csproj" />
+    <Project Path="src/Plugins/ModsSupport/SlowJoin/Void.Proxy.Plugins.ModsSupport.SlowJoin.csproj" />
   </Folder>
   <Folder Name="/Extensions/">
     <Project Path="src/Minecraft/Void.Minecraft.csproj" />

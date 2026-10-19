@@ -110,6 +110,22 @@ Enabled = true
 Secret = "YourSecretKeyHere"
 ```
 
+## Slow Join
+The proxy forwards keep-alives between players and servers, so servers decide when a player has timed out. Large modpacks can keep a client too busy to answer for minutes after it joins a server. The built-in Slow Join plugin answers the server's keep-alives for such a player until the player answers a keep-alive of the proxy's own, then forwards them again.
+
+```toml
+// configs/SlowJoin/Settings.toml
+# Answers the server's keep-alives for players that are still loading after joining
+Enabled = true
+
+# How long a player may take to answer the first keep-alive after joining a server, in seconds
+FirstKeepAliveTimeout = 180
+```
+
+:::tip
+You can also set the timeout via [**program arguments**](/docs/configuration/program-arguments/#slow-join) using the `--slow-join-timeout` flag, which takes precedence over the file.
+:::
+
 ## Plugin Installation
 
 Plugins are compiled with the `.dll` extension in any .NET compatible language.

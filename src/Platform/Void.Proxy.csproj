@@ -88,6 +88,10 @@
 			<ReferenceOutputAssembly>false</ReferenceOutputAssembly>
 			<CopyToOutputDirectory>false</CopyToOutputDirectory>
 		</ProjectReference>
+		<ProjectReference Include="..\Plugins\ModsSupport\SlowJoin\Void.Proxy.Plugins.ModsSupport.SlowJoin.csproj">
+			<ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+			<CopyToOutputDirectory>false</CopyToOutputDirectory>
+		</ProjectReference>
 		<ProjectReference Include="..\Plugins\Essentials\Void.Proxy.Plugins.Essentials.csproj">
 			<ReferenceOutputAssembly>false</ReferenceOutputAssembly>
 			<CopyToOutputDirectory>false</CopyToOutputDirectory>
@@ -140,6 +144,10 @@
 		</EmbeddedResource>
 		<EmbeddedResource Include="..\Plugins\ModsSupport\Forge\bin\$(Configuration)\$(TargetFramework)\Void.Proxy.Plugins.ModsSupport.Forge.dll">
 			<Link>Embedded\Void.Proxy.Plugins.ModsSupport.Forge.dll</Link>
+			<LogicalName>%(Filename)%(Extension)</LogicalName>
+		</EmbeddedResource>
+		<EmbeddedResource Include="..\Plugins\ModsSupport\SlowJoin\bin\$(Configuration)\$(TargetFramework)\Void.Proxy.Plugins.ModsSupport.SlowJoin.dll">
+			<Link>Embedded\Void.Proxy.Plugins.ModsSupport.SlowJoin.dll</Link>
 			<LogicalName>%(Filename)%(Extension)</LogicalName>
 		</EmbeddedResource>
 

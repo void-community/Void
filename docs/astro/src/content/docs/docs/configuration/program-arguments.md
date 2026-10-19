@@ -43,6 +43,8 @@ Options:
   --read-only                                            Disables saving changes to the configuration files
   --server <server>                                      Registers an additional server in format <host>:<port> or
                                                          <host> (port defaults to 25565)
+  --slow-join-timeout <slow-join-timeout>                Sets how long a player may take to answer the first
+                                                         keep-alive after joining a server, in seconds
   -?, -h, --help                                         Show help and usage information
   --version                                              Show version information
 ```
@@ -112,6 +114,14 @@ Options:
 
   ```bash title="Example Usage"
   ./void-linux-x64 --forwarding-modern-key YourSecretKeyHere
+  ```
+
+## Slow Join
+- `--slow-join-timeout`
+  Sets how long a player may take to answer the first keep-alive after joining a server, in seconds, for the [**Slow Join**](/docs/configuration/in-file/#slow-join) plugin. It takes precedence over `FirstKeepAliveTimeout` in the configuration file.
+
+  ```bash title="Example Usage"
+  ./void-linux-x64 --slow-join-timeout 300
   ```
 
 ## Plugins
