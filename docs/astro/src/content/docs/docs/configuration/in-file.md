@@ -111,19 +111,27 @@ Secret = "YourSecretKeyHere"
 ```
 
 ## Slow Join
-The proxy forwards keep-alives between players and servers, so servers decide when a player has timed out. Large modpacks can keep a client too busy to answer for minutes after it joins a server. The built-in Slow Join plugin answers the server's keep-alives for such a player until the player answers a keep-alive of the proxy's own, then forwards them again.
+The proxy forwards keep-alives between players and servers, so servers decide when a player has timed out. Large modpacks can keep a client too busy to answer for minutes after it joins a server. The built-in Slow Join plugin answers the server's keep-alives for such a player and probes the player with keep-alives of its own. Mods such as JEI load in steps and answer promptly between them, so the plugin forwards keep-alives again only once the player has answered several probes in a row promptly. A slow answer starts the count over.
 
 ```toml
 // configs/SlowJoin/Settings.toml
 # Answers the server's keep-alives for players that are still loading after joining
 Enabled = true
 
-# How long a player may take to answer the first keep-alive after joining a server, in seconds
+# How long a player may take to answer a keep-alive while loading after joining a server, in seconds
 FirstKeepAliveTimeout = 180
+
+# How many keep-alives in a row a loading player must answer promptly before keep-alives are forwarded again
+PromptAnswers = 3
+
+# How soon a loading player must answer a keep-alive for the answer to count as prompt, in seconds
+PromptAnswerTime = 5
 ```
 
+The plugin sends a probe with each keep-alive from the server, which vanilla servers send every 15 seconds, so the defaults need about half a minute of prompt answers.
+
 :::tip
-You can also set the timeout via [**program arguments**](/docs/configuration/program-arguments/#slow-join) using the `--slow-join-timeout` flag, which takes precedence over the file.
+You can also set these via [**program arguments**](/docs/configuration/program-arguments/#slow-join) using the `--slow-join-timeout`, `--slow-join-prompt-answers` and `--slow-join-prompt-answer-time` flags, which take precedence over the file.
 :::
 
 ## Plugin Installation

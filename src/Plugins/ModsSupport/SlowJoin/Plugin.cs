@@ -19,7 +19,17 @@ public class Plugin(IDependencyService dependencies, IConfigurationService confi
 {
     public readonly Option<int> SlowJoinTimeoutOption = new("--slow-join-timeout")
     {
-        Description = "Sets how long a player may take to answer the first keep-alive after joining a server, in seconds"
+        Description = "Sets how long a player may take to answer a keep-alive while loading after joining a server, in seconds"
+    };
+
+    public readonly Option<int> SlowJoinPromptAnswersOption = new("--slow-join-prompt-answers")
+    {
+        Description = "Sets how many keep-alives in a row a loading player must answer promptly before keep-alives are forwarded again"
+    };
+
+    public readonly Option<int> SlowJoinPromptAnswerTimeOption = new("--slow-join-prompt-answer-time")
+    {
+        Description = "Sets how soon a loading player must answer a keep-alive for the answer to count as prompt, in seconds"
     };
 
     public static IEnumerable<ProtocolVersion> SupportedVersions => ProtocolVersion.Range();
@@ -41,5 +51,7 @@ public class Plugin(IDependencyService dependencies, IConfigurationService confi
         });
 
         console.EnsureOptionDiscovered(SlowJoinTimeoutOption);
+        console.EnsureOptionDiscovered(SlowJoinPromptAnswersOption);
+        console.EnsureOptionDiscovered(SlowJoinPromptAnswerTimeOption);
     }
 }

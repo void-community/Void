@@ -43,8 +43,12 @@ Options:
   --read-only                                            Disables saving changes to the configuration files
   --server <server>                                      Registers an additional server in format <host>:<port> or
                                                          <host> (port defaults to 25565)
-  --slow-join-timeout <slow-join-timeout>                Sets how long a player may take to answer the first
-                                                         keep-alive after joining a server, in seconds
+  --slow-join-prompt-answer-time                         Sets how soon a loading player must answer a keep-alive for
+  <slow-join-prompt-answer-time>                         the answer to count as prompt, in seconds
+  --slow-join-prompt-answers <slow-join-prompt-answers>  Sets how many keep-alives in a row a loading player must
+                                                         answer promptly before keep-alives are forwarded again
+  --slow-join-timeout <slow-join-timeout>                Sets how long a player may take to answer a keep-alive while
+                                                         loading after joining a server, in seconds
   -?, -h, --help                                         Show help and usage information
   --version                                              Show version information
 ```
@@ -117,11 +121,17 @@ Options:
   ```
 
 ## Slow Join
+These set the [**Slow Join**](/docs/configuration/in-file/#slow-join) plugin and take precedence over its configuration file.
+
 - `--slow-join-timeout`
-  Sets how long a player may take to answer the first keep-alive after joining a server, in seconds, for the [**Slow Join**](/docs/configuration/in-file/#slow-join) plugin. It takes precedence over `FirstKeepAliveTimeout` in the configuration file.
+  Sets how long a player may take to answer a keep-alive while loading after joining a server, in seconds. Overrides `FirstKeepAliveTimeout`.
+- `--slow-join-prompt-answers`
+  Sets how many keep-alives in a row a loading player must answer promptly before keep-alives are forwarded again. Overrides `PromptAnswers`.
+- `--slow-join-prompt-answer-time`
+  Sets how soon a loading player must answer a keep-alive for the answer to count as prompt, in seconds. Overrides `PromptAnswerTime`.
 
   ```bash title="Example Usage"
-  ./void-linux-x64 --slow-join-timeout 300
+  ./void-linux-x64 --slow-join-timeout 300 --slow-join-prompt-answers 5
   ```
 
 ## Plugins

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.CommandLine;
+using Microsoft.Extensions.Logging;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Network;
 using Void.Minecraft.Players.Extensions;
@@ -16,8 +17,8 @@ using Void.Proxy.Plugins.Common.Services.Lifecycle;
 namespace Void.Proxy.Plugins.ModsSupport.SlowJoin.Services;
 
 /// <summary>
-/// Answers a backend's keep-alives for a player that is still loading after joining it, until the player answers a keep-alive of
-/// the proxy's own. From then on the proxy forwards keep-alives between the backend and the player.
+/// Answers a backend's keep-alives for a player that is still loading after joining it, until the player has answered several
+/// keep-alives of the proxy's own in a row promptly. From then on the proxy forwards keep-alives between the backend and the player.
 /// </summary>
 public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService console) : IEventListener, IDisposable
 {
@@ -27,11 +28,19 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
     private Task? _timeoutTask;
 
     /// <summary>
-    /// Chooses how long a player may take to answer the first keep-alive: the program argument when given, otherwise the setting.
+    /// Chooses a value in seconds: the program argument when given, otherwise the setting, and at least one second.
     /// </summary>
     public static TimeSpan GetTimeout(int? argumentSeconds, int settingSeconds)
     {
-        return TimeSpan.FromSeconds(Math.Max(argumentSeconds ?? settingSeconds, 1));
+        return TimeSpan.FromSeconds(GetCount(argumentSeconds, settingSeconds));
+    }
+
+    /// <summary>
+    /// Chooses a value: the program argument when given, otherwise the setting, and at least one.
+    /// </summary>
+    public static int GetCount(int? argument, int setting)
+    {
+        return Math.Max(argument ?? setting, 1);
     }
 
     [Subscribe]
@@ -40,8 +49,13 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
         if (!settings.Enabled || !@event.Player.IsMinecraft)
             return;
 
-        int? argumentSeconds = console.TryGetOptionValue(plugin.SlowJoinTimeoutOption, out var seconds) ? seconds : null;
-        ReplaceGrace(new SlowJoinGrace(@event.Link, GetTimeout(argumentSeconds, settings.FirstKeepAliveTimeout)));
+        var grace = new SlowJoinGrace(
+            @event.Link,
+            GetTimeout(GetArgument(plugin.SlowJoinTimeoutOption), settings.FirstKeepAliveTimeout),
+            GetCount(GetArgument(plugin.SlowJoinPromptAnswersOption), settings.PromptAnswers),
+            GetTimeout(GetArgument(plugin.SlowJoinPromptAnswerTimeOption), settings.PromptAnswerTime));
+
+        ReplaceGrace(grace);
         @event.Player.Logger.LogDebug("Answering Keep Alives from {Server} until the player has finished loading", @event.Server);
     }
 
@@ -61,10 +75,15 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
             case KeepAliveRequestPacket keepAliveRequest:
                 await AnswerAsync(@event, grace, keepAliveRequest, cancellationToken);
                 break;
-            case KeepAliveResponsePacket keepAliveResponse when grace.TryEnd(keepAliveResponse.Id, DateTimeOffset.UtcNow, out var waited):
+            case KeepAliveResponsePacket keepAliveResponse when grace.TryAnswer(keepAliveResponse.Id, DateTimeOffset.UtcNow, out var waited, out int answeredPromptly):
                 @event.Cancel();
                 CancelTimeout();
-                @event.Player.Logger.LogInformation("Player answered its first Keep Alive on {Server} after {Waited}, forwarding Keep Alives", @event.Link.Server, waited);
+
+                if (grace.IsOver)
+                    @event.Player.Logger.LogInformation("Player answered {Count} Keep Alives in a row on {Server} within {PromptAnswerTime}, forwarding Keep Alives", answeredPromptly, @event.Link.Server, grace.PromptAnswerTime);
+                else
+                    @event.Player.Logger.LogDebug("Player answered a Keep Alive on {Server} after {Waited}, {Count} of {Required} prompt answers in a row", @event.Link.Server, waited, answeredPromptly, grace.PromptAnswers);
+
                 break;
         }
     }
@@ -104,6 +123,11 @@ public class SlowJoinService(Plugin plugin, Settings settings, IConsoleService c
         player.Logger.LogTrace("Answered Keep Alive request {Id} from {Server} while the player loads, probing with {ProbeId}", keepAliveRequest.Id, @event.Link.Server, probeId);
         await player.SendPacketAsync(new KeepAliveRequestPacket { Id = probeId }, cancellationToken);
         ScheduleTimeout(grace, player);
+    }
+
+    private int? GetArgument(Option<int> option)
+    {
+        return console.TryGetOptionValue(option, out var value) ? value : null;
     }
 
     private void ScheduleTimeout(SlowJoinGrace grace, IPlayer player)

@@ -3,22 +3,30 @@
 namespace Void.Proxy.Plugins.ModsSupport.SlowJoin;
 
 /// <summary>
-/// The grace period of one join. The proxy answers the backend's keep-alives while the player loads, and probes the player with a
-/// keep-alive of its own. The probe reaches the player after everything the backend sent before it, so its answer shows that the
-/// player has caught up and can answer the backend itself.
+/// The grace period of one join. The proxy answers the backend's keep-alives while the player loads, and probes the player with
+/// keep-alives of its own. A probe reaches the player after everything the backend sent before it, but mods such as JEI do their
+/// heavy loading on later client ticks and answer between those steps, so one prompt answer doesn't show that the player has
+/// finished loading. The grace period ends once the player has answered several probes in a row promptly.
 /// </summary>
 /// <param name="link">The link the player joined through.</param>
-/// <param name="timeout">How long the player may take to answer the probe.</param>
-public class SlowJoinGrace(ILink link, TimeSpan timeout)
+/// <param name="timeout">How long the player may take to answer a probe.</param>
+/// <param name="promptAnswers">How many probes in a row the player must answer promptly.</param>
+/// <param name="promptAnswerTime">How soon an answer must arrive to count as prompt.</param>
+public class SlowJoinGrace(ILink link, TimeSpan timeout, int promptAnswers, TimeSpan promptAnswerTime)
 {
     private readonly Lock _lock = new();
     private long? _probeId;
     private DateTimeOffset _probeSentAt;
+    private int _answeredPromptly;
     private bool _over;
 
     public ILink Link { get; } = link;
 
     public TimeSpan Timeout { get; } = timeout;
+
+    public int PromptAnswers { get; } = promptAnswers;
+
+    public TimeSpan PromptAnswerTime { get; } = promptAnswerTime;
 
     public bool IsOver
     {
@@ -47,19 +55,27 @@ public class SlowJoinGrace(ILink link, TimeSpan timeout)
     }
 
     /// <summary>
-    /// Ends the grace period when <paramref name="answeredId" /> answers the probe.
+    /// Records the player's answer to the probe. A prompt answer extends the run of prompt answers, which ends the grace period once
+    /// it is long enough, and a slow answer starts the run over.
     /// </summary>
+    /// <param name="answeredId">The keep-alive the player answered.</param>
+    /// <param name="now">When the answer arrived.</param>
+    /// <param name="waited">How long the probe waited for the answer.</param>
+    /// <param name="answeredPromptly">How many probes in a row the player has answered promptly, including this one.</param>
     /// <returns><see langword="true" /> when the player answered the probe; otherwise, <see langword="false" />.</returns>
-    public bool TryEnd(long answeredId, DateTimeOffset now, out TimeSpan waited)
+    public bool TryAnswer(long answeredId, DateTimeOffset now, out TimeSpan waited, out int answeredPromptly)
     {
         lock (_lock)
         {
             waited = now - _probeSentAt;
+            answeredPromptly = _answeredPromptly;
 
             if (_over || _probeId != answeredId)
                 return false;
 
-            _over = true;
+            _probeId = null;
+            _answeredPromptly = answeredPromptly = waited <= PromptAnswerTime ? _answeredPromptly + 1 : 0;
+            _over = answeredPromptly >= PromptAnswers;
             return true;
         }
     }
