@@ -236,6 +236,8 @@ public final class GameAutomationController {
                     complete(operation, error("connection.rejected", operation.rejection));
                 else if (Tracker.activePlayer(client) != null)
                     complete(operation, "{\"status\":\"ok\",\"stage\":\"world.ready\",\"value\":" + quote(operation.value) + "}");
+                else if (Tracker.describeUnexpectedPlayer(client) != null)
+                    complete(operation, error("player.unexpected", Tracker.describeUnexpectedPlayer(client)));
                 return;
             }
             Object screen = findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName);

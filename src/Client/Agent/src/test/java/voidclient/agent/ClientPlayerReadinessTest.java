@@ -43,9 +43,49 @@ public final class ClientPlayerReadinessTest {
         Assert.assertSame(player, Tracker.activePlayer(client));
     }
 
+    @Test
+    public void readsTheUsernameTheGameWasLaunchedWith() {
+        Assert.assertEquals("a1b2c3d4", Tracker.usernameFromCommand("net.minecraft.client.main.Main --version 1.21.1 --username a1b2c3d4 --uuid a1b2c3d4e5"));
+        Assert.assertEquals("Steve", Tracker.usernameFromCommand("cpw.mods.bootstraplauncher.BootstrapLauncher --launchTarget forgeclient --username=Steve"));
+        Assert.assertNull(Tracker.usernameFromCommand("net.minecraft.client.main.Main --version 1.21.1"));
+        Assert.assertNull(Tracker.usernameFromCommand("net.minecraft.client.main.Main --username"));
+        Assert.assertNull(Tracker.usernameFromCommand(null));
+    }
+
+    @Test
+    public void acceptsTheClientsOwnPlayerWhenNoNameIsKnown() {
+        Tracker.initialize(null, null);
+        TargetingClient client = new TargetingClient();
+        client.world = new World();
+        Player other = new Player("other", client.world);
+        client.world.players.add(other);
+        client.target = other;
+        Assert.assertNull(Tracker.activePlayer(client));
+        Player own = new Player("generated", client.world);
+        client.world.players.add(own);
+        client.player = own;
+        Assert.assertSame(own, Tracker.activePlayer(client));
+        Assert.assertNull(Tracker.describeUnexpectedPlayer(client));
+    }
+
+    @Test
+    public void describesAPlayerTheServerRenamed() {
+        Tracker.initialize(null, "expected");
+        Client client = new Client();
+        client.world = new World();
+        client.player = new Player("renamed", client.world);
+        Assert.assertNull(Tracker.describeUnexpectedPlayer(client));
+        client.world.players.add(client.player);
+        Assert.assertNull(Tracker.activePlayer(client));
+        Assert.assertEquals("Minecraft plays as renamed instead of the expected player expected", Tracker.describeUnexpectedPlayer(client));
+    }
+
     public static class Client {
         public Player player;
         public World world;
+    }
+    public static class TargetingClient extends Client {
+        public Object target;
     }
     public static class World {
         public final List<Player> players = new ArrayList<Player>();

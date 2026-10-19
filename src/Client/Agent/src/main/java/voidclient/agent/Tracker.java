@@ -41,7 +41,26 @@ public final class Tracker {
 
     static void initialize(Instrumentation value, String name) {
         instrumentation = value;
-        expectedName = name;
+        // The game's own --username is the name it plays as, however the launcher chose or spelled it.
+        String launchedName = usernameFromCommand(System.getProperty("sun.java.command"));
+        expectedName = launchedName != null ? launchedName : name;
+    }
+
+    static String usernameFromCommand(String command) {
+        if (command == null)
+            return null;
+
+        String[] arguments = command.trim().split("\\s+");
+
+        for (int index = 0; index < arguments.length; index++) {
+            if ("--username".equals(arguments[index]))
+                return index + 1 < arguments.length ? arguments[index + 1] : null;
+
+            if (arguments[index].startsWith("--username="))
+                return arguments[index].substring("--username=".length());
+        }
+
+        return null;
     }
 
     static void registerPositionSources(ClassLoader loader, String className, PositionSource[] sources) {
@@ -83,31 +102,72 @@ public final class Tracker {
                 continue;
             Object player = readField(field, client);
             Object profile = player == null ? null : findProfile(player);
-            if (profile == null || expectedName == null || !expectedName.equals(profileName(profile)))
+            if (profile == null || !belongsToCurrentWorld(client, clientFields, player))
                 continue;
-            for (Field playerField : fieldsOf(player.getClass())) {
-                if (Modifier.isStatic(playerField.getModifiers()) || playerField.getType().isPrimitive())
-                    continue;
-                Object world = readField(playerField, player);
-                if (world == null)
-                    continue;
-                boolean currentWorld = false;
-                for (Field clientField : clientFields)
-                    if (!Modifier.isStatic(clientField.getModifiers()) && readField(clientField, client) == world)
-                        currentWorld = true;
-                if (!currentWorld)
-                    continue;
-                for (Field worldField : fieldsOf(world.getClass()))
-                    if (!Modifier.isStatic(worldField.getModifiers()) && containsIdentity(valuesOf(readField(worldField, world)), player))
-                        return player;
-            }
+            // Without a known name, the client's own player is the one it holds in a player-typed field; entity-typed fields such as
+            // the crosshair target can hold other players.
+            boolean expected = expectedName == null ? declaresProfile(field.getType()) : expectedName.equals(profileName(profile));
+            if (expected)
+                return player;
         }
         return null;
+    }
+
+    /**
+     * Describes why the client's own player in the current world is not the expected one, such as a server that renamed it.
+     *
+     * @return the description, or {@code null} when there is no such player
+     */
+    static String describeUnexpectedPlayer(Object client) {
+        if (client == null || expectedName == null)
+            return null;
+        List<Field> clientFields = fieldsOf(client.getClass());
+        for (Field field : clientFields) {
+            if (Modifier.isStatic(field.getModifiers()) || !declaresProfile(field.getType()))
+                continue;
+            Object player = readField(field, client);
+            Object profile = player == null ? null : findProfile(player);
+            String name = profile == null ? null : profileName(profile);
+            if (name != null && !expectedName.equals(name) && belongsToCurrentWorld(client, clientFields, player))
+                return "Minecraft plays as " + name + " instead of the expected player " + expectedName;
+        }
+        return null;
+    }
+
+    private static boolean belongsToCurrentWorld(Object client, List<Field> clientFields, Object player) {
+        for (Field playerField : fieldsOf(player.getClass())) {
+            if (Modifier.isStatic(playerField.getModifiers()) || playerField.getType().isPrimitive())
+                continue;
+            Object world = readField(playerField, player);
+            if (world == null)
+                continue;
+            boolean currentWorld = false;
+            for (Field clientField : clientFields)
+                if (!Modifier.isStatic(clientField.getModifiers()) && readField(clientField, client) == world)
+                    currentWorld = true;
+            if (!currentWorld)
+                continue;
+            for (Field worldField : fieldsOf(world.getClass()))
+                if (!Modifier.isStatic(worldField.getModifiers()) && containsIdentity(valuesOf(readField(worldField, world)), player))
+                    return true;
+        }
+        return false;
+    }
+
+    private static boolean declaresProfile(Class<?> type) {
+        for (Field field : fieldsOf(type))
+            if (!Modifier.isStatic(field.getModifiers()) && GameProfileName.equals(field.getType().getName()))
+                return true;
+        return false;
     }
 
     static String snapshotJson() {
         try {
             List<PlayerCandidate> candidates = collectCandidates();
+            String unexpectedPlayer = candidates.isEmpty() ? describeUnexpectedPlayer(clientReference.get()) : null;
+
+            if (unexpectedPlayer != null)
+                return error("notInWorld", unexpectedPlayer);
 
             if (candidates.isEmpty())
                 return error("notInWorld", "The client has no current player world");

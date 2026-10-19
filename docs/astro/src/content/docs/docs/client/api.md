@@ -121,7 +121,7 @@ The options are retained in the configured Minecraft directory and used by later
 
 ## Starting a Game
 
-Only one game can run at a time. Every start request accepts an optional `arguments` array containing PortableMC start arguments and an optional positive `memoryMb` integer. When provided, `memoryMb` sets the Minecraft JVM maximum heap through `-Xmx`; it does not limit total container memory. Do not also provide a raw `-Xmx` argument.
+Only one game can run at a time. Every start request accepts an optional `arguments` array containing PortableMC start arguments and an optional positive `memoryMb` integer. Without `--username`, the game plays under the offline name PortableMC generates, and the client follows that name. When provided, `memoryMb` sets the Minecraft JVM maximum heap through `-Xmx`; it does not limit total container memory. Do not also provide a raw `-Xmx` argument.
 
 Mojang used a 2 GiB default before 26.1 and changed it to 4 GiB for 26.1. See [**Minecraft Java Edition memory allocation**](https://help.minecraft.net/hc/en-us/articles/39083573916941) and the [**Minecraft Java Edition 26.1 release notes**](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1).
 
@@ -204,7 +204,7 @@ lists every missing file.
 
 The game must be running. `port` must be between `1` and `65535`. Connection navigation is idempotent for a given `host` and `port`: repeated callers join the same background operation, and an already-connected game returns its original result. A different target is rejected with `409 Conflict` while connecting or connected.
 
-Canceling an HTTP caller stops only that caller's wait. The background navigation continues from whichever Minecraft screen is currently visible until the game connects, exits, or is stopped through the API.
+Canceling an HTTP caller stops only that caller's wait. The background navigation continues from whichever Minecraft screen is currently visible until the game connects, exits, or is stopped through the API. If the server lets the game in under a different name than the one it was started with, the connection fails with stage `player.unexpected` and names both players.
 
 ```bash
 curl --fail-with-body \
