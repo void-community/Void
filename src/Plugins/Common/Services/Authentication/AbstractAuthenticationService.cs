@@ -219,7 +219,19 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
 
     protected bool IsAlreadyOnline(string username)
     {
-        return players.All.Any(player => player.IsMinecraft && player.Profile?.Username == username);
+        foreach (var player in players.All)
+        {
+            if (!player.IsMinecraft || player.Profile?.Username != username)
+                continue;
+
+            if (player.Context.Channel is { IsAlive: true })
+                return true;
+
+            // A closed connection can't be online, and counting it would lock the name out until the proxy restarts.
+            player.Context.Logger.LogWarning("Player {Player} is still listed after its connection closed, letting {Username} join again", player, username);
+        }
+
+        return false;
     }
 
     protected async ValueTask<AuthenticationResult> AuthenticatePlayerAsync(ILink link, CancellationToken cancellationToken)

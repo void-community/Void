@@ -78,9 +78,9 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
                     if (result is ConnectionResult.Connected)
                         return ConnectionResult.Connected;
                 }
-                catch (StreamException)
+                catch (StreamException) when (player.Context.Channel is { IsAlive: true })
                 {
-                    // Try next server
+                    // Try next server, unless the player has left
                 }
             }
 
@@ -178,6 +178,7 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
         logger.LogTrace("Connecting {Player} player to a {Server} server", unwrappedPlayer, server);
 
         INetworkChannel serverChannel;
+        var activated = false;
 
         try
         {
@@ -228,10 +229,18 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
             using (await _lock.LockAsync(cancellationToken))
                 _activeLinks.Add(link);
 
+            activated = true;
+
             await events.ThrowAsync(new LinkStartedEvent(link, unwrappedPlayer, firstConnection, anonymous), cancellationToken);
             await link.StartAsync(cancellationToken);
 
             return ConnectionResult.Connected;
+        }
+        catch (StreamException) when (!playerChannel.IsAlive)
+        {
+            // The player left while joining. No link is left to stop and end its session, so the kick does, whoever asked for the move.
+            await unwrappedPlayer.KickAsync("You left while joining the server", cancellationToken);
+            throw;
         }
         catch (StreamException)
         {
@@ -246,6 +255,10 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
         }
         finally
         {
+            // A join that never became a link leaves its server connection behind otherwise.
+            if (!activated)
+                serverChannel.Close();
+
             if (link is not null)
             {
                 if (!_activeLinks.Contains(link))
