@@ -65,8 +65,8 @@ public class PlayerTransformerTest {
 
         try (URLClassLoader bootstrap = new URLClassLoader(new URL[] { hooksJar.toUri().toURL() }, null)) {
             bootstrap.loadClass(VoidClientAgent.GameHooksName.replace('/', '.'))
-                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
-                .invoke(null, target, null, null, null);
+                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
+                .invoke(null, target, null, null, null, null);
 
             return new BytecodeLoader(bootstrap).define(transformed).getConstructor().newInstance();
         } finally {

@@ -14,21 +14,6 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
-    internal static bool IsCrashReportOf(string reportPath, string minecraftDirectory, DateTime launchedAt)
-    {
-        try
-        {
-            string crashReportsDirectory = $"{Path.Join(Path.GetFullPath(minecraftDirectory), path2: "crash-reports")}{Path.DirectorySeparatorChar}";
-            string report = Path.GetFullPath(reportPath, Path.GetFullPath(minecraftDirectory));
-
-            return report.StartsWith(crashReportsDirectory, StringComparison.Ordinal) && File.Exists(report) && File.GetLastWriteTimeUtc(report) >= launchedAt;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-    }
-
     /// <summary>
     /// Returns the visible windows that don't belong to the game JVM, such as dialogs of other programs, each with the time it has
     /// been seen since. A window drops out once it closes or turns out to be the game's.
@@ -354,7 +339,8 @@ internal sealed partial class GameRuntime
                     TakeOutputWarnings(process.Id),
                     portableMinecraftVersion,
                     DateTimeOffset.UtcNow,
-                    tracker
+                    tracker,
+                    minecraftDirectory
                 );
                 var managedProcess = runningGame.Process;
 
@@ -368,7 +354,7 @@ internal sealed partial class GameRuntime
                     await windowCancellationTokenSource.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
                     await ((Task)windowTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
-                    throw new GameProcessExitException(managedProcess.WasOutOfMemoryKilled, memoryMb);
+                    throw new GameProcessExitException(managedProcess.WasOutOfMemoryKilled, memoryMb, managedProcess.CrashCause);
                 }
 
                 string preparedWindowLease = await windowTask.ConfigureAwait(continueOnCapturedContext: false);
@@ -575,7 +561,7 @@ internal sealed partial class GameRuntime
         void CrashReported(string reportPath)
         {
             // Chat is logged to the same output, so only a crash report this game saved counts.
-            if (IsCrashReportOf(reportPath, GetMinecraftDirectory(), launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
+            if (CrashReports.IsReport(reportPath, GetMinecraftDirectory(), launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
                 crashedGameEnd = EndCrashedGameAsync(process);
         }
 

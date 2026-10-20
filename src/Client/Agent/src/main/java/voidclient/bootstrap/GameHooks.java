@@ -1,6 +1,7 @@
 package voidclient.bootstrap;
 
 import java.lang.invoke.MethodHandle;
+import java.nio.file.Path;
 
 /**
  * Receives the calls the agent injects into game and mod classes. The agent loads this class from the bootstrap class path because
@@ -12,15 +13,30 @@ public final class GameHooks {
     private static volatile MethodHandle clientFrame;
     private static volatile MethodHandle connectionListener;
     private static volatile MethodHandle connectionRejection;
+    private static volatile MethodHandle fatalError;
 
     private GameHooks() {
     }
 
-    public static void install(MethodHandle player, MethodHandle frame, MethodHandle listener, MethodHandle rejection) {
+    public static void install(MethodHandle player, MethodHandle frame, MethodHandle listener, MethodHandle rejection, MethodHandle fatal) {
         playerRegistration = player;
         clientFrame = frame;
         connectionListener = listener;
         connectionRejection = rejection;
+        fatalError = fatal;
+    }
+
+    public static void fatalErrorReported(Throwable error, Path gameDirectory, Path crashReport) {
+        MethodHandle target = fatalError;
+
+        if (target == null)
+            return;
+
+        try {
+            target.invokeExact(error, gameDirectory, crashReport);
+        } catch (Throwable exception) {
+            // The agent only observes the game, so its failures must never break the game code that called it.
+        }
     }
 
     public static void registerPlayer(Object player) {

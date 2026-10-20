@@ -52,6 +52,7 @@ public final class VoidClientAgent {
             if (installGameHooks(instrumentation)) {
                 instrumentation.addTransformer(new PlayerTransformer());
                 instrumentation.addTransformer(new GameAutomationTransformer(), true);
+                instrumentation.addTransformer(new FatalErrorReportTransformer(), true);
             }
 
             if (retransformLoadedClasses)
@@ -83,13 +84,15 @@ public final class VoidClientAgent {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             MethodType single = MethodType.methodType(void.class, Object.class);
             MethodType pair = MethodType.methodType(void.class, Object.class, Object.class);
+            MethodType fatalError = MethodType.methodType(void.class, Throwable.class, Path.class, Path.class);
             Class.forName(GameHooksName.replace('/', '.'), true, null)
-                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
+                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
                 .invoke(null,
                     lookup.findStatic(Tracker.class, "registerPlayer", single),
                     lookup.findStatic(GameAutomationController.class, "applyClient", single),
                     lookup.findStatic(GameAutomationController.class, "connectionListenerCreated", pair),
-                    lookup.findStatic(GameAutomationController.class, "connectionRejected", pair));
+                    lookup.findStatic(GameAutomationController.class, "connectionRejected", pair),
+                    lookup.findStatic(FatalErrorReports.class, "save", fatalError));
             return true;
         } catch (Throwable exception) {
             GameAutomationController.recordIndexFailure("game hooks", exception.toString());
@@ -164,7 +167,7 @@ public final class VoidClientAgent {
             try {
                 String className = type.getName().replace('.', '/');
                 if (NettyReadInterestTransformer.ChannelName.equals(className) || DataFixerWarmupTransformer.BuilderName.equals(className)
-                    || FatalErrorWindowTransformer.HandlerName.equals(className)) {
+                    || FatalErrorWindowTransformer.HandlerName.equals(className) || FatalErrorReportTransformer.ReportingName.equals(className)) {
                     instrumentation.retransformClasses(type);
                     continue;
                 }

@@ -10,13 +10,33 @@ internal sealed class ManagedProcess(
     int? memoryMb,
     long? initialOutOfMemoryKillCount,
     Task? outputCompletion = null,
-    TimeSpan? outputGracePeriod = null
+    TimeSpan? outputGracePeriod = null,
+    string? minecraftDirectory = null,
+    DateTime launchedAt = default
 ) : IManagedProcess
 {
     /// <summary>How long the game's output may stay open after its launcher exited.</summary>
     public static readonly TimeSpan DefaultOutputGracePeriod = TimeSpan.FromSeconds(seconds: 5);
-
+    private bool _crashReportRead;
     private bool? _wasOutOfMemoryKilled;
+
+    /// <summary>Gets what the crash report the game saved since its launch says, once it exited, or <see langword="null"/> without one.</summary>
+    public string? CrashCause
+    {
+        get
+        {
+            if (!process.HasExited || minecraftDirectory is null)
+                return null;
+
+            if (!_crashReportRead)
+            {
+                field = CrashReports.Find(minecraftDirectory, launchedAt) is { } report ? CrashReports.ReadCause(report) : null;
+                _crashReportRead = true;
+            }
+
+            return field;
+        }
+    }
 
     /// <summary>Gets the launcher's exit code. PortableMC exits 0 whatever the game did, so it doesn't tell how Minecraft ended.</summary>
     public int? ExitCode => process.HasExited ? process.ExitCode : null;

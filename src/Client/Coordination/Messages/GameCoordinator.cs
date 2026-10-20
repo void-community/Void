@@ -15,7 +15,7 @@ internal sealed partial class GameCoordinator
     private abstract record Message;
     private sealed record OptionsMessage(string Options, TaskCompletionSource Completion, CancellationToken RequestCancellation) : Message;
     private sealed record PlayersMessage(TaskCompletionSource<GamePlayers> Completion, CancellationToken RequestCancellation) : Message;
-    private sealed record ProcessExited(int ProcessId, int ExitCode, bool WasOutOfMemoryKilled, int? MemoryMb) : Message;
+    private sealed record ProcessExited(int ProcessId, int ExitCode, bool WasOutOfMemoryKilled, int? MemoryMb, string? CrashCause) : Message;
     private sealed record ScreenshotCompleted(
         long OperationId,
         byte[]? Image,

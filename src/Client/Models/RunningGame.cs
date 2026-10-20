@@ -30,10 +30,18 @@ internal sealed record RunningGame : IDisposable
         ChannelReader<string> warnings,
         string version,
         DateTimeOffset startedAt,
-        GameTrackerConnection tracker
+        GameTrackerConnection tracker,
+        string minecraftDirectory
     )
     {
-        Process = new ManagedProcess(nativeProcess, memoryMb, initialOutOfMemoryKillCount, outputTask);
+        Process = new ManagedProcess(
+            nativeProcess,
+            memoryMb,
+            initialOutOfMemoryKillCount,
+            outputTask,
+            minecraftDirectory: minecraftDirectory,
+            launchedAt: startedAt.UtcDateTime
+        );
         Version = version;
         StartedAt = startedAt;
         Tracker = tracker;

@@ -46,35 +46,6 @@ public sealed class GameWarningTests
     }
 
     [Fact]
-    public void OnlyACrashReportTheGameSavedCounts()
-    {
-        // Chat reaches the same output, so a player who types the marker must not end the game.
-        string minecraftDirectory = Directory.CreateTempSubdirectory().FullName;
-
-        try
-        {
-            string crashReports = Directory.CreateDirectory(Path.Join(minecraftDirectory, "crash-reports")).FullName;
-            string report = Path.Join(crashReports, "crash-2026-10-20_06.19.30-client.txt");
-            string optionsFile = Path.Join(minecraftDirectory, "options.txt");
-            DateTime launchedAt = DateTime.UtcNow.AddMinutes(-1);
-            File.WriteAllText(report, "---- Minecraft Crash Report ----");
-            File.WriteAllText(optionsFile, "fullscreen:false");
-
-            Assert.True(GameRuntime.IsCrashReportOf(report, minecraftDirectory, launchedAt));
-            Assert.True(GameRuntime.IsCrashReportOf("crash-reports/crash-2026-10-20_06.19.30-client.txt", minecraftDirectory, launchedAt));
-            Assert.False(GameRuntime.IsCrashReportOf(Path.Join(crashReports, "crash-2026-10-20_06.20.00-client.txt"), minecraftDirectory, launchedAt));
-            Assert.False(GameRuntime.IsCrashReportOf(optionsFile, minecraftDirectory, launchedAt));
-            Assert.False(GameRuntime.IsCrashReportOf(Path.Join(crashReports, "..", "options.txt"), minecraftDirectory, launchedAt));
-            Assert.False(GameRuntime.IsCrashReportOf(report, minecraftDirectory, DateTime.UtcNow.AddMinutes(1)));
-            Assert.False(GameRuntime.IsCrashReportOf("\0", minecraftDirectory, launchedAt));
-        }
-        finally
-        {
-            Directory.Delete(minecraftDirectory, recursive: true);
-        }
-    }
-
-    [Fact]
     public void StopsBufferingOverlongUnfinishedLines()
     {
         var warnings = Channel.CreateUnbounded<string>();

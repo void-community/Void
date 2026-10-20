@@ -36,7 +36,7 @@ internal sealed partial class GameCoordinator
 
         // Only stop ends a game on purpose. The exit code is the launcher's, which is 0 whatever the game did, so a quit, a crash and a
         // kill can't be told apart and every exit without a stop request is a failure.
-        GameProcessExitException processFailure = new(exited.WasOutOfMemoryKilled, exited.MemoryMb);
+        GameProcessExitException processFailure = new(exited.WasOutOfMemoryKilled, exited.MemoryMb, exited.CrashCause);
 
         await StopConnectionMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
         _game.Dispose();
@@ -59,7 +59,7 @@ internal sealed partial class GameCoordinator
                 ProcessId = null,
                 ExitCode = exited.ExitCode,
                 Server = null,
-                Message = "Game exited without a stop request",
+                Message = exited.CrashCause is null ? "Game exited without a stop request" : "Game crashed",
                 Error = processFailure.Message,
                 Failure = processFailure.Failure,
                 UpdatedAt = DateTimeOffset.UtcNow

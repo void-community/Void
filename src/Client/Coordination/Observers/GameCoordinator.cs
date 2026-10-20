@@ -16,7 +16,9 @@ internal sealed partial class GameCoordinator
     private async Task MonitorProcessAsync(RunningGame game)
     {
         await game.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
-        await WriteCompletionAsync(new ProcessExited(game.Process.Id, game.Process.ExitCode ?? -1, game.Process.WasOutOfMemoryKilled, game.Process.MemoryMb)).ConfigureAwait(continueOnCapturedContext: false);
+        await WriteCompletionAsync(
+            new ProcessExited(game.Process.Id, game.Process.ExitCode ?? -1, game.Process.WasOutOfMemoryKilled, game.Process.MemoryMb, game.Process.CrashCause)
+        ).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private async Task MonitorWarningsAsync(RunningGame game)

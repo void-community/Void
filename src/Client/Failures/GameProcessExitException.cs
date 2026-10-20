@@ -6,11 +6,12 @@ internal sealed class GameProcessExitException : GameClientException
     {
     }
 
-    public GameProcessExitException(bool wasOutOfMemoryKilled, int? memoryMb) : base(
-        wasOutOfMemoryKilled ? "client.process.out_of_memory" : "client.process.exited",
+    // A crash report proves the game ended on its own, while the out-of-memory count covers every process in the container.
+    public GameProcessExitException(bool wasOutOfMemoryKilled, int? memoryMb, string? crashCause) : base(
+        crashCause is not null ? "client.process.crashed" : wasOutOfMemoryKilled ? "client.process.out_of_memory" : "client.process.exited",
         operation: "process",
-        stage: "exit",
-        CreateMessage(wasOutOfMemoryKilled, memoryMb)
+        crashCause is not null ? "crash-report" : "exit",
+        crashCause ?? CreateMessage(wasOutOfMemoryKilled, memoryMb)
     )
     {
     }

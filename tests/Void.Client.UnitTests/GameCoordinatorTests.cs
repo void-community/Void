@@ -550,7 +550,22 @@ public sealed class GameCoordinatorTests
         Assert.Equal("client.process.exited", coordinator.Status.Failure?.Code);
         Assert.Equal("Minecraft exited without a stop request", coordinator.Status.Error);
 
-        // A failed game can be started again.
+        // A failed game can be started again, and its crash report tells why it crashed.
+        await coordinator.StartVanillaAsync(new("1.17", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        // The out-of-memory count covers the whole container, while a crash report proves the game ended on its own.
+        const string crashCause = "Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash";
+        runtime.ExitGame(0, wasOutOfMemoryKilled: true, crashCause);
+
+        await WaitForStateAsync(coordinator, GameState.Failed);
+        Assert.Equal("Game crashed", coordinator.Status.Message);
+        Assert.Equal(crashCause, coordinator.Status.Error);
+        Assert.Equal("client.process.crashed", coordinator.Status.Failure?.Code);
+        Assert.Equal("crash-report", coordinator.Status.Failure?.Stage);
+        Assert.Equal(OperationState.Succeeded, coordinator.Status.OperationState);
+
         await coordinator.StartVanillaAsync(new("1.17", []), CancellationToken.None);
         runtime.CompleteLaunch();
         await WaitForStateAsync(coordinator, GameState.Ready);
@@ -712,9 +727,9 @@ public sealed class GameCoordinatorTests
             _connect?.SetException(exception);
         }
 
-        public void ExitGame(int exitCode, bool wasOutOfMemoryKilled)
+        public void ExitGame(int exitCode, bool wasOutOfMemoryKilled, string? crashCause = null)
         {
-            _process?.Exit(exitCode, wasOutOfMemoryKilled);
+            _process?.Exit(exitCode, wasOutOfMemoryKilled, crashCause);
         }
 
         public Task WriteOptionsAsync(string options, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -817,16 +832,18 @@ public sealed class GameCoordinatorTests
         public int? ExitCode { get; private set; }
         public int? MemoryMb { get; } = memoryMb;
         public bool WasOutOfMemoryKilled { get; private set; }
+        public string? CrashCause { get; private set; }
 
         public Task WaitForExitAsync(CancellationToken cancellationToken) => _exit.Task.WaitAsync(cancellationToken);
 
         public void KillTree() => Exit(137, false);
 
-        public void Exit(int exitCode, bool wasOutOfMemoryKilled = false)
+        public void Exit(int exitCode, bool wasOutOfMemoryKilled = false, string? crashCause = null)
         {
             HasExited = true;
             ExitCode = exitCode;
             WasOutOfMemoryKilled = wasOutOfMemoryKilled;
+            CrashCause = crashCause;
             _exit.TrySetResult();
         }
 

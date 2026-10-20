@@ -87,7 +87,12 @@ Treat it as failed if it reports `failed` or `canceled`, or if `operationId` cha
 
 ### When the game ends on its own
 
-The game should only end through `POST /api/game/stop`. If Minecraft quits, crashes, or is killed instead, `state` becomes `failed` with failure code `client.process.exited`, or `client.process.out_of_memory` when it ran out of memory.
+The game should only end through `POST /api/game/stop`. If Minecraft quits, crashes, or is killed instead, `state` becomes `failed` with one of these failure codes:
+
+- `client.process.crashed` when Minecraft saved a crash report. The message says what the report says, for example `Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash`.
+- `client.process.out_of_memory` when it ran out of memory and was killed.
+- `client.process.exited` otherwise.
+
 The client also closes a game that can't go on by itself, with the same result: NeoForge showing that mods failed to load, or Minecraft still running 10 seconds after it reported a crash.
 If no operation was running at the time, `operation` and `operationState` still describe the last one.
 A failed game can be started again.
@@ -352,6 +357,7 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 
 | Code | Meaning |
 | :--- | :------ |
+| `client.process.crashed` | Minecraft crashed. The message has the description and error from its crash report. |
 | `client.process.exited` | Minecraft ended without a stop request. |
 | `client.process.out_of_memory` | Minecraft ran out of memory and was killed. |
 | `client.connect.rejected` | The server disconnected the game while it was joining. |

@@ -2,6 +2,7 @@ namespace Void.Client.Abstractions;
 
 internal interface IManagedProcess : IDisposable
 {
+    string? CrashCause { get; }
     int? ExitCode { get; }
     bool HasExited { get; }
     int Id { get; }
