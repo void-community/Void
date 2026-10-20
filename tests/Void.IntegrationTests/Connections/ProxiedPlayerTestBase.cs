@@ -14,27 +14,29 @@ using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedPlayerTestBase(PaperFixture paperFixture, VoidFixture voidFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<VoidFixture>, IClassFixture<PortableMinecraftClientPairFixture>
+public abstract class ProxiedPlayerTestBase(IMinecraftServersFixture serversFixture, VoidFixture voidFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<VoidFixture>, IClassFixture<PortableMinecraftClientPairFixture>
 {
     private const double CoordinateTolerance = 1.0 / 32.0;
-    private readonly EndPoint _proxyEndPoint = new IPEndPoint(IPAddress.Loopback, voidFixture.VoidProxy.Port);
 
     protected async Task RunAsync(ProtocolVersion protocolVersion)
     {
         if (!clientFixture.Client1.SupportedVersions.Contains(protocolVersion) || !clientFixture.Client2.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the clients, skipping test.");
 
-        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion), clientFixture.Client1, clientFixture.Client2, voidFixture.VoidProxy, paperFixture.Server1);
+        var servers = await serversFixture.PrepareServersAsync(protocolVersion, serverCount: 1, Timeouts.SetupTimeoutToken);
+        var voidProxy = await voidFixture.StartProxyAsync(servers, Timeouts.SetupTimeoutToken);
+
+        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion, servers, voidProxy), clientFixture.Client1, clientFixture.Client2, voidProxy, servers.Server1);
     }
 
-    private async Task RunAttemptAsync(ProtocolVersion protocolVersion)
+    private async Task RunAttemptAsync(ProtocolVersion protocolVersion, MinecraftServers servers, VoidProxy voidProxy)
     {
         using var disconnectionCancellation = new CancellationTokenSource();
         var disconnectionTasks = new List<Task>();
 
         try
         {
-            await RunPlayersAsync(protocolVersion, disconnectionCancellation.Token, disconnectionTasks);
+            await RunPlayersAsync(protocolVersion, servers, voidProxy, disconnectionCancellation.Token, disconnectionTasks);
             await Task.WhenAll(disconnectionTasks).WaitAsync(Timeouts.StepTimeout);
         }
         finally
@@ -44,27 +46,29 @@ public abstract class ProxiedPlayerTestBase(PaperFixture paperFixture, VoidFixtu
         }
     }
 
-    private async Task RunPlayersAsync(ProtocolVersion protocolVersion, CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
+    private async Task RunPlayersAsync(ProtocolVersion protocolVersion, MinecraftServers servers, VoidProxy voidProxy, CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
     {
-        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, [clientFixture.Client2, voidFixture.VoidProxy, paperFixture.Server1], Timeouts.SetupTimeoutToken);
-        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, [clientFixture.Client1, voidFixture.VoidProxy, paperFixture.Server1], Timeouts.SetupTimeoutToken);
+        var proxyEndPoint = new IPEndPoint(IPAddress.Loopback, voidProxy.Port);
 
-        disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
-        disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
+        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, [clientFixture.Client2, voidProxy, servers.Server1], Timeouts.SetupTimeoutToken);
+        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, [clientFixture.Client1, voidProxy, servers.Server1], Timeouts.SetupTimeoutToken);
 
-        await ConnectPlayerAsync(firstGame);
-        await ConnectPlayerAsync(secondGame);
+        disconnectionTasks.Add(voidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
+        disconnectionTasks.Add(voidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
+
+        await ConnectPlayerAsync(firstGame, proxyEndPoint);
+        await ConnectPlayerAsync(secondGame, proxyEndPoint);
 
         await WaitForReciprocalCoordinatesAsync(firstGame, secondGame);
     }
 
-    private async Task ConnectPlayerAsync(PortableMinecraftClient.Game game)
+    private static async Task ConnectPlayerAsync(PortableMinecraftClient.Game game, EndPoint proxyEndPoint)
     {
         using var connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(Timeouts.StepTimeoutToken);
 
         try
         {
-            await game.JoinServerAsync(_proxyEndPoint, connectionCancellation.Token);
+            await game.JoinServerAsync(proxyEndPoint, connectionCancellation.Token);
         }
         catch (OperationCanceledException) when (connectionCancellation.IsCancellationRequested)
         {

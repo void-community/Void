@@ -11,32 +11,32 @@ using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class DirectConnectionTestBase(PaperFixture paperFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
+public abstract class DirectConnectionTestBase(IMinecraftServersFixture serversFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
 {
     private const string ExpectedText = "hello void!";
-
-    private readonly EndPoint _serverEndPoint = new IPEndPoint(IPAddress.Loopback, paperFixture.Server1.Port);
 
     protected async Task RunAsync(ProtocolVersion protocolVersion)
     {
         if (!portableMinecraftClientFixture.Api.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the client, skipping test.");
 
+        var servers = await serversFixture.PrepareServersAsync(protocolVersion, serverCount: 1, Timeouts.SetupTimeoutToken);
+        var serverEndPoint = new IPEndPoint(IPAddress.Loopback, servers.Server1.Port);
         var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
 
         await LoggedExecutorAsync(async () =>
         {
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(DirectConnectionTestBase), protocolVersion, [paperFixture.Server1], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(DirectConnectionTestBase), protocolVersion, [servers.Server1], Timeouts.SetupTimeoutToken))
             {
-                await game.JoinServerAsync(_serverEndPoint, Timeouts.SetupTimeoutToken);
-                await paperFixture.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
+                await game.JoinServerAsync(serverEndPoint, Timeouts.SetupTimeoutToken);
+                await servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
                 await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
                 await game.SendTextMessageAsync(expectedText, Timeouts.StepTimeoutToken);
-                await paperFixture.Server1.ExpectTextAsync(expectedText, lookupHistory: true, Timeouts.StepTimeoutToken);
+                await servers.Server1.ExpectTextAsync(expectedText, lookupHistory: true, Timeouts.StepTimeoutToken);
             }
 
-            Assert.Contains(paperFixture.Server1.Logs, line => line.Contains(expectedText));
-        }, portableMinecraftClientFixture.Api, paperFixture.Server1);
+            Assert.Contains(servers.Server1.Logs, line => line.Contains(expectedText));
+        }, portableMinecraftClientFixture.Api, servers.Server1);
     }
 }

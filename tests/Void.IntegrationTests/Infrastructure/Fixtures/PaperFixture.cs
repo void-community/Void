@@ -1,19 +1,27 @@
 ﻿using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
+using Void.Minecraft.Network;
 using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Fixtures;
 
-public class PaperFixture : IAsyncLifetime
+public class PaperFixture : IMinecraftServersFixture, IAsyncLifetime
 {
     private PaperServer? _server1;
     private PaperServer? _server2;
 
     public PaperServer Server1 => _server1 ?? throw new InvalidOperationException($"{nameof(Server1)} is not initialized.");
     public PaperServer Server2 => _server2 ?? throw new InvalidOperationException($"{nameof(Server2)} is not initialized.");
+
+    /// <summary>Returns both Paper servers, which accept every protocol version through ViaVersion.</summary>
+    public Task<MinecraftServers> PrepareServersAsync(ProtocolVersion protocolVersion, int serverCount, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(new MinecraftServers([Server1, Server2]));
+    }
 
     public async ValueTask InitializeAsync()
     {

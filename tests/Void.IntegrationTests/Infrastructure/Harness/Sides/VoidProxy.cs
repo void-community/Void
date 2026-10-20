@@ -88,10 +88,15 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
 
     public void AssertNoLogsAtOrAboveSince(DateTime since, LogLevel minimumLogLevel)
     {
-        var unexpectedLogs = LogWriter.GetLinesSince(since).Where(line => GetLogLevel(line) is { } logLevel && logLevel >= minimumLogLevel).ToArray();
+        var unexpectedLogs = GetLogsAtOrAboveSince(since, minimumLogLevel);
 
         if (unexpectedLogs.Length > 0)
             Assert.Fail($"Void emitted {minimumLogLevel} or higher logs:\n{string.Join('\n', unexpectedLogs)}");
+    }
+
+    public string[] GetLogsAtOrAboveSince(DateTime since, LogLevel minimumLogLevel)
+    {
+        return [.. LogWriter.GetLinesSince(since).Where(line => GetLogLevel(line) is { } logLevel && logLevel >= minimumLogLevel)];
     }
 
     private static LogLevel? GetLogLevel(string line)
