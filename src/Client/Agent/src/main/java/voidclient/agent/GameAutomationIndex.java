@@ -815,6 +815,10 @@ final class GameAutomationIndex {
 
             Integer value = integerConstant(constant);
 
+            // A comparison with zero has no constant, so button.id == 0 compiles to a branch on the id alone.
+            if (value == null && constant != null && (constant.getOpcode() == Opcodes.IFEQ || constant.getOpcode() == Opcodes.IFNE))
+                value = Integer.valueOf(0);
+
             if (value != null)
                 return new ControlCondition(field.owner, field.name, value);
         }

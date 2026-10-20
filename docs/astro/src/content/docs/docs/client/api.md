@@ -88,6 +88,7 @@ Treat it as failed if it reports `failed` or `canceled`, or if `operationId` cha
 ### When the game ends on its own
 
 The game should only end through `POST /api/game/stop`. If Minecraft quits, crashes, or is killed instead, `state` becomes `failed` with failure code `client.process.exited`, or `client.process.out_of_memory` when it ran out of memory.
+When Minecraft reports a crash but is still running 10 seconds later, such as NeoForge showing a mod loading error, the client closes it, with the same result.
 If no operation was running at the time, `operation` and `operationState` still describe the last one.
 A failed game can be started again.
 
@@ -193,7 +194,7 @@ The response arrives once the game has joined:
 ```
 
 Connecting is safe to repeat. Requests for the same server share one connection attempt, and a game already connected to that server returns the original response. A request for a different server returns `409 Conflict` while the game is connecting or connected.
-Canceling the HTTP request doesn't cancel the connection attempt. Use `POST /api/game/stop` to abort it.
+Canceling the HTTP request doesn't cancel the connection attempt. Use `POST /api/game/stop` to abort it, which answers waiting requests with `409 Conflict`.
 
 Mods that replace the main menu are supported. When the client has to work around a menu, it says so in `warnings`.
 
@@ -201,7 +202,9 @@ A failed connection reports one of these `failure.stage` values:
 
 | Stage | Meaning |
 | :---- | :------ |
+| `connection.failed` | The game couldn't reach the server, for example because the host is unknown or the connection was refused. The message is the game's error. |
 | `connection.rejected` | The server disconnected the game while it was joining. The message is the server's reason. |
+| `world.timeout` | The game reached the server but not a world within 5 minutes. The message is what the game shows. |
 | `player.unexpected` | The server let the game in under a different player name than it was started with. |
 | `ui.route` | The client couldn't reach the Direct Connection screen within 60 seconds. |
 | `window.blocked` | A window from another program covered the game for 10 seconds. The message names it. |

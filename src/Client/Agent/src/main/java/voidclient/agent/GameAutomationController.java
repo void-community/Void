@@ -27,6 +27,7 @@ public final class GameAutomationController {
     private static final long DisconnectReasonWaitMilliseconds = 2000L;
     private static final long RouteGraceMilliseconds = 5000L;
     private static final long RouteDeadlineMilliseconds = 60000L;
+    private static final long WorldDeadlineMilliseconds = 300000L;
     private static final ThreadLocal<Boolean> Applying = new ThreadLocal<Boolean>();
     private static volatile PendingOperation pending;
     private static WeakReference<Object> screenSetterReceiver = new WeakReference<Object>(null);
@@ -247,6 +248,8 @@ public final class GameAutomationController {
                 }
                 else if (Tracker.describeUnexpectedPlayer(client) != null)
                     complete(operation, error("player.unexpected", Tracker.describeUnexpectedPlayer(client)));
+                else
+                    checkJoin(index, operation);
                 return;
             }
             Object screen = findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName);
@@ -382,6 +385,7 @@ public final class GameAutomationController {
 
         if (index.plan.directScreenName.equals(className)) {
             operation.submitted = true;
+            operation.submittedAt = System.currentTimeMillis();
             String exact = DirectConnectAccess.connect(screen, index.plan.directConnect, operation.value);
 
             if (!operation.value.equals(exact)) {
@@ -390,6 +394,7 @@ public final class GameAutomationController {
             }
 
             consumedScreen = screen;
+            armConnectingScreen(index, operation);
             return;
         }
 
@@ -427,6 +432,89 @@ public final class GameAutomationController {
         } else {
             awaitRoute(operation, className);
         }
+    }
+
+    /**
+     * Ends a submitted connect that can no longer join. A connection attempt that fails, such as for an unknown host or a refused
+     * connection, never creates a connection listener, and the game replaces its connecting screen with one that shows the error. A
+     * join that keeps its connection but never reaches a world, behind a screen nobody answers, ends at the deadline.
+     */
+    private static void checkJoin(GameAutomationIndex.IndexedCode index, PendingOperation operation) {
+        armConnectingScreen(index, operation);
+        Object screen = findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName);
+
+        if (operation.connection == null && operation.connectingScreen != null && screen != operation.connectingScreen)
+            complete(operation, error("connection.failed", screenText(screen, index.plan.screenBaseName)));
+        else if (System.currentTimeMillis() - operation.submittedAt >= WorldDeadlineMilliseconds)
+            complete(operation, error("world.timeout", "No world " + WorldDeadlineMilliseconds / 60000L
+                + " minutes after connecting; the game shows " + screenText(screen, index.plan.screenBaseName)));
+    }
+
+    /**
+     * Remembers the first screen after submit that holds the game's connection, which is the screen showing the connection attempt.
+     * A mod can show other screens before it, and a connection attempt that fails within moments of submit can replace it before
+     * it's seen; the connect then waits for the deadline instead of failing a join that may still succeed.
+     */
+    private static void armConnectingScreen(GameAutomationIndex.IndexedCode index, PendingOperation operation) {
+        if (operation.connectingScreen != null)
+            return;
+
+        Object screen = findCurrentScreen(screenSetterReceiver.get(), index.plan.screenBaseName);
+
+        if (screen != null && holdsConnection(screen, index.plan.screenBaseName, index.plan.networkTypes))
+            operation.connectingScreen = screen;
+    }
+
+    static boolean holdsConnection(Object screen, String screenBaseName, Set<String> networkTypes) {
+        for (Class<?> type = screen.getClass(); type != null && !screenBaseName.equals(type.getName().replace('.', '/')); type = type.getSuperclass())
+            for (Field field : type.getDeclaredFields())
+                if (!Modifier.isStatic(field.getModifiers()) && networkTypes.contains(field.getType().getName().replace('.', '/')))
+                    return true;
+
+        return false;
+    }
+
+    /**
+     * Reads what a screen says: its title, and the first text its own class holds, such as why a connection attempt failed. Fields
+     * are read in the order the class declares them, which HotSpot keeps.
+     *
+     * @return the text, or the screen's class name when it shows none
+     */
+    static String screenText(Object screen, String screenBaseName) {
+        if (screen == null)
+            return "no screen";
+
+        Class<?> screenBase = screen.getClass().getSuperclass();
+
+        while (screenBase != null && !screenBaseName.equals(screenBase.getName().replace('.', '/')))
+            screenBase = screenBase.getSuperclass();
+
+        String title = screenBase == null ? null : firstText(screen, screenBase);
+        String text = firstText(screen, screen.getClass());
+
+        if (title == null || title.equals(text))
+            return text == null ? screen.getClass().getName() : text;
+
+        return text == null ? title : title + ": " + text;
+    }
+
+    private static String firstText(Object screen, Class<?> type) {
+        for (Field field : type.getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive())
+                continue;
+
+            try {
+                field.setAccessible(true);
+                String text = JoinedConnection.text(field.get(screen));
+
+                if (text != null && !text.trim().isEmpty())
+                    return text;
+            } catch (Throwable exception) {
+                // A field that can't be read shows nothing.
+            }
+        }
+
+        return null;
     }
 
     private static void awaitRoute(PendingOperation operation, String className) {
@@ -1052,6 +1140,8 @@ public final class GameAutomationController {
         final CountDownLatch completed = new CountDownLatch(1);
         volatile String response;
         volatile boolean submitted;
+        volatile long submittedAt;
+        volatile Object connectingScreen;
         volatile Object connection;
         volatile String rejection;
         volatile long closedAt;

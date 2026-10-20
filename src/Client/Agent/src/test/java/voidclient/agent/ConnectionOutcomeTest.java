@@ -5,6 +5,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Collections;
+import java.util.Set;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Test;
@@ -48,6 +50,37 @@ public final class ConnectionOutcomeTest {
         Assert.assertEquals("Kicked by an operator", JoinedConnection.reasonText(component));
         Assert.assertEquals("Timed out", JoinedConnection.reasonText("Timed out"));
         Assert.assertEquals("null", JoinedConnection.reasonText(null));
+    }
+
+    @Test
+    public void textIsReadOnlyFromStringsAndComponents() {
+        Assert.assertEquals("Unknown host", JoinedConnection.text(message("Unknown host")));
+        Assert.assertEquals("Connection refused", JoinedConnection.text("Connection refused"));
+        Assert.assertNull(JoinedConnection.text(new Object()));
+        Assert.assertNull(JoinedConnection.text(null));
+    }
+
+    @Test
+    public void failedConnectionScreenTextJoinsTheTitleAndTheReason() {
+        Object screen = new Disconnected(message("Failed to connect to the server"), message("Unknown host"));
+
+        Assert.assertEquals("Failed to connect to the server: Unknown host", GameAutomationController.screenText(screen, ScreenBase));
+    }
+
+    @Test
+    public void screenTextReadsScreensWithoutATitle() {
+        // Before 1.14 screens had no title, and before 1.13 text components weren't Brigadier messages.
+        Assert.assertEquals("Failed to connect to the server", GameAutomationController.screenText(new LegacyDisconnected(), ScreenBase));
+        Assert.assertEquals(Connecting.class.getName(), GameAutomationController.screenText(new Connecting(null), ScreenBase));
+        Assert.assertEquals("no screen", GameAutomationController.screenText(null, ScreenBase));
+    }
+
+    @Test
+    public void onlyTheConnectingScreenHoldsTheConnection() {
+        Set<String> networkTypes = Collections.singleton(Network.class.getName().replace('.', '/'));
+
+        Assert.assertTrue(GameAutomationController.holdsConnection(new Connecting(null), ScreenBase, networkTypes));
+        Assert.assertFalse(GameAutomationController.holdsConnection(new Disconnected(null, null), ScreenBase, networkTypes));
     }
 
     @Test
@@ -113,6 +146,15 @@ public final class ConnectionOutcomeTest {
         Assert.assertNull(field(GameAutomationController.class, "pending").get(null));
     }
 
+    private static com.mojang.brigadier.Message message(final String text) {
+        return new com.mojang.brigadier.Message() {
+            @Override
+            public String getString() {
+                return text;
+            }
+        };
+    }
+
     private static Object operation(String requestId) throws Exception {
         Class<?> type = Class.forName("voidclient.agent.GameAutomationController$PendingOperation");
         Constructor<?> constructor = type.getDeclaredConstructor(String.class, String.class, String.class);
@@ -153,5 +195,45 @@ public final class ConnectionOutcomeTest {
         Listener(Network connection) {
             this.connection = connection;
         }
+    }
+
+    private static final String ScreenBase = Screen.class.getName().replace('.', '/');
+
+    public static class Screen {
+        private final Object title;
+        private int width;
+
+        Screen(Object title) {
+            this.title = title;
+        }
+    }
+
+    public static class Connecting extends Screen {
+        private volatile Network connection;
+
+        Connecting(Object title) {
+            super(title);
+        }
+    }
+
+    public static class Disconnected extends Screen {
+        private final Screen parent = null;
+        private final Object reason;
+        private final Object buttonText = message("Back to server list");
+
+        Disconnected(Object title, Object reason) {
+            super(title);
+            this.reason = reason;
+        }
+    }
+
+    public static class LegacyScreen {
+        private int width;
+    }
+
+    public static class LegacyDisconnected extends LegacyScreen {
+        private final String reason = "Failed to connect to the server";
+        private final Object message = new Object();
+        private final LegacyScreen parent = null;
     }
 }

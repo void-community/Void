@@ -19,7 +19,7 @@ public sealed class GameWarningTests
         using var console = new StringWriter();
         var warnings = Channel.CreateUnbounded<string>();
 
-        await new GameRuntime().PumpOutputAsync(reader, console, sessionId: null, stream: "stderr", warnings.Writer, TestContext.Current.CancellationToken);
+        await new GameRuntime().PumpOutputAsync(reader, console, sessionId: null, stream: "stderr", warnings.Writer, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(text.Replace("\r\n", "\n", StringComparison.Ordinal), console.ToString());
         Assert.True(warnings.Reader.TryRead(out string? warning));
@@ -28,12 +28,59 @@ public sealed class GameWarningTests
     }
 
     [Fact]
+    public async Task OutputPumpReportsCrashReportsBehindAnyPrefix()
+    {
+        string text = "[06:19:32] [main/INFO]: [net.minecraft.server.Bootstrap:realStdoutPrintln:140]: #@!@# Game crashed! Crash report saved to: #@!@# /root/.minecraft/crash-reports/crash-2026-10-20_06.19.30-client.txt\n"
+                      + "[06:33:50] [_stdout_] [INFO] #@!@# Game crashed! Crash report saved to: #@!@# /root/.minecraft/crash-reports/crash-2026-10-20_06.33.50-client.txt\r\n"
+                      + "#@?@# Game crashed! Crash report could not be saved. #@?@#\n"
+                      + "[06:34:00] [Render thread/INFO]: [CHAT] <Player> Game crashed!\n";
+        using var reader = new ChunkedReader(text);
+        using var console = new StringWriter();
+        var warnings = Channel.CreateUnbounded<string>();
+        List<string> reports = [];
+
+        await new GameRuntime().PumpOutputAsync(reader, console, sessionId: null, stream: "stdout", warnings.Writer, reports.Add, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["/root/.minecraft/crash-reports/crash-2026-10-20_06.19.30-client.txt", "/root/.minecraft/crash-reports/crash-2026-10-20_06.33.50-client.txt"], reports);
+        Assert.False(warnings.Reader.TryRead(out _));
+    }
+
+    [Fact]
+    public void OnlyACrashReportTheGameSavedCounts()
+    {
+        // Chat reaches the same output, so a player who types the marker must not end the game.
+        string minecraftDirectory = Directory.CreateTempSubdirectory().FullName;
+
+        try
+        {
+            string crashReports = Directory.CreateDirectory(Path.Join(minecraftDirectory, "crash-reports")).FullName;
+            string report = Path.Join(crashReports, "crash-2026-10-20_06.19.30-client.txt");
+            string optionsFile = Path.Join(minecraftDirectory, "options.txt");
+            DateTime launchedAt = DateTime.UtcNow.AddMinutes(-1);
+            File.WriteAllText(report, "---- Minecraft Crash Report ----");
+            File.WriteAllText(optionsFile, "fullscreen:false");
+
+            Assert.True(GameRuntime.IsCrashReportOf(report, minecraftDirectory, launchedAt));
+            Assert.True(GameRuntime.IsCrashReportOf("crash-reports/crash-2026-10-20_06.19.30-client.txt", minecraftDirectory, launchedAt));
+            Assert.False(GameRuntime.IsCrashReportOf(Path.Join(crashReports, "crash-2026-10-20_06.20.00-client.txt"), minecraftDirectory, launchedAt));
+            Assert.False(GameRuntime.IsCrashReportOf(optionsFile, minecraftDirectory, launchedAt));
+            Assert.False(GameRuntime.IsCrashReportOf(Path.Join(crashReports, "..", "options.txt"), minecraftDirectory, launchedAt));
+            Assert.False(GameRuntime.IsCrashReportOf(report, minecraftDirectory, DateTime.UtcNow.AddMinutes(1)));
+            Assert.False(GameRuntime.IsCrashReportOf("\0", minecraftDirectory, launchedAt));
+        }
+        finally
+        {
+            Directory.Delete(minecraftDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void StopsBufferingOverlongUnfinishedLines()
     {
         var warnings = Channel.CreateUnbounded<string>();
 
-        Assert.Equal("Void client warning: short", GameRuntime.ReadGameWarnings("Void client warning: short", warnings.Writer));
-        Assert.Equal("", GameRuntime.ReadGameWarnings(new string('x', 70_000), warnings.Writer));
+        Assert.Equal("Void client warning: short", GameRuntime.ReadGameOutput("Void client warning: short", warnings.Writer));
+        Assert.Equal("", GameRuntime.ReadGameOutput(new string('x', 70_000), warnings.Writer));
     }
 
     [Fact]

@@ -348,7 +348,8 @@ public sealed class GameCoordinatorTests
         await WaitForOperationAsync(coordinator, "connect");
         await coordinator.StopGameAsync(CancellationToken.None);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => connect);
+        var exception = await Assert.ThrowsAsync<GameCommandException>(() => connect);
+        Assert.Equal(409, exception.StatusCode);
         Assert.True(runtime.ConnectCancellationRequested);
         Assert.Equal(GameState.Idle, coordinator.Status.State);
 

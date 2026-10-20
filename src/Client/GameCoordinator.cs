@@ -238,7 +238,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         foreach (var waiter in _connectWaiters)
         {
             waiter.CancellationRegistration.Dispose();
-            waiter.Completion.SetCanceled();
+            waiter.Completion.SetException(Conflict(message: "connect was canceled by a stop request"));
         }
 
         _connectWaiters.Clear();

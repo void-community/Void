@@ -37,18 +37,36 @@ final class JoinedConnection {
      * @return the text, or the reason's own description when it has none
      */
     static String reasonText(Object reason) {
-        try {
-            Class<?> message = Class.forName(MessageName, false, reason.getClass().getClassLoader());
-            Object text = message.isInstance(reason) ? reason : null;
+        String text = text(reason);
 
-            if (text == null && reason.getClass().getSuperclass() != null && "java.lang.Record".equals(reason.getClass().getSuperclass().getName()))
-                for (Object component : (Object[]) Class.class.getMethod("getRecordComponents").invoke(reason.getClass())) {
+        // Versions before Brigadier, and reasons that aren't text components, keep their own description.
+        return text == null ? String.valueOf(reason) : text;
+    }
+
+    /**
+     * Reads the plain text of a string, a text component, or a record holding a text component.
+     *
+     * @return the text, or {@code null} when the value isn't text
+     */
+    static String text(Object value) {
+        if (value instanceof String)
+            return (String) value;
+
+        if (value == null)
+            return null;
+
+        try {
+            Class<?> message = Class.forName(MessageName, false, value.getClass().getClassLoader());
+            Object text = message.isInstance(value) ? value : null;
+
+            if (text == null && value.getClass().getSuperclass() != null && "java.lang.Record".equals(value.getClass().getSuperclass().getName()))
+                for (Object component : (Object[]) Class.class.getMethod("getRecordComponents").invoke(value.getClass())) {
                     Method accessor = (Method) component.getClass().getMethod("getAccessor").invoke(component);
                     accessor.setAccessible(true);
-                    Object value = accessor.invoke(reason);
+                    Object componentValue = accessor.invoke(value);
 
-                    if (message.isInstance(value)) {
-                        text = value;
+                    if (message.isInstance(componentValue)) {
+                        text = componentValue;
                         break;
                     }
                 }
@@ -56,10 +74,10 @@ final class JoinedConnection {
             if (text != null)
                 return (String) message.getMethod("getString").invoke(text);
         } catch (Exception exception) {
-            // Versions before Brigadier, and reasons that aren't text components, keep their own description.
+            // Versions before Brigadier have no text components to read.
         }
 
-        return String.valueOf(reason);
+        return null;
     }
 
     static boolean hasJoined() {

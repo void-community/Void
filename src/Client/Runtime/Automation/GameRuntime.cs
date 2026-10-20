@@ -14,6 +14,21 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
+    internal static bool IsCrashReportOf(string reportPath, string minecraftDirectory, DateTime launchedAt)
+    {
+        try
+        {
+            string crashReportsDirectory = $"{Path.Join(Path.GetFullPath(minecraftDirectory), path2: "crash-reports")}{Path.DirectorySeparatorChar}";
+            string report = Path.GetFullPath(reportPath, Path.GetFullPath(minecraftDirectory));
+
+            return report.StartsWith(crashReportsDirectory, StringComparison.Ordinal) && File.Exists(report) && File.GetLastWriteTimeUtc(report) >= launchedAt;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Returns the visible windows that don't belong to the game JVM, such as dialogs of other programs, each with the time it has
     /// been seen since. A window drops out once it closes or turns out to be the game's.
@@ -167,6 +182,32 @@ internal sealed partial class GameRuntime
 
             if (_outputTasks.TryRemove(processId, out var removedOutput))
                 GC.KeepAlive(removedOutput);
+        }
+    }
+
+    /// <summary>
+    /// Ends a game that reported a crash but hasn't exited. Minecraft exits once it has saved its crash report, but NeoForge shows
+    /// a mod loading failure until someone clicks Quit Game, which nobody can in the container.
+    /// </summary>
+    private async Task EndCrashedGameAsync(Process process)
+    {
+        using CancellationTokenSource exitTimeout = new(TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds));
+
+        await process.WaitForExitAsync(exitTimeout.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        try
+        {
+            if (process.HasExited)
+                return;
+
+            await Console.Error.WriteLineAsync(
+                $"Minecraft reported a crash but kept running for {ProcessStopTimeoutMilliseconds / 1000} seconds, stopping process group {process.Id}"
+            ).ConfigureAwait(continueOnCapturedContext: false);
+            await TerminateProcessGroupAsync(process.Id, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
+        {
+            await Console.Error.WriteLineAsync($"Stopping the crashed game failed: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
         }
     }
 
@@ -527,17 +568,31 @@ internal sealed partial class GameRuntime
 
     private async Task PumpGameOutputAsync(Process process, Guid? sessionId, ChannelWriter<string> warnings)
     {
+        DateTime launchedAt = DateTime.UtcNow;
+        int crashed = 0;
+        Task? crashedGameEnd = null;
+
+        void CrashReported(string reportPath)
+        {
+            // Chat is logged to the same output, so only a crash report this game saved counts.
+            if (IsCrashReportOf(reportPath, GetMinecraftDirectory(), launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
+                crashedGameEnd = EndCrashedGameAsync(process);
+        }
+
         try
         {
             // PortableMC may merge the game's streams, so warnings are read from both.
             await Task.WhenAll(
-                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings),
-                PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr", warnings)
+                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings, CrashReported),
+                PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr", warnings, CrashReported)
             ).ConfigureAwait(continueOnCapturedContext: false);
         }
         finally
         {
             warnings.Complete();
+
+            if (crashedGameEnd is not null)
+                await crashedGameEnd.ConfigureAwait(continueOnCapturedContext: false);
         }
     }
 
@@ -793,21 +848,26 @@ internal sealed partial class GameRuntime
             if (IsProcessGroupRunning(processGroupId))
             {
                 await Console.Error.WriteLineAsync($"Stopping processes the previous {portableMinecraftVersion} game left in process group {processGroupId}").ConfigureAwait(continueOnCapturedContext: false);
-                await SignalProcessGroupAsync(processGroupId, signal: "TERM", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-                try
-                {
-                    await WaitForProcessGroupExitAsync(processGroupId, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                }
-                catch (TimeoutException)
-                {
-                    await SignalProcessGroupAsync(processGroupId, signal: "KILL", CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
-                    await WaitForProcessGroupExitAsync(processGroupId, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
-                }
+                await TerminateProcessGroupAsync(processGroupId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             }
 
             if (_launchedProcessGroups.TryRemove(processGroupId, out string? forgottenVersion))
                 GC.KeepAlive(forgottenVersion);
+        }
+    }
+
+    private async Task TerminateProcessGroupAsync(int processGroupId, CancellationToken cancellationToken)
+    {
+        await SignalProcessGroupAsync(processGroupId, signal: "TERM", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        try
+        {
+            await WaitForProcessGroupExitAsync(processGroupId, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        catch (TimeoutException)
+        {
+            await SignalProcessGroupAsync(processGroupId, signal: "KILL", CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
+            await WaitForProcessGroupExitAsync(processGroupId, TimeSpan.FromMilliseconds(ProcessStopTimeoutMilliseconds), CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
         }
     }
 

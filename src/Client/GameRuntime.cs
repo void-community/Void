@@ -40,6 +40,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string DisplayScreenResolution = $"{DisplayScreenWidth}x{DisplayScreenHeight}";
     private const string DisplayScreenWidth = "854";
     private const int ExternalProcessTimeoutMilliseconds = 5000;
+    // Minecraft prints this before the path of a crash report it saved, right before it exits. Launchers watch for it too.
+    private const string GameCrashMarker = "#@!@# Game crashed! Crash report saved to: #@!@# ";
     // Helpers in the image, such as the xmessage shim, report non-fatal problems on the game's output with this prefix.
     private const string GameWarningPrefix = "Void client warning: ";
     private const string LauncherSplashWindowTitle = "Void Client Startup";
@@ -331,9 +333,10 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     }
 
     /// <summary>
-    /// Reports each complete line that starts with <see cref="GameWarningPrefix"/> and returns the unfinished last line.
+    /// Reports each complete line that starts with <see cref="GameWarningPrefix"/>, and the crash report path of each line with
+    /// <see cref="GameCrashMarker"/>, and returns the unfinished last line.
     /// </summary>
-    internal static string ReadGameWarnings(string text, ChannelWriter<string> warnings)
+    internal static string ReadGameOutput(string text, ChannelWriter<string> warnings, Action<string>? crashReported = null)
     {
         int lineStart = 0;
         int lineEnd = text.IndexOf(value: '\n', lineStart);
@@ -346,6 +349,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
             // The channel only refuses warnings once the game's output has ended, so nothing would read the rest either.
             if (isWarning && !warnings.TryWrite(line[GameWarningPrefix.Length..].ToString()))
                 return "";
+
+            // Launchers and loaders put their own prefix before the marker.
+            int crashMarker = line.IndexOf(GameCrashMarker, StringComparison.Ordinal);
+
+            if (crashMarker >= 0)
+                crashReported?.Invoke(line[(crashMarker + GameCrashMarker.Length)..].Trim().ToString());
 
             lineStart = lineEnd + 1;
             lineEnd = text.IndexOf(value: '\n', lineStart);
@@ -361,6 +370,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         Guid? sessionId,
         string stream,
         ChannelWriter<string>? warnings = null,
+        Action<string>? crashReported = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -380,7 +390,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 pending += text;
 
                 if (warnings is not null)
-                    unfinishedLine = ReadGameWarnings(unfinishedLine + text, warnings);
+                    unfinishedLine = ReadGameOutput(unfinishedLine + text, warnings, crashReported);
 
                 if (sessionId is { } id && diagnostics is not null)
                 {
