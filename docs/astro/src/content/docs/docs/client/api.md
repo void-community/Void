@@ -174,6 +174,8 @@ Replace the example `fileId` with the file you want to start.
 
 If any modpack file can't be downloaded, the launch fails with an error that lists every missing file.
 
+The game directory holds one modpack at a time. Starting the installed modpack again starts it right away. Starting another modpack or file replaces it, downloading only the files that aren't there yet. A failed or stopped start leaves no modpack installed, so the next start installs again and reuses what was downloaded. Files the previous modpack added in subfolders such as `config/` are removed. Worlds, files the game created, and `options.txt` stay.
+
 ## Connecting
 
 The game must be `ready`. `port` must be between `1` and `65535`.

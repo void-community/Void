@@ -182,6 +182,99 @@ internal sealed partial class GameRuntime
         return string.IsNullOrWhiteSpace(expectedSha1) || actualSha1.Equals(expectedSha1.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Tells whether a modpack file is already in place, which only its published SHA-1 can confirm.</summary>
+    internal static async Task<bool> IsInstalledFileAsync(string path, string? expectedSha1, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(expectedSha1) || !File.Exists(path))
+            return false;
+
+        using var file = File.OpenRead(path);
+
+        return IsExpectedSha1(await CopyWithSha1Async(file, Stream.Null, cancellationToken).ConfigureAwait(continueOnCapturedContext: false), expectedSha1);
+    }
+
+    internal static async Task<string> PrepareCurseForgeAsync(
+        HttpClient httpClient,
+        string slug,
+        int fileId,
+        string curseForgeApiKey,
+        Uri curseForgeApiBaseUri,
+        int parallelDownloads,
+        string minecraftDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        GC.KeepAlive(Directory.CreateDirectory(minecraftDirectory));
+
+        string markerFile = Path.Combine(minecraftDirectory, CurseForgeMarkerFileName);
+        string versionFile = Path.Combine(minecraftDirectory, CurseForgeVersionFileName);
+        string marker = $"{slug} {fileId}";
+        string existingMarker = File.Exists(markerFile) ? (await File.ReadAllTextAsync(markerFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim() : "";
+        string portablemcVersion;
+
+        await Console.Error.WriteLineAsync($"Starting CurseForge modpack '{slug}' file '{fileId}'").ConfigureAwait(continueOnCapturedContext: false);
+
+        if (existingMarker == marker)
+        {
+            if (!File.Exists(versionFile))
+                throw new InvalidOperationException($"PortableMC version cache file is missing: {versionFile}");
+
+            portablemcVersion = (await File.ReadAllTextAsync(versionFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim();
+
+            await Console.Error.WriteLineAsync($"Using existing installation in {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
+        }
+        else
+        {
+            portablemcVersion = await InstallModpack(httpClient, slug, fileId, curseForgeApiKey, curseForgeApiBaseUri, parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            await File.WriteAllTextAsync(versionFile, portablemcVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await File.WriteAllTextAsync(markerFile, marker, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+            await Console.Error.WriteLineAsync(value: "Installation marker updated").ConfigureAwait(continueOnCapturedContext: false);
+        }
+
+        return portablemcVersion;
+    }
+
+    /// <summary>
+    /// Leaves only the given modpack files in the folders modpack files download to. Downloads only land at the top of those folders, and
+    /// the overrides extracted afterwards bring back any subfolder the modpack has, so every subfolder goes as well.
+    /// </summary>
+    internal static void PruneModpackFiles(string minecraftDirectory, IReadOnlySet<string> keep)
+    {
+        foreach (string folder in new[] { "mods", "resourcepacks", "shaderpacks" })
+        {
+            var directory = Directory.CreateDirectory(Path.Combine(minecraftDirectory, folder));
+
+            foreach (var entry in directory.EnumerateFileSystemInfos())
+            {
+                if (entry is DirectoryInfo)
+                    Directory.Delete(entry.FullName, recursive: true);
+                else if (!keep.Contains(entry.FullName))
+                    entry.Delete();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes the override files of the previous modpack that the next one doesn't have, such as configs and scripts for mods it lacks.
+    /// Files in the game directory itself stay, because <c>options.txt</c> there belongs to the consumer.
+    /// </summary>
+    internal static void RemoveStaleOverrides(string minecraftDirectory, IEnumerable<string> previous, IReadOnlyCollection<string> current)
+    {
+        string directory = $"{Path.GetFullPath(minecraftDirectory)}{Path.DirectorySeparatorChar}";
+        HashSet<string> kept = new(current, StringComparer.Ordinal);
+
+        foreach (string relativePath in previous)
+        {
+            string path = Path.GetFullPath(Path.Combine(directory, relativePath));
+            bool inSubdirectory = relativePath.Contains(value: '/', StringComparison.Ordinal) && path.StartsWith(directory, StringComparison.Ordinal);
+
+            if (inSubdirectory && !kept.Contains(relativePath))
+                File.Delete(path);
+        }
+    }
+
     /// <summary>
     /// Picks the newest build from a Modrinth version list (newest first), including pre-releases, because older Sodium
     /// releases can target loader internals that newer NeoForge builds for the same Minecraft version no longer have.
@@ -221,6 +314,7 @@ internal sealed partial class GameRuntime
     }
 
     private static async Task<string> InstallModpack(
+        HttpClient httpClient,
         string slug,
         int fileId,
         string apiKey,
@@ -230,8 +324,6 @@ internal sealed partial class GameRuntime
         CancellationToken cancellationToken
     )
     {
-        using HttpClient httpClient = new();
-
         CurseForgeApiClient curseForgeClient = new(httpClient, apiBaseUri, apiKey);
 
         await Console.Error.WriteLineAsync(value: "Resolving CurseForge project").ConfigureAwait(continueOnCapturedContext: false);
@@ -268,54 +360,28 @@ internal sealed partial class GameRuntime
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        DeleteDirectoryIfExists(Path.Combine(minecraftDirectory, path2: "mods"));
-        DeleteDirectoryIfExists(Path.Combine(minecraftDirectory, path2: "resourcepacks"));
-        DeleteDirectoryIfExists(Path.Combine(minecraftDirectory, path2: "shaderpacks"));
-
-        var modsDirectoryInformation = Directory.CreateDirectory(Path.Combine(minecraftDirectory, path2: "mods"));
-        var resourcePacksDirectoryInformation = Directory.CreateDirectory(Path.Combine(minecraftDirectory, path2: "resourcepacks"));
-        var shaderPacksDirectoryInformation = Directory.CreateDirectory(Path.Combine(minecraftDirectory, path2: "shaderpacks"));
-
-        await Console.Error.WriteLineAsync($"Prepared Minecraft directory: {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
-
         string overridesFolder = manifest.Overrides ?? "overrides";
+        List<ModpackOverride> overrides = [];
 
-        if (archive.Entries.Any(entry => entry.FullName.StartsWith(overridesFolder + "/", StringComparison.Ordinal)))
+        foreach (var entry in archive.Entries)
         {
-            await Console.Error.WriteLineAsync(value: "Installing modpack overrides").ConfigureAwait(continueOnCapturedContext: false);
+            bool entryIsOverride = entry.FullName.StartsWith(overridesFolder + "/", StringComparison.Ordinal)
+                                  && entry.FullName.Length > overridesFolder.Length + 1;
 
-            foreach (var entry in archive.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+            if (!entryIsOverride)
+                continue;
 
-                bool entryIsOverride = entry.FullName.StartsWith(overridesFolder + "/", StringComparison.Ordinal)
-                                      && entry.FullName.Length > overridesFolder.Length + 1;
+            string relativePath = entry.FullName[(overridesFolder.Length + 1)..];
+            string targetPath = Path.GetFullPath(Path.Combine(minecraftDirectory, relativePath));
+            bool targetWithinMinecraftDirectory = targetPath.StartsWith(Path.GetFullPath(minecraftDirectory) + Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal);
 
-                if (!entryIsOverride)
-                    continue;
+            if (!targetWithinMinecraftDirectory)
+                throw new InvalidDataException($"Modpack override escapes the Minecraft directory: {entry.FullName}");
 
-                string targetPath = Path.GetFullPath(Path.Combine(minecraftDirectory, entry.FullName[(overridesFolder.Length + 1)..]));
-                bool targetWithinMinecraftDirectory = targetPath.StartsWith(Path.GetFullPath(minecraftDirectory) + Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal);
-
-                if (!targetWithinMinecraftDirectory)
-                    throw new InvalidDataException($"Modpack override escapes the Minecraft directory: {entry.FullName}");
-
-                if (entry.FullName.EndsWith(value: '/'))
-                {
-                    var targetDirectoryInformation = Directory.CreateDirectory(targetPath);
-
-                    continue;
-                }
-
-                var parentDirectoryInformation = Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? minecraftDirectory);
-
-                using var sourceStream = await entry.OpenAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-                using var targetStream = File.Create(targetPath);
-
-                await sourceStream.CopyToAsync(targetStream, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            }
+            overrides.Add(new ModpackOverride(entry, relativePath, targetPath));
         }
+
+        List<CurseForgeFile> allFileMetadata = [];
 
         if (manifest.Files is { Count: > 0 })
         {
@@ -333,79 +399,122 @@ internal sealed partial class GameRuntime
             }
 
             if (requiredFileIds.Count > 0)
-            {
                 await Console.Error.WriteLineAsync($"Resolving {requiredFileIds.Count} CurseForge files").ConfigureAwait(continueOnCapturedContext: false);
 
-                List<CurseForgeFile> allFileMetadata = [];
-
-                for (int batchStart = 0; batchStart < requiredFileIds.Count; batchStart += CurseForgeFilesBatchSize)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    List<int> batch = [.. requiredFileIds.Skip(batchStart).Take(CurseForgeFilesBatchSize)];
-                    var files = await curseForgeClient.GetFilesAsync(batch, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-                    allFileMetadata.AddRange(files);
-                }
-
-                int totalFileCount = allFileMetadata.Count;
-                int downloadIndex = 0;
-                ConcurrentDictionary<int, string> missingFiles = [];
-                ParallelOptions parallelOptions = new() { MaxDegreeOfParallelism = parallelDownloads, CancellationToken = cancellationToken };
-
-                await Console.Error.WriteLineAsync($"Downloading {totalFileCount} CurseForge files, {parallelDownloads} at a time").ConfigureAwait(continueOnCapturedContext: false);
-
-                // Most of a file's download time is request latency, so a few downloads in flight finish a large pack much sooner.
-                await Parallel.ForEachAsync(
-                    allFileMetadata.Index(),
-                    parallelOptions,
-                    async (entry, downloadCancellationToken) =>
-                    {
-                        var (position, fileMeta) = entry;
-                        int fileNumber = Interlocked.Increment(ref downloadIndex);
-                        ValidateFileName(fileMeta.FileName, fileMeta.ModId, fileMeta.Id);
-
-                        string targetDirectory = DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory);
-                        var targetDirectoryInformation = Directory.CreateDirectory(targetDirectory);
-                        string destinationPath = Path.Combine(targetDirectory, fileMeta.FileName);
-
-                        if (File.Exists(destinationPath))
-                        {
-                            await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Already exists: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
-
-                            return;
-                        }
-
-                        await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
-
-                        var fileDownloadUris = CreateCurseForgeDownloadUris(fileMeta.ModId, fileMeta.Id, fileMeta.FileName, fileMeta.DownloadUrl);
-
-                        var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, GetCurseForgeSha1(fileMeta.Hashes), apiKey, destinationPath, downloadCancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-                        if (fileDownload.Downloaded)
-                            return;
-
-                        string missingFile = $"{fileMeta.FileName} (mod {fileMeta.ModId}, file {fileMeta.Id})";
-                        missingFiles[position] = missingFile;
-
-                        await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Could not download {missingFile}: {string.Join(separator: "; ", fileDownload.Failures)}").ConfigureAwait(continueOnCapturedContext: false);
-                    }
-                ).ConfigureAwait(continueOnCapturedContext: false);
-
-                if (!missingFiles.IsEmpty)
-                {
-                    var missingFilesInManifestOrder = missingFiles.OrderBy(static missingFile => missingFile.Key).Select(static missingFile => missingFile.Value);
-
-                    throw new InvalidOperationException($"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFilesInManifestOrder)}");
-                }
-            }
-            else
+            for (int batchStart = 0; batchStart < requiredFileIds.Count; batchStart += CurseForgeFilesBatchSize)
             {
-                await Console.Error.WriteLineAsync(value: "No CurseForge files to download").ConfigureAwait(continueOnCapturedContext: false);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                List<int> batch = [.. requiredFileIds.Skip(batchStart).Take(CurseForgeFilesBatchSize)];
+                var files = await curseForgeClient.GetFilesAsync(batch, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                allFileMetadata.AddRange(files);
+            }
+        }
+
+        foreach (var fileMeta in allFileMetadata)
+            ValidateFileName(fileMeta.FileName, fileMeta.ModId, fileMeta.Id);
+
+        // Nothing in the game directory changed so far, so a failure above leaves the installed modpack startable. From here on, a failed
+        // or stopped install must not pass as any modpack, until the caller writes the marker of this one.
+        File.Delete(Path.Combine(minecraftDirectory, CurseForgeMarkerFileName));
+        File.Delete(Path.Combine(minecraftDirectory, CurseForgeVersionFileName));
+
+        // The list is written before the overrides are extracted, so the next install also removes what a failed one extracted.
+        string overridesListPath = Path.Combine(minecraftDirectory, CurseForgeOverridesFileName);
+        List<string> overrideFiles = [.. overrides.Where(static item => !item.Entry.FullName.EndsWith(value: '/')).Select(static item => item.RelativePath)];
+        string[] previousOverrideFiles = File.Exists(overridesListPath) ? await File.ReadAllLinesAsync(overridesListPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false) : [];
+        RemoveStaleOverrides(minecraftDirectory, previousOverrideFiles, overrideFiles);
+        await File.WriteAllLinesAsync(overridesListPath, overrideFiles, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        PruneModpackFiles(
+            minecraftDirectory,
+            allFileMetadata.Select(fileMeta => Path.Combine(DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory), fileMeta.FileName)).ToHashSet(StringComparer.Ordinal)
+        );
+
+        await Console.Error.WriteLineAsync($"Prepared Minecraft directory: {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
+
+        if (allFileMetadata.Count > 0)
+        {
+            int totalFileCount = allFileMetadata.Count;
+            int downloadIndex = 0;
+            ConcurrentDictionary<int, string> missingFiles = [];
+            ParallelOptions parallelOptions = new() { MaxDegreeOfParallelism = parallelDownloads, CancellationToken = cancellationToken };
+
+            await Console.Error.WriteLineAsync($"Downloading {totalFileCount} CurseForge files, {parallelDownloads} at a time").ConfigureAwait(continueOnCapturedContext: false);
+
+            // Most of a file's download time is request latency, so a few downloads in flight finish a large pack much sooner.
+            await Parallel.ForEachAsync(
+                allFileMetadata.Index(),
+                parallelOptions,
+                async (entry, downloadCancellationToken) =>
+                {
+                    var (position, fileMeta) = entry;
+                    int fileNumber = Interlocked.Increment(ref downloadIndex);
+                    string destinationPath = Path.Combine(DetermineTargetDirectory(fileMeta.FileName, minecraftDirectory), fileMeta.FileName);
+                    string? expectedSha1 = GetCurseForgeSha1(fileMeta.Hashes);
+
+                    // An earlier install, of this modpack or another one, may have left the same file.
+                    bool installed = await IsInstalledFileAsync(destinationPath, expectedSha1, downloadCancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                    if (installed)
+                    {
+                        await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Already exists: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
+
+                        return;
+                    }
+
+                    await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Downloading: {fileMeta.FileName}").ConfigureAwait(continueOnCapturedContext: false);
+
+                    var fileDownloadUris = CreateCurseForgeDownloadUris(fileMeta.ModId, fileMeta.Id, fileMeta.FileName, fileMeta.DownloadUrl);
+
+                    var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, expectedSha1, apiKey, destinationPath, downloadCancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                    if (fileDownload.Downloaded)
+                        return;
+
+                    string missingFile = $"{fileMeta.FileName} (mod {fileMeta.ModId}, file {fileMeta.Id})";
+                    missingFiles[position] = missingFile;
+
+                    await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Could not download {missingFile}: {string.Join(separator: "; ", fileDownload.Failures)}").ConfigureAwait(continueOnCapturedContext: false);
+                }
+            ).ConfigureAwait(continueOnCapturedContext: false);
+
+            if (!missingFiles.IsEmpty)
+            {
+                var missingFilesInManifestOrder = missingFiles.OrderBy(static missingFile => missingFile.Key).Select(static missingFile => missingFile.Value);
+
+                throw new InvalidOperationException($"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFilesInManifestOrder)}");
             }
         }
         else
         {
             await Console.Error.WriteLineAsync(value: "No CurseForge files to download").ConfigureAwait(continueOnCapturedContext: false);
+        }
+
+        // Overrides come last, so one that has the name of a downloaded file replaces it.
+        if (overrides.Count > 0)
+        {
+            await Console.Error.WriteLineAsync(value: "Installing modpack overrides").ConfigureAwait(continueOnCapturedContext: false);
+
+            foreach (var modpackOverride in overrides)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (modpackOverride.Entry.FullName.EndsWith(value: '/'))
+                {
+                    var targetDirectoryInformation = Directory.CreateDirectory(modpackOverride.TargetPath);
+
+                    continue;
+                }
+
+                var parentDirectoryInformation = Directory.CreateDirectory(Path.GetDirectoryName(modpackOverride.TargetPath) ?? minecraftDirectory);
+
+                using var sourceStream = await modpackOverride.Entry.OpenAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                using var targetStream = File.Create(modpackOverride.TargetPath);
+
+                await sourceStream.CopyToAsync(targetStream, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            }
         }
 
         await Console.Error.WriteLineAsync(value: "Resolving PortableMC version").ConfigureAwait(continueOnCapturedContext: false);
@@ -557,48 +666,6 @@ internal sealed partial class GameRuntime
     private static GamePlayersException PlayersUnavailable(string message, string stage = "snapshot", Exception? innerException = null)
     {
         return new(StatusCodes.Status503ServiceUnavailable, code: "client.players.unavailable", stage, message, innerException);
-    }
-
-    private static async Task<string> PrepareCurseForgeAsync(
-        string slug,
-        int fileId,
-        string curseForgeApiKey,
-        Uri curseForgeApiBaseUri,
-        int parallelDownloads,
-        string minecraftDirectory,
-        CancellationToken cancellationToken
-    )
-    {
-        GC.KeepAlive(Directory.CreateDirectory(minecraftDirectory));
-
-        string markerFile = Path.Combine(minecraftDirectory, path2: ".curseforge-modpack");
-        string versionFile = Path.Combine(minecraftDirectory, path2: ".curseforge-portablemc-version");
-        string marker = $"{slug} {fileId}";
-        string existingMarker = File.Exists(markerFile) ? (await File.ReadAllTextAsync(markerFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim() : "";
-        string portablemcVersion;
-
-        await Console.Error.WriteLineAsync($"Starting CurseForge modpack '{slug}' file '{fileId}'").ConfigureAwait(continueOnCapturedContext: false);
-
-        if (existingMarker == marker)
-        {
-            if (!File.Exists(versionFile))
-                throw new InvalidOperationException($"PortableMC version cache file is missing: {versionFile}");
-
-            portablemcVersion = (await File.ReadAllTextAsync(versionFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim();
-
-            await Console.Error.WriteLineAsync($"Using existing installation in {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
-        }
-        else
-        {
-            portablemcVersion = await InstallModpack(slug, fileId, curseForgeApiKey, curseForgeApiBaseUri, parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            await File.WriteAllTextAsync(versionFile, portablemcVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            await File.WriteAllTextAsync(markerFile, marker, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            await Console.Error.WriteLineAsync(value: "Installation marker updated").ConfigureAwait(continueOnCapturedContext: false);
-        }
-
-        return portablemcVersion;
     }
 
     private static async Task<ProcessBytesResult> RunProcessBytesAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)

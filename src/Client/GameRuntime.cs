@@ -29,7 +29,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int BlockingWindowTimeoutMilliseconds = 10000;
     private const string CurseForgeCdnUrl = "https://edge.forgecdn.net";
     private const int CurseForgeFilesBatchSize = 50;
+    // The installed modpack is "<slug> <fileId>" in this file, which only exists while the game directory holds that modpack.
+    private const string CurseForgeMarkerFileName = ".curseforge-modpack";
+    // Lists the installed modpack's override files, so the next modpack can remove the ones it doesn't have.
+    private const string CurseForgeOverridesFileName = ".curseforge-overrides";
     private const int CurseForgeSha1HashAlgorithm = 1;
+    private const string CurseForgeVersionFileName = ".curseforge-portablemc-version";
     private const string CurseForgeWebsiteUrl = "https://www.curseforge.com";
     private const string DefaultCurseForgeApiBaseUrl = "https://api.curseforge.com";
     private const int DefaultCurseForgeParallelDownloads = 4;
@@ -105,8 +110,11 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
         int parallelDownloads = GetCurseForgeParallelDownloads(Environment.GetEnvironmentVariable(variable: "CURSEFORGE_PARALLEL_DOWNLOADS"));
         string minecraftDirectory = GetMinecraftDirectory();
+        string portableMinecraftVersion;
 
-        string portableMinecraftVersion = await PrepareCurseForgeAsync(slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        using (HttpClient httpClient = new())
+            portableMinecraftVersion = await PrepareCurseForgeAsync(httpClient, slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
         var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);

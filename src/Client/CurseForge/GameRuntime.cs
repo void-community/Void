@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -5,6 +6,8 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
+    private readonly record struct ModpackOverride(ZipArchiveEntry Entry, string RelativePath, string TargetPath);
+
     internal sealed record CurseForgeFileHash([property: JsonPropertyName("value")] string? Value, [property: JsonPropertyName("algo")] int Algo);
 
     private sealed class CurseForgeApiClient(HttpClient httpClient, Uri baseUri, string apiKey)
