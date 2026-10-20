@@ -34,9 +34,9 @@ internal sealed partial class GameCoordinator
 
         bool processExitedDuringOperation = _activeCancellation is not null || _connectWaiters.Count is not 0;
 
-        var processFailure = exited.ExitCode is not 0 || processExitedDuringOperation
-            ? new GameProcessExitException(exited.ExitCode, exited.WasOutOfMemoryKilled, exited.MemoryMb)
-            : null;
+        // Only stop ends a game on purpose. The exit code is the launcher's, which is 0 whatever the game did, so a quit, a crash and a
+        // kill can't be told apart and every exit without a stop request is a failure.
+        GameProcessExitException processFailure = new(exited.WasOutOfMemoryKilled, exited.MemoryMb);
 
         await StopConnectionMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
         _game.Dispose();
@@ -47,23 +47,21 @@ internal sealed partial class GameCoordinator
         if (_activeCancellation is not null)
             await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
 
-        if (processFailure is null)
-            CancelConnectWaiters();
-        else
-            FailConnectWaiters(processFailure);
+        FailConnectWaiters(processFailure);
 
         _activeCancellation = null;
         await PublishAsync(
             Status with
             {
-                State = processFailure is null ? GameState.Idle : GameState.Failed,
-                OperationState = processFailure is null ? OperationState.Succeeded : OperationState.Failed,
+                State = GameState.Failed,
+                // Without a running operation, the operation fields still describe the last one, which had finished before the exit.
+                OperationState = processExitedDuringOperation ? OperationState.Failed : Status.OperationState,
                 ProcessId = null,
                 ExitCode = exited.ExitCode,
                 Server = null,
-                Message = processFailure is null ? "Game exited" : "Game exited unexpectedly",
-                Error = processFailure?.Message,
-                Failure = processFailure?.Failure,
+                Message = "Game exited without a stop request",
+                Error = processFailure.Message,
+                Failure = processFailure.Failure,
                 UpdatedAt = DateTimeOffset.UtcNow
             }
         ).ConfigureAwait(continueOnCapturedContext: false);

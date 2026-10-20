@@ -327,7 +327,7 @@ internal sealed partial class GameRuntime
                     await windowCancellationTokenSource.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
                     await ((Task)windowTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
-                    throw new GameProcessExitException(process.ExitCode, managedProcess.WasOutOfMemoryKilled, memoryMb);
+                    throw new GameProcessExitException(managedProcess.WasOutOfMemoryKilled, memoryMb);
                 }
 
                 string preparedWindowLease = await windowTask.ConfigureAwait(continueOnCapturedContext: false);
@@ -341,7 +341,7 @@ internal sealed partial class GameRuntime
             {
                 KillProcess(process);
                 await WaitForKilledProcessAsync(process).ConfigureAwait(continueOnCapturedContext: false);
-                await DrainOutputAsync(process.Id).ConfigureAwait(continueOnCapturedContext: false);
+                await ManagedProcess.WaitForOutputAsync(DrainOutputAsync(process.Id), ManagedProcess.DefaultOutputGracePeriod, CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
 
                 if (_outputWarnings.TryRemove(process.Id, out var abandonedWarnings))
                     GC.KeepAlive(abandonedWarnings);

@@ -6,11 +6,11 @@ internal sealed class GameProcessExitException : GameClientException
     {
     }
 
-    public GameProcessExitException(int exitCode, bool wasOutOfMemoryKilled, int? memoryMb) : base(
+    public GameProcessExitException(bool wasOutOfMemoryKilled, int? memoryMb) : base(
         wasOutOfMemoryKilled ? "client.process.out_of_memory" : "client.process.exited",
         operation: "process",
         stage: "exit",
-        CreateMessage(exitCode, wasOutOfMemoryKilled, memoryMb)
+        CreateMessage(wasOutOfMemoryKilled, memoryMb)
     )
     {
     }
@@ -23,13 +23,14 @@ internal sealed class GameProcessExitException : GameClientException
     {
     }
 
-    private static string CreateMessage(int exitCode, bool wasOutOfMemoryKilled, int? memoryMb)
+    // The exit code belongs to the launcher, which exits 0 whatever the game did, so it can't describe how Minecraft ended.
+    private static string CreateMessage(bool wasOutOfMemoryKilled, int? memoryMb)
     {
         if (!wasOutOfMemoryKilled)
-            return $"Minecraft exited unexpectedly with exit code {exitCode}";
+            return "Minecraft exited without a stop request";
 
         string memoryDescription = memoryMb is { } value ? $" with a configured maximum heap of {value} MiB" : "";
 
-        return $"Minecraft was killed by the operating system out-of-memory killer with exit code {exitCode}{memoryDescription}";
+        return $"Minecraft was killed by the operating system out-of-memory killer{memoryDescription}";
     }
 }

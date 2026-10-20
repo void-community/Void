@@ -511,10 +511,14 @@ public sealed class GameCoordinatorTests
 
         var exception = await Assert.ThrowsAsync<GameProcessExitException>(() => connect);
         Assert.Equal(expectedCode, exception.Failure.Code);
-        Assert.Contains($"exit code {exitCode}", exception.Message);
+
+        // The exit code is the launcher's, so the message doesn't present it as Minecraft's.
+        Assert.DoesNotContain("exit code", exception.Message);
 
         if (wasOutOfMemoryKilled)
             Assert.Contains("configured maximum heap of 2048 MiB", exception.Message);
+        else
+            Assert.Equal("Minecraft exited without a stop request", exception.Message);
 
         await WaitForStateAsync(coordinator, GameState.Failed);
         Assert.Equal(GameState.Failed, coordinator.Status.State);
@@ -525,8 +529,9 @@ public sealed class GameCoordinatorTests
     }
 
     [Fact]
-    public async Task SuccessfulProcessExitWithoutActiveOperationReturnsToIdle()
+    public async Task ExitWithoutStopRequestIsAFailureThatLeavesTheLastOperationAlone()
     {
+        // Issue #1611: the launcher exits 0 whether the game quit, crashed or was killed, so an exit without stop was reported as idle.
         var runtime = new FakeGameRuntime();
         using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
         await coordinator.StartAsync(CancellationToken.None);
@@ -536,9 +541,21 @@ public sealed class GameCoordinatorTests
 
         runtime.ExitGame(0, false);
 
-        await WaitForStateAsync(coordinator, GameState.Idle);
+        await WaitForStateAsync(coordinator, GameState.Failed);
+        Assert.Equal("start-vanilla", coordinator.Status.Operation);
         Assert.Equal(OperationState.Succeeded, coordinator.Status.OperationState);
         Assert.Equal(0, coordinator.Status.ExitCode);
+        Assert.Null(coordinator.Status.ProcessId);
+        Assert.Equal("client.process.exited", coordinator.Status.Failure?.Code);
+        Assert.Equal("Minecraft exited without a stop request", coordinator.Status.Error);
+
+        // A failed game can be started again.
+        await coordinator.StartVanillaAsync(new("1.17", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        Assert.Equal(GameState.Idle, coordinator.Status.State);
         Assert.Null(coordinator.Status.Failure);
 
         await coordinator.StopAsync(CancellationToken.None);

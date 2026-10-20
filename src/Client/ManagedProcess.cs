@@ -5,10 +5,20 @@ using Void.Client.Abstractions;
 namespace Void.Client;
 
 /// <summary>Adapts <see cref="Process"/> into the lifecycle surface owned by the coordinator.</summary>
-internal sealed class ManagedProcess(Process process, int? memoryMb, long? initialOutOfMemoryKillCount, Task? outputCompletion = null) : IManagedProcess
+internal sealed class ManagedProcess(
+    Process process,
+    int? memoryMb,
+    long? initialOutOfMemoryKillCount,
+    Task? outputCompletion = null,
+    TimeSpan? outputGracePeriod = null
+) : IManagedProcess
 {
+    /// <summary>How long the game's output may stay open after its launcher exited.</summary>
+    public static readonly TimeSpan DefaultOutputGracePeriod = TimeSpan.FromSeconds(seconds: 5);
+
     private bool? _wasOutOfMemoryKilled;
 
+    /// <summary>Gets the launcher's exit code. PortableMC exits 0 whatever the game did, so it doesn't tell how Minecraft ended.</summary>
     public int? ExitCode => process.HasExited ? process.ExitCode : null;
 
     public bool HasExited => process.HasExited;
@@ -17,9 +27,31 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
 
     public int? MemoryMb { get; } = memoryMb;
 
-    public bool WasOutOfMemoryKilled => process.HasExited && process.ExitCode is 137 && (_wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
+    // The kernel kills the game's JVM rather than the launcher, whose exit code stays 0, so only the cgroup's kill counter tells.
+    public bool WasOutOfMemoryKilled => process.HasExited && (_wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
                                                && CgroupMemoryEvents.ReadOutOfMemoryKillCount() is { } currentCount
                                                && currentCount > initialCount);
+
+    /// <summary>
+    /// Waits for the game's output to end after its launcher exited, but no longer than <paramref name="gracePeriod"/>. A process that
+    /// inherited the game's output, such as a helper a mod started, can keep it open after the game exited, which must not hide the exit.
+    /// </summary>
+    public static async Task WaitForOutputAsync(Task output, TimeSpan gracePeriod, CancellationToken cancellationToken)
+    {
+        var outputWait = output.WaitAsync(gracePeriod, cancellationToken);
+        await outputWait.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        if (outputWait.Exception?.GetBaseException() is TimeoutException)
+        {
+            await Console.Error.WriteLineAsync(
+                $"The game's output was still open {gracePeriod.TotalSeconds:0.#} seconds after its launcher exited, because another process holds it; continuing without the rest"
+            ).ConfigureAwait(continueOnCapturedContext: false);
+
+            return;
+        }
+
+        await outputWait.ConfigureAwait(continueOnCapturedContext: false);
+    }
 
     public void Dispose()
     {
@@ -37,6 +69,6 @@ internal sealed class ManagedProcess(Process process, int? memoryMb, long? initi
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         if (outputCompletion is not null)
-            await outputCompletion.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await WaitForOutputAsync(outputCompletion, outputGracePeriod ?? DefaultOutputGracePeriod, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 }

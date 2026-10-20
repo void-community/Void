@@ -54,7 +54,7 @@ JSON property names and enum values use camel case.
 | `operation` | Latest operation: `start-vanilla`, `start-neoforge`, `start-curseforge`, `options`, `connect`, `send-chat`, `screenshot`, or `stop`; otherwise `null`. |
 | `operationState` | `none`, `running`, `succeeded`, `failed`, or `canceled`. |
 | `processId` | Minecraft process identifier while it is running. |
-| `exitCode` | Minecraft exit code after it exits, when available. |
+| `exitCode` | Process exit code after the game exits, when available. It can be `0` even after a crash, so use `state` and `failure` to tell how the game ended. |
 | `server` | Connected `host` and `port`, otherwise `null`. |
 | `message` | Short description of the current result. |
 | `error` | Failure message, otherwise `null`. |
@@ -66,7 +66,7 @@ Start operations return this status with `202 Accepted` and a `Location: /api/ga
 Save its `operationId`, then poll until the same operation reports `ready` and `succeeded`.
 Stop polling with a failure if the identifier changes or the operation becomes `failed` or `canceled`.
 
-Runtime failures are also returned in the `failure` extension of HTTP Problem Details responses. An unexpected Minecraft process exit uses `client.process.exited`; a cgroup-confirmed OOM kill uses `client.process.out_of_memory` and reports the exit code and configured heap. Stack traces intentionally expose container implementation details and should not be forwarded to untrusted consumers.
+Runtime failures are also returned in the `failure` extension of HTTP Problem Details responses. Any end of the game other than `POST /api/game/stop`, whether Minecraft quit, crashed or was killed, sets `state` to `failed` with `client.process.exited`, or `client.process.out_of_memory` when it ran out of memory. When no operation was running, `operation` and `operationState` keep describing the last operation. Stack traces intentionally expose container implementation details and should not be forwarded to untrusted consumers.
 
 Mods sometimes open native message boxes while Minecraft loads, and nobody can click them inside the container. The client answers every message box opened through `xmessage`, which LWJGL's dialogs use, with its negative button (Cancel or No) and adds a warning such as `Dialog "Memory Settings" answered with Cancel: …` to `warnings`. When `connect` meets a mod screen it can't navigate, such as a memory warning shown before the title screen, it presses the screen's Proceed button and reports that in `warnings` too. If a window from another process stays over the game for 10 seconds during `connect` or `send-chat`, the operation fails with stage `window.blocked` and names that window instead of waiting forever.
 
@@ -206,9 +206,9 @@ The game must be running. `port` must be between `1` and `65535`. Connection nav
 
 Canceling an HTTP caller stops only that caller's wait. The background navigation continues from whichever Minecraft screen is currently visible until the game connects, exits, or is stopped through the API. If the server lets the game in under a different name than the one it was started with, the connection fails with stage `player.unexpected` and names both players.
 
-Mods can replace the title screen with their own menu. A menu that extends a vanilla screen uses that screen's routes even when it hides the vanilla buttons. For any other screen without a route, the client waits 5 seconds and then opens the nearest screen on the way to Direct Connection, usually the multiplayer screen, with that screen as its parent, and adds a warning to `warnings`. If no route has been found after 60 seconds, the connection fails with stage `ui.route` and names the screen.
+Connecting also works from main menus that mods replace. When the client has to open the multiplayer screen itself, it adds a warning to `warnings`. If it can't reach Direct Connection within 60 seconds, the connection fails with stage `ui.route` and names the screen it was on.
 
-A connection is confirmed only while its network connection is still open, so a game the server dropped while it was busy loading fails with stage `connection.rejected` and the disconnect reason. Once connected, the client checks the connection every second. When the game leaves the server, because it was kicked, timed out or lost its connection, `state` goes back to `ready`, `server` becomes `null`, and `message` names the server and the reason. A proxy's server switch keeps the connection, so the game stays `connected` through it.
+If the server drops the game before it has finished joining, the connection fails with stage `connection.rejected` and the disconnect reason. When a connected game leaves the server, because it was kicked, timed out or lost its connection, `state` goes back to `ready`, `server` becomes `null`, and `message` names the server and the reason. Switching servers behind a proxy keeps the game `connected`.
 
 ```bash
 curl --fail-with-body \
