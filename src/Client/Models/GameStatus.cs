@@ -21,5 +21,6 @@ internal sealed record GameStatus(
     ClientFailure? Failure,
     IReadOnlyList<string> Warnings,
     DateTimeOffset UpdatedAt,
-    [property: JsonPropertyName("sessionId")] Guid? SessionId = null
+    [property: JsonPropertyName("sessionId")] Guid? SessionId = null,
+    GameDisconnect? Disconnect = null
 );

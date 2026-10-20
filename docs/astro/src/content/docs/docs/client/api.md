@@ -46,9 +46,10 @@ Returns `200 OK` with the text `ok` once the API accepts requests, and `503 Serv
   "processId": 432,
   "exitCode": null,
   "server": null,
-  "message": "Game window is ready",
+  "message": "Game menu is ready",
   "error": null,
   "failure": null,
+  "disconnect": null,
   "warnings": [],
   "updatedAt": "2026-08-12T12:00:00+00:00"
 }
@@ -67,6 +68,7 @@ Returns `200 OK` with the text `ok` once the API accepts requests, and `503 Serv
 | `message` | Short human-readable description. |
 | `error` | Error message when something failed, otherwise `null`. |
 | `failure` | [Failure details](#failures) when something failed, otherwise `null`. |
+| `disconnect` | Why the game isn't connected to a server, [described below](#after-a-connection-ends), otherwise `null`. |
 | `warnings` | Non-fatal notes, such as a dialog the client dismissed. |
 | `updatedAt` | Time of the latest change. |
 
@@ -74,16 +76,21 @@ Returns `200 OK` with the text `ok` once the API accepts requests, and `503 Serv
 | :---- | :------ |
 | `idle` | No game is running. |
 | `starting` | The game is being prepared and launched. |
-| `ready` | The game is running and not connected to a server. |
+| `loading` | The game window is open and the game is loading. |
+| `ready` | The game shows its menu and isn't connected to a server. |
 | `connected` | The game is connected to a server. |
 | `stopping` | The game is being stopped. |
 | `failed` | The launch failed, or the game ended without a stop request. |
 
-### Waiting for an operation
+### Waiting for a game
 
 Start requests return the status with `202 Accepted` and keep running in the background.
-Save the returned `operationId` and poll `/api/game/status` until that operation reaches `ready` and `succeeded`.
-Treat it as failed if it reports `failed` or `canceled`, or if `operationId` changes to another operation.
+Save the returned `operationId` and poll `/api/game/status` until `state` is `ready`.
+The start operation has `succeeded` once the game window opens, and `state` stays `loading` until the game shows its menu, which can take minutes with many mods.
+The client sets no time limit on loading, so apply your own.
+Treat the start as failed if `state` becomes `failed` or `idle`, or if `operationId` changes to another caller's operation.
+
+When the client can't tell whether the game shows its menu, the game becomes `ready` once its window opens and `warnings` says why.
 
 ### When the game ends on its own
 
@@ -178,7 +185,7 @@ The game directory holds one modpack at a time. Starting the installed modpack a
 
 ## Connecting
 
-The game must be `ready`. `port` must be between `1` and `65535`.
+The game must be `loading` or `ready`. A game that is still loading connects once it shows its menu. `port` must be between `1` and `65535`.
 
 ```bash
 curl --fail-with-body \
@@ -216,8 +223,27 @@ A failed connection reports one of these `failure.stage` values:
 | `ui.route` | The client couldn't reach the Direct Connection screen within 60 seconds. |
 | `window.blocked` | A window from another program covered the game for 10 seconds. The message names it. |
 
-If the game later leaves the server, for example after a kick or a timeout, `state` returns to `ready`, `server` becomes `null`, and `message` gives the reason.
 Switching servers behind a proxy keeps the game `connected`.
+
+### After a connection ends
+
+If the game leaves the server, for example after a kick or a timeout, `state` returns to `ready` and `server` becomes `null`.
+`disconnect` keeps why the game isn't connected, both after it left a server and after a connection failed:
+
+```json
+"disconnect": {
+  "server": {
+    "host": "minecraft-server",
+    "port": 25565
+  },
+  "code": "client.connection.lost",
+  "stage": "connection.closed",
+  "message": "Kicked by an operator",
+  "disconnectedAt": "2026-08-12T12:05:00+00:00"
+}
+```
+
+A failed connection has the `code`, `stage`, and `message` of its [failure](#failures). Unlike `failure`, `disconnect` stays through later operations, such as a screenshot, until the game connects, stops, or exits.
 
 ## Sending Chat
 
@@ -235,7 +261,7 @@ Returns `409 Conflict` when the game isn't in a world, for example while a proxy
 
 ## Players
 
-`GET /api/game/players` returns the local player and the other players the game can see. The game must be `ready` or `connected`. No server plugin or mod is needed.
+`GET /api/game/players` returns the local player and the other players the game can see. The game must be `loading`, `ready`, or `connected`. No server plugin or mod is needed.
 
 ```json
 {
@@ -263,7 +289,7 @@ Returns `409 Conflict` when the game isn't in a world, and `503 Service Unavaila
 
 ## Screenshot
 
-The game must be `ready` or `connected`.
+The game must be `loading`, `ready`, or `connected`.
 
 ```bash
 curl --fail --output minecraft.png http://localhost:8080/api/game/screenshot
@@ -304,6 +330,7 @@ Stopping cancels any running operation, such as a start or a connection attempt,
     "message": "Game stopped",
     "error": null,
     "failure": null,
+    "disconnect": null,
     "warnings": [],
     "updatedAt": "2026-08-12T12:02:00+00:00"
   }
@@ -366,6 +393,7 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 | `client.install.failed` | The game couldn't be installed. Stage `curseforge` means the modpack couldn't be installed, for example because it or one of its files doesn't exist; stage `minecraft` means Minecraft or its mod loader couldn't be prepared, for example because the version doesn't exist. |
 | `client.connect.rejected` | The server disconnected the game while it was joining. |
 | `client.connect.failed` | The game couldn't connect for another reason. |
+| `client.connection.lost` | The game left a server it had joined. Only in [`disconnect`](#after-a-connection-ends). |
 | `client.chat.failed` | The chat message couldn't be sent. |
 | `client.players.unavailable` | The players couldn't be read. |
 | `client.operation.timeout` | The operation timed out. |

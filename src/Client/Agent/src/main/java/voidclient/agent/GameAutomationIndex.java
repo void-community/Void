@@ -179,6 +179,16 @@ final class GameAutomationIndex {
         if (directCandidates.isEmpty())
             return null;
 
+        // This code has the game's screens, so failing to plan them means the game can't be automated.
+        try {
+            return buildPlan(types, directCandidates);
+        } catch (RuntimeException exception) {
+            GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, exception.toString());
+            return null;
+        }
+    }
+
+    private static IndexedCode buildPlan(Map<String, ClassNode> types, List<DirectCandidate> directCandidates) {
         if (directCandidates.size() > 1) {
             int largestScreenFamily = 0;
 
@@ -217,7 +227,7 @@ final class GameAutomationIndex {
             for (DirectCandidate candidate : directCandidates)
                 descriptions.add(candidate.plan.describe());
 
-            GameAutomationController.recordIndexFailure("game-code", "Expected one structural Direct Connect screen but found " + directCandidates.size() + ": " + descriptions);
+            GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "Expected one structural Direct Connect screen but found " + directCandidates.size() + ": " + descriptions);
             return null;
         }
 
@@ -231,14 +241,14 @@ final class GameAutomationIndex {
         ScreenSetter screenSetter = discoverScreenSetter(types, superTypes, screenBaseName);
 
         if (screenSetter == null) {
-            GameAutomationController.recordIndexFailure("game-code", "No unique screen setter was found for " + screenBaseName);
+            GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "No unique screen setter was found for " + screenBaseName);
             return null;
         }
 
         Map<String, List<TransitionPlan>> transitions = discoverTransitions(types, superTypes, screenBaseName, screenSetter);
         ChatPlan chat = discoverChat(types, superTypes, screenBaseName, screenSetter);
         if (chat == null) {
-            GameAutomationController.recordIndexFailure("game-code", "No unique chat screen submission flow was found");
+            GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "No unique chat screen submission flow was found");
             return null;
         }
 

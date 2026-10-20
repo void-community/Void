@@ -472,6 +472,182 @@ public sealed class GameCoordinatorTests
     }
 
     [Fact]
+    public async Task GameIsLoadingUntilItShowsAMenu()
+    {
+        // Issue #1608: the game was ready as soon as a window existed, such as NeoForge's loading window, minutes before its menu.
+        var runtime = new FakeGameRuntime { Menu = null };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Loading);
+
+        Assert.Equal("Game window is open", coordinator.Status.Message);
+        Assert.Equal(OperationState.Succeeded, coordinator.Status.OperationState);
+
+        // Screenshots and players work while the game loads, while chat needs a connected game.
+        await coordinator.CaptureScreenshotAsync(CancellationToken.None);
+        await coordinator.GetPlayersAsync(CancellationToken.None);
+        var chat = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.SendChatAsync(new("hello"), CancellationToken.None));
+        Assert.Equal(409, chat.StatusCode);
+        Assert.Equal(GameState.Loading, coordinator.Status.State);
+
+        runtime.Menu = new("TitleScreen", Problem: null);
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        Assert.Equal("Game menu is ready", coordinator.Status.Message);
+        Assert.Equal("screenshot", coordinator.Status.Operation);
+        Assert.Empty(coordinator.Status.Warnings);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ConnectStartedWhileTheGameLoadsKeepsDescribingItself()
+    {
+        var runtime = new FakeGameRuntime { Menu = null, BlockConnect = true };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Loading);
+
+        var connect = coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+        await WaitForOperationAsync(coordinator, "connect");
+        runtime.Menu = new("TitleScreen", Problem: null);
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        Assert.Equal("connect running", coordinator.Status.Message);
+
+        runtime.CompleteConnect();
+        await connect;
+
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GameThatConnectsBeforeItsMenuIsReportedStaysConnected()
+    {
+        var runtime = new FakeGameRuntime { Menu = null };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Loading);
+
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+        runtime.Menu = new("TitleScreen", Problem: null);
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GameTheAgentCannotFollowIsReadyWithAWarning()
+    {
+        const string problem = "The client can't follow the game's screens: No unique chat screen submission flow was found";
+        var runtime = new FakeGameRuntime { Menu = new(Screen: null, problem) };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        Assert.Equal([problem], coordinator.Status.Warnings);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ReasonTheGameIsNotConnectedLastsUntilItConnects()
+    {
+        // Issue #1608: the next operation cleared a failed connect's reason, and a lost connection only had it in the message.
+        var runtime = new FakeGameRuntime { BlockConnect = true };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        var rejected = coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+        await WaitForOperationAsync(coordinator, "connect");
+        runtime.FailConnect(new GameClientException("client.connect.rejected", "connect", "connection.rejected", "You are not white-listed on this server!"));
+        await Assert.ThrowsAsync<GameClientException>(() => rejected);
+
+        Assert.Equal(new ServerAddress("server", 25565), coordinator.Status.Disconnect?.Server);
+        Assert.Equal("client.connect.rejected", coordinator.Status.Disconnect?.Code);
+        Assert.Equal("connection.rejected", coordinator.Status.Disconnect?.Stage);
+        Assert.Equal("You are not white-listed on this server!", coordinator.Status.Disconnect?.Message);
+
+        await coordinator.CaptureScreenshotAsync(CancellationToken.None);
+
+        Assert.Null(coordinator.Status.Failure);
+        Assert.Equal("client.connect.rejected", coordinator.Status.Disconnect?.Code);
+
+        var connect = coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+        await WaitForOperationAsync(coordinator, "connect");
+
+        Assert.Equal("client.connect.rejected", coordinator.Status.Disconnect?.Code);
+
+        runtime.CompleteConnect();
+        await connect;
+
+        Assert.Null(coordinator.Status.Disconnect);
+
+        runtime.DisconnectReason = "Timed out";
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        Assert.Equal("client.connection.lost", coordinator.Status.Disconnect?.Code);
+        Assert.Equal("connection.closed", coordinator.Status.Disconnect?.Stage);
+        Assert.Equal("Timed out", coordinator.Status.Disconnect?.Message);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+
+        Assert.Null(coordinator.Status.Disconnect);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GameThatExitsWhileLoadingFailsAndStaysFailed()
+    {
+        var runtime = new FakeGameRuntime { Menu = null, BlockConnect = true };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Loading);
+
+        var rejected = coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+        await WaitForOperationAsync(coordinator, "connect");
+        runtime.FailConnect(new GameClientException("client.connect.rejected", "connect", "connection.rejected", "The server is full!"));
+        await Assert.ThrowsAsync<GameClientException>(() => rejected);
+
+        Assert.Equal("client.connect.rejected", coordinator.Status.Disconnect?.Code);
+
+        runtime.ExitGame(0, false);
+        await WaitForStateAsync(coordinator, GameState.Failed);
+
+        Assert.Null(coordinator.Status.Disconnect);
+        Assert.Equal("client.process.exited", coordinator.Status.Failure?.Code);
+
+        runtime.Menu = new("TitleScreen", Problem: null);
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(GameState.Failed, coordinator.Status.State);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task UnansweredConnectionChecksKeepTheGameConnected()
     {
         var runtime = new FakeGameRuntime { FailDisconnectReads = true };
@@ -685,6 +861,9 @@ public sealed class GameCoordinatorTests
         private int _disconnectReads;
 
         public string? DisconnectReason { get; set; }
+
+        /// <summary>What the game reports about its menu, or <see langword="null"/> while it loads. Games show their title screen by default.</summary>
+        public GameMenu? Menu { get; set; } = new("TitleScreen", Problem: null);
         public bool FailDisconnectReads { get; init; }
         public int DisconnectReads => Volatile.Read(ref _disconnectReads);
         public bool BlockStop { get; init; }
@@ -786,6 +965,8 @@ public sealed class GameCoordinatorTests
                 ? Task.FromException<string?>(new InvalidOperationException("The Minecraft agent did not report the connection"))
                 : Task.FromResult(DisconnectReason);
         }
+
+        public Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken) => Task.FromResult(Menu);
 
         public Task<GamePlayers> ReadPlayersAsync(RunningGame game, CancellationToken cancellationToken)
         {

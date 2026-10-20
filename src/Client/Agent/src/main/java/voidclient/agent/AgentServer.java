@@ -54,6 +54,8 @@ final class AgentServer implements Runnable {
                 response = Tracker.snapshotJson();
             else if (parts.length == 2 && "connection".equals(parts[1]))
                 response = GameAutomationController.connectionJson();
+            else if (parts.length == 2 && "ready".equals(parts[1]))
+                response = GameAutomationController.readyJson();
             else if (parts.length == 4 && "connect".equals(parts[1]))
                 response = connect(parts[2], parts[3]);
             else if (parts.length == 4 && "chat".equals(parts[1]))

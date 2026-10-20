@@ -26,6 +26,8 @@ final class GameAutomationTransformer implements ClassFileTransformer {
         if (className == null || className.startsWith("java/") || className.startsWith("voidclient/agent/"))
             return null;
 
+        boolean client = false;
+
         try {
             CodeSource codeSource = protectionDomain == null ? null : protectionDomain.getCodeSource();
             URL location = codeSource == null ? null : codeSource.getLocation();
@@ -35,7 +37,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
                 return null;
 
             GameAutomationController.registerIndex(loader, index);
-            boolean client = index.plan.frame.owner.equals(className);
+            client = index.plan.frame.owner.equals(className);
 
             List<String> rejections = index.plan.rejectionCallbacks.get(className);
             if (!client && rejections == null)
@@ -44,6 +46,11 @@ final class GameAutomationTransformer implements ClassFileTransformer {
             ClassNode type = new ClassNode();
             new ClassReader(classFileBuffer).accept(type, 0);
             boolean changed = client && instrument(type, index.plan.frame);
+
+            // Without the client frame hook nothing the agent follows or automates ever runs.
+            if (client && !changed && !hasClientHook(type))
+                GameAutomationController.recordIndexFailure(GameAutomationController.ClientFrameFailure, "No client frame call was found in " + className);
+
             if (rejections != null)
                 changed |= instrumentRejections(type, rejections, index.plan.networkTypes);
 
@@ -57,7 +64,8 @@ final class GameAutomationTransformer implements ClassFileTransformer {
             type.accept(writer);
             return writer.toByteArray();
         } catch (Throwable exception) {
-            GameAutomationController.recordIndexFailure(className, exception.getClass().getName() + ": " + exception.getMessage());
+            String location = client ? GameAutomationController.ClientFrameFailure : className;
+            GameAutomationController.recordIndexFailure(location, exception.getClass().getName() + ": " + exception.getMessage());
             return null;
         }
     }
@@ -119,6 +127,14 @@ final class GameAutomationTransformer implements ClassFileTransformer {
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
         call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HooksName, controllerMethod, "(Ljava/lang/Object;)V", false));
         return call;
+    }
+
+    private static boolean hasClientHook(ClassNode type) {
+        for (MethodNode method : type.methods)
+            if (alreadyInstrumented(method, "applyClient"))
+                return true;
+
+        return false;
     }
 
     private static boolean alreadyInstrumented(MethodNode method, String controllerMethod) {

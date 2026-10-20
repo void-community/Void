@@ -38,7 +38,7 @@ internal sealed partial class GameCoordinator
         // kill can't be told apart and every exit without a stop request is a failure.
         GameProcessExitException processFailure = new(exited.WasOutOfMemoryKilled, exited.MemoryMb, exited.CrashCause);
 
-        await StopConnectionMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
+        await StopGameMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
         _game.Dispose();
         _game = null;
         _connectedResponse = null;
@@ -62,6 +62,8 @@ internal sealed partial class GameCoordinator
                 Message = exited.CrashCause is null ? "Game exited without a stop request" : "Game crashed",
                 Error = processFailure.Message,
                 Failure = processFailure.Failure,
+                // The failure explains the end of the game, including the end of any connection.
+                Disconnect = null,
                 UpdatedAt = DateTimeOffset.UtcNow
             }
         ).ConfigureAwait(continueOnCapturedContext: false);

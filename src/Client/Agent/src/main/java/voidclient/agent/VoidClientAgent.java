@@ -95,7 +95,7 @@ public final class VoidClientAgent {
                     lookup.findStatic(FatalErrorReports.class, "save", fatalError));
             return true;
         } catch (Throwable exception) {
-            GameAutomationController.recordIndexFailure("game hooks", exception.toString());
+            GameAutomationController.recordIndexFailure(GameAutomationController.GameHooksFailure, exception.toString());
             return false;
         }
     }

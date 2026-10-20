@@ -23,6 +23,10 @@ internal interface IGameRuntime
 
     Task<string?> ReadDisconnectReasonAsync(RunningGame game, CancellationToken cancellationToken);
 
+    /// <summary>Reads whether the game has finished loading and shown a menu.</summary>
+    /// <returns>The menu, or <see langword="null"/> while the game is still loading.</returns>
+    Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken);
+
     Task<GamePlayers> ReadPlayersAsync(RunningGame game, CancellationToken cancellationToken);
 
     Task SendChatAsync(RunningGame game, string message, CancellationToken cancellationToken);

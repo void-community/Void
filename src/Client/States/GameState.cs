@@ -5,6 +5,7 @@ internal enum GameState
 {
     Idle,
     Starting,
+    Loading,
     Ready,
     Connected,
     Stopping,

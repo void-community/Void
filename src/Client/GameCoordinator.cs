@@ -79,7 +79,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
     public override void Dispose()
     {
         _activeCancellation?.Dispose();
-        _connectionMonitor?.Dispose();
+        _gameMonitor?.Dispose();
         base.Dispose();
     }
 
@@ -379,6 +379,12 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
                     break;
                 }
+            case MenuShown shown:
+                {
+                    await HandleMenuShownAsync(shown).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case SendChatMessage chat:
                 {
                     await HandleSendChatAsync(chat).ConfigureAwait(continueOnCapturedContext: false);
@@ -480,9 +486,10 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        if (Status.State is not GameState.Ready)
+        // A connect waits for the menu by itself, so it can start while the game loads.
+        if (Status.State is not (GameState.Loading or GameState.Ready))
         {
-            message.Completion.SetException(Conflict(message: "A ready game is required before connecting"));
+            message.Completion.SetException(Conflict(message: "A loading or ready game is required before connecting"));
 
             return;
         }
@@ -548,8 +555,19 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         {
             var operationState = completed.Canceled ? OperationState.Canceled : OperationState.Failed;
             string operationStateDescription = completed.Canceled ? "canceled" : "failed";
+            ClientFailure? failure = completed.Canceled ? null : FailureFor(completed.Error, operation: "connect");
+
+            // Unlike error and failure, which the next operation clears, the reason the game isn't connected stays until it connects.
             await PublishAsync(
-                Status with { OperationState = operationState, Message = $"connect {operationStateDescription}", Error = completed.Canceled ? null : completed.Error.Message, Failure = completed.Canceled ? null : FailureFor(completed.Error, operation: "connect"), UpdatedAt = DateTimeOffset.UtcNow }
+                Status with
+                {
+                    OperationState = operationState,
+                    Message = $"connect {operationStateDescription}",
+                    Error = failure?.Message,
+                    Failure = failure,
+                    Disconnect = failure is null ? Status.Disconnect : new GameDisconnect(completed.Server, failure.Code, failure.Stage, failure.Message, DateTimeOffset.UtcNow),
+                    UpdatedAt = DateTimeOffset.UtcNow
+                }
             ).ConfigureAwait(continueOnCapturedContext: false);
 
             foreach (var waiter in waiters)
@@ -565,11 +583,24 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
         _connectedResponse = new(completed.Server, DateTimeOffset.UtcNow);
 
+        // A connect started while the game loaded ends the wait for its menu, which it passed.
+        await StopGameMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
+
         if (_game is not null)
             StartConnectionMonitor(_game, completed.Server);
 
         await PublishAsync(
-            Status with { State = GameState.Connected, Server = completed.Server, OperationState = OperationState.Succeeded, Message = "Interactive game connection confirmed", Error = null, Failure = null, UpdatedAt = DateTimeOffset.UtcNow }
+            Status with
+            {
+                State = GameState.Connected,
+                Server = completed.Server,
+                OperationState = OperationState.Succeeded,
+                Message = "Interactive game connection confirmed",
+                Error = null,
+                Failure = null,
+                Disconnect = null,
+                UpdatedAt = DateTimeOffset.UtcNow
+            }
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         foreach (var waiter in waiters)
@@ -609,7 +640,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private void HandlePlayers(PlayersMessage message)
     {
-        if (_game is null || Status.State is not (GameState.Ready or GameState.Connected))
+        if (_game is null || Status.State is not (GameState.Loading or GameState.Ready or GameState.Connected))
         {
             message.Completion.SetException(Conflict(message: "A running game is required before reading its players"));
 
@@ -621,7 +652,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
     private async Task HandleScreenshotAsync(ScreenshotMessage message)
     {
-        if (_game is null || Status.State is not (GameState.Ready or GameState.Connected))
+        if (_game is null || Status.State is not (GameState.Loading or GameState.Ready or GameState.Connected))
         {
             message.Completion.SetException(Conflict(message: "A running game is required before taking a screenshot"));
 
@@ -846,16 +877,18 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         await PublishAsync(
             Status with
             {
-                State = GameState.Ready,
+                // The window can be a loader's loading window, so the game is ready once it shows a menu.
+                State = GameState.Loading,
                 OperationState = OperationState.Succeeded,
                 ProcessId = _game.Process.Id,
                 ExitCode = null,
-                Message = "Game window is ready",
+                Message = "Game window is open",
                 Error = null,
                 Failure = null,
                 UpdatedAt = DateTimeOffset.UtcNow
             }
         ).ConfigureAwait(continueOnCapturedContext: false);
+        StartMenuMonitor(_game);
         Own(MonitorProcessAsync(_game));
         Own(MonitorWarningsAsync(_game));
     }
@@ -872,7 +905,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         if (_activeCancellation is not null)
             await _activeCancellation.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
 
-        await StopConnectionMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
+        await StopGameMonitorAsync().ConfigureAwait(continueOnCapturedContext: false);
         CancelConnectWaiters();
         long operationId = ++_nextOperationId;
         CancellationTokenSource operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_stoppingToken);

@@ -20,6 +20,10 @@ import java.util.concurrent.CountDownLatch;
 import org.objectweb.asm.Type;
 
 public final class GameAutomationController {
+    /** Where failures are recorded that leave the agent unable to follow the game's screens. */
+    static final String GameCodeFailure = "game-code";
+    static final String GameHooksFailure = "game hooks";
+    static final String ClientFrameFailure = "client frame";
     private static final Map<ClassLoader, GameAutomationIndex.IndexedCode> LoaderIndexes = Collections.synchronizedMap(new java.util.WeakHashMap<ClassLoader, GameAutomationIndex.IndexedCode>());
     private static final Map<String, String> IndexFailures = new HashMap<String, String>();
     private static final Set<String> CancelledRequests = new HashSet<String>();
@@ -32,6 +36,8 @@ public final class GameAutomationController {
     private static volatile PendingOperation pending;
     private static WeakReference<Object> screenSetterReceiver = new WeakReference<Object>(null);
     private static volatile Object consumedScreen;
+    private static volatile String menuScreenName;
+    private static volatile String menuFailure;
     private static String waitingScreenName;
     private static boolean waitingForPresentationOverlay;
     private static Instrumentation instrumentation;
@@ -73,7 +79,7 @@ public final class GameAutomationController {
                     try {
                         currentInstrumentation.retransformClasses(type);
                     } catch (Throwable exception) {
-                        recordIndexFailure(className, "Client-thread retransformation failed: " + exception.getMessage());
+                        recordIndexFailure(ClientFrameFailure, "Client-thread retransformation of " + className + " failed: " + exception.getMessage());
                     }
 
                     return;
@@ -206,10 +212,12 @@ public final class GameAutomationController {
             Tracker.bindClient(client);
 
             operation = pending;
-
-            if (operation == null)
-                return;
         }
+
+        observeMenu(index);
+
+        if (operation == null)
+            return;
 
         try {
             if (isPresentationOverlayActive(screenSetterReceiver.get(), index.plan.presentationOverlay)) {
@@ -304,6 +312,61 @@ public final class GameAutomationController {
         } finally {
             Applying.remove();
         }
+    }
+
+    /**
+     * Tells whether the game has shown a menu, so it's ready to be used, or why the agent can't tell because it can't follow the game.
+     */
+    static String readyJson() {
+        String screenName = menuScreenName;
+
+        if (screenName != null)
+            return "{\"status\":\"ok\",\"stage\":\"menu.ready\",\"value\":" + quote(screenName) + "}";
+
+        String unavailable = automationUnavailableReason();
+
+        return unavailable == null ? "{\"status\":\"loading\",\"stage\":\"menu.loading\"}" : error("code.discovery", unavailable);
+    }
+
+    /**
+     * Remembers the first frame that shows a menu: a current screen without a presentation overlay over it, such as the title screen,
+     * or a notice a mod shows before it. Before then, Minecraft or its loader is still loading.
+     */
+    private static void observeMenu(GameAutomationIndex.IndexedCode index) {
+        if (menuScreenName != null || menuFailure != null)
+            return;
+
+        try {
+            Object client = screenSetterReceiver.get();
+
+            if (isPresentationOverlayActive(client, index.plan.presentationOverlay))
+                return;
+
+            Object screen = findCurrentScreen(client, index.plan.screenBaseName);
+
+            if (screen == null)
+                return;
+
+            menuScreenName = screen.getClass().getName();
+            System.err.println("Void client agent observed the game menu: " + menuScreenName);
+        } catch (Throwable exception) {
+            menuFailure = "Reading the game's menu failed: " + exception;
+            System.err.println("Void client agent " + menuFailure);
+        }
+    }
+
+    private static synchronized String automationUnavailableReason() {
+        if (menuFailure != null)
+            return menuFailure;
+
+        for (String location : new String[] { GameHooksFailure, ClientFrameFailure })
+            if (IndexFailures.containsKey(location))
+                return "The client can't follow the game's screens: " + IndexFailures.get(location);
+
+        // Mods can have screens that fail to index too, which only matters while the game itself has no index.
+        return LoaderIndexes.isEmpty() && IndexFailures.containsKey(GameCodeFailure)
+            ? "The client can't follow the game's screens: " + IndexFailures.get(GameCodeFailure)
+            : null;
     }
 
     static String connectionJson() {
