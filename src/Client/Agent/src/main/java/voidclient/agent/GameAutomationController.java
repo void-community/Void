@@ -38,6 +38,8 @@ public final class GameAutomationController {
     private static volatile Object consumedScreen;
     private static volatile String menuScreenName;
     private static volatile String menuFailure;
+    // Set by the first client frame the agent follows, which is what lets it automate the game.
+    private static volatile boolean following;
     private static String waitingScreenName;
     private static boolean waitingForPresentationOverlay;
     private static Instrumentation instrumentation;
@@ -117,11 +119,13 @@ public final class GameAutomationController {
             if (pending != null)
                 return error("request.pending", "Another game automation operation is already pending");
 
-            // NeoForge shows its loading window before Minecraft's UI classes load, so wait for them to be indexed.
+            // NeoForge shows its loading window before Minecraft's UI classes load, so wait until the agent follows the game's frames,
+            // unless it already knows it can't.
             long deadline = System.currentTimeMillis() + IndexWaitMilliseconds;
 
             try {
-                while (LoaderIndexes.isEmpty() && !CancelledRequests.contains(operation.requestId) && System.currentTimeMillis() < deadline)
+                while (!following && automationUnavailableReason() == null && !CancelledRequests.contains(operation.requestId)
+                       && System.currentTimeMillis() < deadline)
                     GameAutomationController.class.wait(500L);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
@@ -134,8 +138,11 @@ public final class GameAutomationController {
             if (pending != null)
                 return error("request.pending", "Another game automation operation is already pending");
 
-            if (LoaderIndexes.isEmpty())
-                return error("code.discovery", "Minecraft UI bytecode has not been indexed; failures=" + IndexFailures);
+            if (!following) {
+                String unavailable = automationUnavailableReason();
+
+                return error("code.discovery", unavailable != null ? unavailable : "Minecraft UI bytecode has not been indexed; failures=" + IndexFailures);
+            }
 
             pending = operation;
             consumedScreen = null;
@@ -206,6 +213,8 @@ public final class GameAutomationController {
 
         if (index == null)
             return;
+
+        following = true;
 
         synchronized (GameAutomationController.class) {
             screenSetterReceiver = new WeakReference<Object>(findObject(client, index.plan.clientClassName, 1));
@@ -363,8 +372,9 @@ public final class GameAutomationController {
             if (IndexFailures.containsKey(location))
                 return "The client can't follow the game's screens: " + IndexFailures.get(location);
 
-        // Mods can have screens that fail to index too, which only matters while the game itself has no index.
-        return LoaderIndexes.isEmpty() && IndexFailures.containsKey(GameCodeFailure)
+        // Other copies of Minecraft's code, such as the obfuscated jar next to Forge's, can index while the game's own code doesn't, so
+        // only following the game's frames shows the game's code worked.
+        return !following && IndexFailures.containsKey(GameCodeFailure)
             ? "The client can't follow the game's screens: " + IndexFailures.get(GameCodeFailure)
             : null;
     }

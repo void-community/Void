@@ -42,6 +42,8 @@ import org.objectweb.asm.tree.VarInsnNode;
 final class GameAutomationIndex {
     private static final String ForgeMinecraftLocation = "forge:minecraft";
     private static final Map<String, IndexedCode> IndexedLocations = new HashMap<String, IndexedCode>();
+    private static final Set<String> UnreadableLocations = new HashSet<String>();
+    private static boolean unreadableMinecraftRecorded;
 
     private GameAutomationIndex() {
     }
@@ -54,6 +56,8 @@ final class GameAutomationIndex {
     static synchronized IndexedCode index(final ClassLoader loader, String className, ProtectionDomain domain) {
         CodeSource codeSource = domain == null ? null : domain.getCodeSource();
         URL location = codeSource == null ? null : codeSource.getLocation();
+        String key;
+        IndexedCode indexed;
 
         if (location == null) {
             // Forge 1.13 to 1.16 defines Minecraft's classes without a code source. JDK classes have none either, and must never reach
@@ -61,22 +65,30 @@ final class GameAutomationIndex {
             if (loader == null || !className.startsWith("net/minecraft/"))
                 return null;
 
-            IndexedCode indexed = index(ForgeMinecraftLocation, new ModLoaderCode.TypeReader() {
+            key = ForgeMinecraftLocation;
+            indexed = index(key, new ModLoaderCode.TypeReader() {
                 public Map<String, ClassNode> read() throws Exception {
                     return ModLoaderCode.readForgeMinecraft();
                 }
             });
-
-            return indexed != null && indexed.superTypes.containsKey(className) ? indexed : null;
+            indexed = indexed != null && indexed.superTypes.containsKey(className) ? indexed : null;
+        } else {
+            final URL jar = containingJar(location);
+            key = jar.toExternalForm();
+            indexed = index(key, new ModLoaderCode.TypeReader() {
+                public Map<String, ClassNode> read() throws Exception {
+                    return ModLoaderCode.isLaunchWrapper(loader) ? ModLoaderCode.readLaunchWrapper(loader, jar) : readTypes(jar.toURI());
+                }
+            });
         }
 
-        final URL jar = containingJar(location);
+        // Without this, a loader that serves Minecraft from code the agent can't read leaves the game loading forever.
+        if (!unreadableMinecraftRecorded && className.startsWith("net/minecraft/") && UnreadableLocations.contains(key)) {
+            unreadableMinecraftRecorded = true;
+            GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "Minecraft's code can't be read from " + key);
+        }
 
-        return index(jar.toExternalForm(), new ModLoaderCode.TypeReader() {
-            public Map<String, ClassNode> read() throws Exception {
-                return ModLoaderCode.isLaunchWrapper(loader) ? ModLoaderCode.readLaunchWrapper(loader, jar) : readTypes(jar.toURI());
-            }
-        });
+        return indexed;
     }
 
     /** Returns the jar a class file is in, for loaders such as LaunchWrapper that give every class the URL of its own entry. */
@@ -108,6 +120,9 @@ final class GameAutomationIndex {
                 IndexedLocations.remove(key);
                 return null;
             }
+
+            if (types == null)
+                UnreadableLocations.add(key);
 
             IndexedCode indexed = types == null ? null : build(types);
             IndexedLocations.put(key, indexed);
@@ -225,7 +240,8 @@ final class GameAutomationIndex {
         for (ClassNode type : types.values()) {
             DirectConnectPlan direct = DirectConnectDiscovery.discover(type);
 
-            if (direct != null)
+            // Only the game's own code defines the screen base its screens extend, while mods extend a base from elsewhere.
+            if (direct != null && types.containsKey(type.superName))
                 directCandidates.add(new DirectCandidate(type, direct));
         }
 

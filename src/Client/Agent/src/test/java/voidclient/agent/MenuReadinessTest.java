@@ -18,6 +18,7 @@ public final class MenuReadinessTest {
     public void reset() throws Exception {
         field("menuScreenName").set(null, null);
         field("menuFailure").set(null, null);
+        field("following").set(null, false);
         field("screenSetterReceiver").set(null, new WeakReference<Object>(null));
         ((Map<?, ?>) field("IndexFailures").get(null)).clear();
         ((Map<?, ?>) field("LoaderIndexes").get(null)).clear();
@@ -69,16 +70,29 @@ public final class MenuReadinessTest {
     }
 
     @Test
-    public void screensThatFailToIndexOnlyMatterWhileTheGameHasNoIndex() throws Exception {
-        GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "Expected one structural Direct Connect screen but found 2");
-        Assert.assertTrue(GameAutomationController.readyJson().contains("\"code.discovery\""));
-
-        // A mod's screens can fail to index while the game's own indexed fine.
+    public void gameCodeThatFailsToIndexMattersUntilTheAgentFollowsTheGame() throws Exception {
+        // Issue #1622: on Forge 1.20.1 the obfuscated Minecraft jar indexed for another class loader, which hid the game's own failure.
+        GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "No unique chat screen submission flow was found");
         @SuppressWarnings("unchecked")
         Map<ClassLoader, GameAutomationIndex.IndexedCode> indexes = (Map<ClassLoader, GameAutomationIndex.IndexedCode>) field("LoaderIndexes").get(null);
         indexes.put(MenuReadinessTest.class.getClassLoader(), index("overlay"));
 
+        String ready = GameAutomationController.readyJson();
+        Assert.assertTrue(ready, ready.contains("\"code.discovery\"") && ready.contains("No unique chat screen"));
+
+        field("following").set(null, true);
+
         Assert.assertTrue(GameAutomationController.readyJson().contains("\"menu.loading\""));
+    }
+
+    @Test(timeout = 5000)
+    public void connectToAGameTheAgentCannotFollowFailsAtOnce() throws Exception {
+        // Issue #1622: such a connect waited forever, because nothing ever completed it.
+        GameAutomationController.recordIndexFailure(GameAutomationController.GameCodeFailure, "No unique chat screen submission flow was found");
+
+        String response = GameAutomationController.connectJson("request", "server:25565");
+
+        Assert.assertTrue(response, response.contains("\"code.discovery\"") && response.contains("No unique chat screen"));
     }
 
     private static void observe(GameAutomationIndex.IndexedCode index) throws Exception {
