@@ -74,16 +74,20 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int ScreenCaptureTimeoutMilliseconds = 10000;
     private const int UpstreamRequestAttempts = 3;
     private const string UpstreamUserAgent = "caunt/Void";
+    private const int WindowPollMilliseconds = 250;
     private static readonly JsonSerializerOptions CurseForgeManifestJsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false
     };
+    // A game that printed nothing for this long has stopped responding. Loading games log as they go, however long they take.
+    private static readonly TimeSpan OutputSilenceLimit = TimeSpan.FromMinutes(minutes: 5);
     private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
     // Each retry of an upstream request waits this much longer than the one before.
     private static readonly TimeSpan UpstreamRetryDelay = TimeSpan.FromSeconds(seconds: 2);
     private readonly AsyncLock _windowOperations = new();
     private readonly ConcurrentDictionary<int, Task> _outputTasks = new();
     private readonly ConcurrentDictionary<int, ChannelReader<string>> _outputWarnings = new();
+    private readonly ConcurrentDictionary<int, CancellationToken> _outputSilenceTokens = new();
     private readonly ConcurrentDictionary<int, string> _launchedProcessGroups = new();
     private long _nextWindowGeneration;
     private Guid? _windowSessionId;
@@ -397,6 +401,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         string stream,
         ChannelWriter<string>? warnings = null,
         Action<string>? crashReported = null,
+        Action? outputRead = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -411,6 +416,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
             while (count > 0)
             {
+                outputRead?.Invoke();
                 string text = normalizer.Normalize(buffer.AsSpan(start: 0, count));
                 await console.WriteAsync(text).ConfigureAwait(continueOnCapturedContext: false);
                 pending += text;
@@ -634,6 +640,47 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         string? responseJson = await reader.ReadLineAsync(linkedSource.Token).ConfigureAwait(continueOnCapturedContext: false);
 
         return string.IsNullOrWhiteSpace(responseJson) ? null : JsonSerializer.Deserialize<TrackerResponse>(responseJson, TrackerJsonOptions);
+    }
+
+    private async Task PumpGameOutputAsync(Process process, Guid? sessionId, ChannelWriter<string> warnings)
+    {
+        DateTime launchedAt = DateTime.UtcNow;
+        int crashed = 0;
+        Task? crashedGameEnd = null;
+
+        // Every read restarts it, so it's canceled once the game printed nothing for the whole limit. It's disposed with the output, so a
+        // game that exited never counts as silent.
+        using CancellationTokenSource outputSilence = new(OutputSilenceLimit);
+
+        _outputSilenceTokens[process.Id] = outputSilence.Token;
+
+        void CrashReported(string reportPath)
+        {
+            // Chat is logged to the same output, so only a crash report this game saved counts.
+            if (CrashReports.IsReport(reportPath, GetMinecraftDirectory(), launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
+                crashedGameEnd = EndCrashedGameAsync(process);
+        }
+
+        void OutputRead()
+        {
+            outputSilence.CancelAfter(OutputSilenceLimit);
+        }
+
+        try
+        {
+            // PortableMC may merge the game's streams, so warnings are read from both.
+            await Task.WhenAll(
+                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings, CrashReported, OutputRead),
+                PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr", warnings, CrashReported, OutputRead)
+            ).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        finally
+        {
+            warnings.Complete();
+
+            if (crashedGameEnd is not null)
+                await crashedGameEnd.ConfigureAwait(continueOnCapturedContext: false);
+        }
     }
 
     private readonly record struct ProcessDirectory(string Path, string Name);

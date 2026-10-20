@@ -37,7 +37,7 @@ while kill -0 "$portablemc_process_id" 2>/dev/null; do
     fi
   done < <(xdotool search --onlyvisible --name '.*' 2>/dev/null || true)
 
-  sleep 0.1
+  sleep 0.25
 done
 
 wait "$portablemc_process_id"

@@ -328,6 +328,7 @@ internal sealed partial class GameRuntime
             }
 
             RunningGame? runningGame = null;
+            CancellationToken outputSilenceToken = TakeOutputSilenceToken(process.Id);
 
             try
             {
@@ -344,7 +345,8 @@ internal sealed partial class GameRuntime
                 );
                 var managedProcess = runningGame.Process;
 
-                using CancellationTokenSource windowCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                // A game that stopped printing before it opened its window hangs, and would keep the start waiting forever.
+                using CancellationTokenSource windowCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, outputSilenceToken);
 
                 var windowTask = WaitForPreparedLargestWindowAsync(Environment.GetEnvironmentVariable(variable: "DISPLAY") ?? DefaultDisplay, windowCancellationTokenSource.Token);
                 var processExitTask = managedProcess.WaitForExitAsync(CancellationToken.None);
@@ -357,7 +359,20 @@ internal sealed partial class GameRuntime
                     throw new GameProcessExitException(managedProcess.WasOutOfMemoryKilled, memoryMb, managedProcess.CrashCause);
                 }
 
-                string preparedWindowLease = await windowTask.ConfigureAwait(continueOnCapturedContext: false);
+                try
+                {
+                    await ((Task)windowTask).ConfigureAwait(continueOnCapturedContext: false);
+                }
+                catch (OperationCanceledException exception) when (outputSilenceToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new GameClientException(
+                        code: "client.process.unresponsive",
+                        operation: "process",
+                        stage: "launch",
+                        $"Minecraft stopped responding: it printed nothing for {OutputSilenceLimit.TotalMinutes:0} minutes and opened no window",
+                        exception
+                    );
+                }
 
                 var result = runningGame;
                 runningGame = null;
@@ -531,36 +546,6 @@ internal sealed partial class GameRuntime
         string minecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         await InstallSodiumAsync(modsDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-    }
-
-    private async Task PumpGameOutputAsync(Process process, Guid? sessionId, ChannelWriter<string> warnings)
-    {
-        DateTime launchedAt = DateTime.UtcNow;
-        int crashed = 0;
-        Task? crashedGameEnd = null;
-
-        void CrashReported(string reportPath)
-        {
-            // Chat is logged to the same output, so only a crash report this game saved counts.
-            if (CrashReports.IsReport(reportPath, GetMinecraftDirectory(), launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
-                crashedGameEnd = EndCrashedGameAsync(process);
-        }
-
-        try
-        {
-            // PortableMC may merge the game's streams, so warnings are read from both.
-            await Task.WhenAll(
-                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings, CrashReported),
-                PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr", warnings, CrashReported)
-            ).ConfigureAwait(continueOnCapturedContext: false);
-        }
-        finally
-        {
-            warnings.Complete();
-
-            if (crashedGameEnd is not null)
-                await crashedGameEnd.ConfigureAwait(continueOnCapturedContext: false);
-        }
     }
 
     private async Task ResizeWindowToDisplayAsync(string windowId, CancellationToken cancellationToken = default)
@@ -864,6 +849,11 @@ internal sealed partial class GameRuntime
         return process;
     }
 
+    private CancellationToken TakeOutputSilenceToken(int processId)
+    {
+        return _outputSilenceTokens.TryRemove(processId, out var token) ? token : CancellationToken.None;
+    }
+
     private ChannelReader<string> TakeOutputWarnings(int processId)
     {
         return _outputWarnings.TryRemove(processId, out var warnings) ? warnings : RunningGame.NoWarnings;
@@ -961,6 +951,9 @@ internal sealed partial class GameRuntime
 
             if (windowId is not null)
                 return windowId;
+
+            // Every pass starts several xdotool processes, and the window takes seconds to appear anyway.
+            await Task.Delay(WindowPollMilliseconds, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
 
         throw new OperationCanceledException(cancellationToken);

@@ -88,6 +88,7 @@ Start requests return the status with `202 Accepted` and keep running in the bac
 Save the returned `operationId` and poll `/api/game/status` until `state` is `ready`.
 The start operation has `succeeded` once the game window opens, and `state` stays `loading` until the game shows its menu, which can take minutes with many mods.
 The client sets no time limit on loading, so apply your own.
+Before its window opens, a game that prints nothing for 5 minutes has stopped responding: the client closes it, and the start fails with `client.process.unresponsive`.
 Treat the start as failed if `state` becomes `failed` or `idle`, or if `operationId` changes to another caller's operation.
 
 When the client can't tell whether the game shows its menu, the game becomes `ready` once its window opens and `warnings` says why.
@@ -389,6 +390,7 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 | `client.process.crashed` | Minecraft or its Java runtime crashed. The message has the error from the crash report or the Java error log. |
 | `client.process.exited` | Minecraft ended without a stop request. |
 | `client.process.out_of_memory` | Minecraft ran out of memory and was killed. |
+| `client.process.unresponsive` | Minecraft printed nothing for 5 minutes before opening its window, so the client closed it. |
 | `client.install.unavailable` | A server the game is installed from, such as CurseForge or Mojang, stayed unavailable after retries. Starting again later may work. The stage is `curseforge` or `minecraft`, as below. |
 | `client.install.failed` | The game couldn't be installed. Stage `curseforge` means the modpack couldn't be installed, for example because it or one of its files doesn't exist; stage `minecraft` means Minecraft or its mod loader couldn't be prepared, for example because the version doesn't exist. |
 | `client.connect.rejected` | The server disconnected the game while it was joining. |

@@ -39,10 +39,46 @@ public sealed class GameWarningTests
         var warnings = Channel.CreateUnbounded<string>();
         List<string> reports = [];
 
-        await new GameRuntime().PumpOutputAsync(reader, console, sessionId: null, stream: "stdout", warnings.Writer, reports.Add, TestContext.Current.CancellationToken);
+        await new GameRuntime().PumpOutputAsync(reader, console, sessionId: null, stream: "stdout", warnings.Writer, reports.Add, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(["/root/.minecraft/crash-reports/crash-2026-10-20_06.19.30-client.txt", "/root/.minecraft/crash-reports/crash-2026-10-20_06.33.50-client.txt"], reports);
         Assert.False(warnings.Reader.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData("", 0)]
+    [InlineData("[12:37:42] [main/INFO]: Setting user: Player\n", 2)]
+    public async Task OutputPumpReportsEveryRead(string text, int reads)
+    {
+        // Issue #1610: a start waits for the game's window only while the game keeps printing.
+        using var reader = new ChunkedReader(text);
+        using var console = new StringWriter();
+        int reported = 0;
+
+        await new GameRuntime().PumpOutputAsync(
+            reader,
+            console,
+            sessionId: null,
+            stream: "stdout",
+            outputRead: () => reported++,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(reads, reported);
+    }
+
+    [Fact]
+    public void SilenceOfOutputThatEndedNeverCancels()
+    {
+        // The silence token outlives the output it watches, and a start can link to it after the output ended.
+        CancellationTokenSource outputSilence = new(TimeSpan.FromMilliseconds(milliseconds: 1));
+        var token = outputSilence.Token;
+        outputSilence.Dispose();
+        using var window = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, token);
+        Thread.Sleep(millisecondsTimeout: 50);
+
+        Assert.False(token.IsCancellationRequested);
+        Assert.False(window.IsCancellationRequested);
     }
 
     [Fact]
