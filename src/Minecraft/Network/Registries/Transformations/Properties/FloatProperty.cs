@@ -17,11 +17,12 @@ public record FloatProperty(ReadOnlyMemory<byte> Value) : IPacketProperty<FloatP
     /// <returns>A <see cref="FloatProperty"/> whose <see cref="Value"/> contains the serialized value.</returns>
     public static FloatProperty FromPrimitive(float value)
     {
-        var bytes = new byte[4];
+        // An array would bind to the read-only ReadOnlySpan<byte> constructor, so the buffer is built over a writable span.
+        Span<byte> bytes = stackalloc byte[sizeof(float)];
         var buffer = new MinecraftBuffer(bytes);
         buffer.WriteFloat(value);
 
-        return new FloatProperty(bytes);
+        return new FloatProperty(bytes.ToArray());
     }
 
     /// <summary>Reads one big-endian single-precision value from a buffer.</summary>
