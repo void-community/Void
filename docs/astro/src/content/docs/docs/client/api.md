@@ -184,7 +184,9 @@ Replace the example `fileId` with the file you want to start.
 
 Requests to CurseForge and downloads that fail temporarily are retried a few times. If a modpack file still can't be downloaded, the start fails with an error that lists every missing file.
 
-The game directory holds one modpack at a time. Starting the installed modpack again starts it right away. Starting another modpack or file replaces it, downloading only the files that aren't there yet. A failed or stopped start leaves no modpack installed, so the next start installs again and reuses what was downloaded. Files the previous modpack added in subfolders such as `config/` are removed. Worlds, files the game created, and `options.txt` stay.
+A modpack runs in the `modpack` folder of the game directory, with its own mods, configuration, options, worlds, logs, and crash reports. Vanilla and NeoForge starts run in the game directory itself and don't load a modpack's files. Both share the downloaded Minecraft versions, libraries, and assets.
+
+The `modpack` folder holds one modpack at a time. Starting the installed modpack again starts it right away. Starting another modpack or file replaces it, downloading only the files that aren't there yet. A failed or stopped start leaves no modpack installed, so the next start installs again and reuses what was downloaded. Files the previous modpack added in subfolders such as `config/` are removed. Worlds, files the game created, and `options.txt` stay.
 
 ## Connecting
 
@@ -300,7 +302,7 @@ curl --fail --output minecraft.png http://localhost:8080/api/game/screenshot
 
 ## Game Options
 
-Send the complete contents of Minecraft's `options.txt` as `text/plain`. They apply from the next launch.
+Send the complete contents of Minecraft's `options.txt` as `text/plain`. They apply from the next launch, including the installed modpack's. A modpack without options of its own starts with these.
 
 ```bash
 curl --fail-with-body \

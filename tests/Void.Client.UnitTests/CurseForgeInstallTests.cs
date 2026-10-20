@@ -99,7 +99,7 @@ public sealed class CurseForgeInstallTests : IDisposable
         using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         curseForge.Stalling = OnlyInA.Id;
 
-        var install = PrepareAsync(curseForge, A, stop.Token);
+        var install = PrepareAsync(curseForge, A, cancellationToken: stop.Token);
         await curseForge.Stalled.Task.WaitAsync(TestContext.Current.CancellationToken);
         await stop.CancelAsync();
 
@@ -170,6 +170,27 @@ public sealed class CurseForgeInstallTests : IDisposable
     }
 
     [Fact]
+    public async Task ModpackInstalledInTheGameDirectoryMovesIntoItsOwnAndStartsWithoutTheApi()
+    {
+        // Modpacks used to be installed in the game directory itself, where vanilla and NeoForge starts loaded their mods too.
+        FakeCurseForge curseForge = new([A]);
+        string version = await PrepareAsync(curseForge, A);
+        string modpack = Path.Join(_directory, "modpack");
+        curseForge.Failing.Add(0);
+
+        GameRuntime.MoveModpackIntoItsDirectory(_directory, modpack);
+
+        Assert.Equal(version, await PrepareAsync(curseForge, A, modpack));
+        Assert.Equal(1, curseForge.Searches);
+        Assert.Empty(Files("mods"));
+        Assert.Equal([OnlyInA.FileName, Overridden.FileName, Shared.FileName], Files(Path.Join("modpack", "mods")));
+        Assert.True(File.Exists(Path.Join(modpack, "config", "a.toml")));
+        Assert.True(File.Exists(Path.Join(modpack, "kubejs", "server_scripts", "a.js")));
+        Assert.False(File.Exists(Path.Join(_directory, "config", "a.toml")));
+        Assert.Equal("renderDistance:8", await File.ReadAllTextAsync(Path.Join(_directory, "options.txt"), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task FileIsReusedOnlyWithItsPublishedSha1()
     {
         string path = Path.Join(_directory, "mod.jar");
@@ -235,7 +256,7 @@ public sealed class CurseForgeInstallTests : IDisposable
         Directory.Delete(_directory, recursive: true);
     }
 
-    private Task<string> PrepareAsync(FakeCurseForge curseForge, Modpack modpack, CancellationToken? cancellationToken = null)
+    private Task<string> PrepareAsync(FakeCurseForge curseForge, Modpack modpack, string? directory = null, CancellationToken? cancellationToken = null)
     {
         HttpClient httpClient = new(curseForge, disposeHandler: false);
 
@@ -252,7 +273,7 @@ public sealed class CurseForgeInstallTests : IDisposable
                     curseForgeApiKey: "key",
                     ApiBaseUri,
                     parallelDownloads: 2,
-                    _directory,
+                    directory ?? _directory,
                     TimeSpan.Zero,
                     cancellationToken ?? TestContext.Current.CancellationToken
                 );

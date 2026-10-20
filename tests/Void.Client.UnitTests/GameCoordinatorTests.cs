@@ -1003,6 +1003,10 @@ public sealed class GameCoordinatorTests
                 : Task.FromResult(DisconnectReason);
         }
 
+        public string GetGameDirectory() => "/root/.minecraft";
+
+        public string GetModpackDirectory() => "/root/.minecraft/modpack";
+
         public long? ReadMemoryLimitMb() => MemoryLimitMb;
 
         public Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken) => Task.FromResult(Menu);

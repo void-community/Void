@@ -765,7 +765,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
         _sessionId = diagnostics is null ? null : await diagnostics.BeginAsync(
             $"{message.Kind}:{version ?? neoForgeVersion ?? slug}:{message.CurseForgeRequest?.FileId}",
-            Environment.GetEnvironmentVariable(variable: "MINECRAFT_DIRECTORY") ?? "/root/.minecraft",
+            message.Kind is "start-curseforge" ? runtime.GetModpackDirectory() : runtime.GetGameDirectory(),
             _stoppingToken
         ).ConfigureAwait(continueOnCapturedContext: false);
 

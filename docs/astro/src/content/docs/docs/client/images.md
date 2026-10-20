@@ -52,7 +52,7 @@ docker pull ghcr.io/void-community/portable-minecraft-client@sha256:<digest>
 
 ## Persistent Game Directory
 
-Minecraft data is stored in `/root/.minecraft` by default. Mount a volume to keep downloaded assets, options, mods, and other game files when the container is replaced:
+Minecraft data is stored in `/root/.minecraft` by default, and a [CurseForge modpack](/docs/client/api/#curseforge) in its `modpack` folder. Mount a volume to keep downloaded assets, options, mods, and other game files when the container is replaced:
 
 ```bash
 docker volume create void-client-minecraft

@@ -6,6 +6,52 @@ namespace Void.Client;
 
 internal sealed partial class GameRuntime
 {
+    /// <summary>
+    /// Moves a modpack that an earlier client installed in the game directory itself into its own directory, so starting it again needs
+    /// no download, and vanilla and NeoForge starts no longer load its files.
+    /// </summary>
+    internal static void MoveModpackIntoItsDirectory(string minecraftDirectory, string modpackDirectory)
+    {
+        bool installedInGameDirectory = File.Exists(Path.Combine(minecraftDirectory, CurseForgeMarkerFileName));
+
+        if (!installedInGameDirectory || File.Exists(Path.Combine(modpackDirectory, CurseForgeMarkerFileName)))
+            return;
+
+        GC.KeepAlive(Directory.CreateDirectory(modpackDirectory));
+        string overridesListPath = Path.Combine(minecraftDirectory, CurseForgeOverridesFileName);
+        string directory = $"{Path.GetFullPath(minecraftDirectory)}{Path.DirectorySeparatorChar}";
+
+        foreach (string folder in new[] { "mods", "resourcepacks", "shaderpacks" })
+        {
+            string source = Path.Combine(minecraftDirectory, folder);
+            string target = Path.Combine(modpackDirectory, folder);
+
+            if (Directory.Exists(source) && !Directory.Exists(target))
+                Directory.Move(source, target);
+        }
+
+        // Override files at the top of the game directory stay, because options.txt there belongs to the consumer.
+        foreach (string relativePath in File.Exists(overridesListPath) ? File.ReadAllLines(overridesListPath) : [])
+        {
+            string source = Path.GetFullPath(Path.Combine(directory, relativePath));
+            string target = Path.Combine(modpackDirectory, relativePath);
+            bool inSubdirectory = relativePath.Contains(value: '/', StringComparison.Ordinal) && source.StartsWith(directory, StringComparison.Ordinal);
+
+            if (!inSubdirectory || !File.Exists(source) || File.Exists(target))
+                continue;
+
+            GC.KeepAlive(Directory.CreateDirectory(Path.GetDirectoryName(target) ?? modpackDirectory));
+            File.Move(source, target);
+        }
+
+        // The marker moves last, so a move that stops part-way continues on the next start.
+        foreach (string name in new[] { CurseForgeOverridesFileName, CurseForgeVersionFileName, CurseForgeMarkerFileName })
+        {
+            if (File.Exists(Path.Combine(minecraftDirectory, name)))
+                File.Move(Path.Combine(minecraftDirectory, name), Path.Combine(modpackDirectory, name), overwrite: true);
+        }
+    }
+
     private readonly record struct ModpackOverride(ZipArchiveEntry Entry, string RelativePath, string TargetPath);
 
     internal sealed record CurseForgeFileHash([property: JsonPropertyName("value")] string? Value, [property: JsonPropertyName("algo")] int Algo);

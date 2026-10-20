@@ -9,6 +9,12 @@ internal interface IGameRuntime
 
     Task ConnectAsync(RunningGame game, string host, int port, CancellationToken cancellationToken);
 
+    /// <summary>Gets the directory vanilla and NeoForge games run in, which also holds the versions, libraries and assets of every game.</summary>
+    string GetGameDirectory();
+
+    /// <summary>Gets the directory the installed CurseForge modpack runs in.</summary>
+    string GetModpackDirectory();
+
     Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken);
 
     Task<RunningGame> LaunchNeoForgeAsync(

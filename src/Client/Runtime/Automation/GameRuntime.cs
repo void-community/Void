@@ -291,6 +291,7 @@ internal sealed partial class GameRuntime
 
     private async Task<RunningGame> LaunchGameAsync(
         string minecraftDirectory,
+        string gameDirectory,
         string portableMinecraftVersion,
         ArmLaunchOptions? armLaunchOptions,
         IReadOnlyList<string> arguments,
@@ -317,7 +318,7 @@ internal sealed partial class GameRuntime
 
             try
             {
-                process = LaunchPortableMinecraftClient(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, launchArguments, cancellationToken);
+                process = LaunchPortableMinecraftClient(minecraftDirectory, gameDirectory, portableMinecraftVersion, armLaunchOptions, launchArguments, cancellationToken);
                 _launchedProcessGroups[process.Id] = portableMinecraftVersion;
             }
             catch
@@ -341,7 +342,7 @@ internal sealed partial class GameRuntime
                     portableMinecraftVersion,
                     DateTimeOffset.UtcNow,
                     tracker,
-                    minecraftDirectory
+                    gameDirectory
                 );
                 var managedProcess = runningGame.Process;
 
@@ -410,7 +411,7 @@ internal sealed partial class GameRuntime
         CancellationToken cancellationToken
     )
     {
-        string minecraftDirectory = GetMinecraftDirectory();
+        string minecraftDirectory = GetGameDirectory();
 
         var armLaunchOptions = await PrepareMinecraftAsync(
             () => PrepareArmLaunchOptionsAsync(minecraftDirectory, minecraftVersion ?? GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken),
@@ -419,11 +420,12 @@ internal sealed partial class GameRuntime
 
         await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await LaunchGameAsync(minecraftDirectory, minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private Process LaunchPortableMinecraftClient(
         string directory,
+        string gameDirectory,
         string version,
         ArmLaunchOptions? armLaunchOptions,
         string?[]? portableMinecraftArguments = null,
@@ -442,6 +444,13 @@ internal sealed partial class GameRuntime
                 processStartInformation.ArgumentList.Add(item: "start");
                 processStartInformation.ArgumentList.Add(version);
 
+                // The game runs there, and shares the versions, libraries and assets of the main directory.
+                if (gameDirectory != directory)
+                {
+                    processStartInformation.ArgumentList.Add(item: "--mc-dir");
+                    processStartInformation.ArgumentList.Add(gameDirectory);
+                }
+
                 if (!HasPortableMinecraftArgument(requestedPortableMinecraftArguments, argumentName: "--resolution"))
                 {
                     processStartInformation.ArgumentList.Add(item: "--resolution");
@@ -453,7 +462,8 @@ internal sealed partial class GameRuntime
 
                 foreach (string? argument in requestedPortableMinecraftArguments)
                     processStartInformation.ArgumentList.Add(argument);
-            }
+            },
+            gameDirectory
         );
 
         return process;
@@ -826,7 +836,7 @@ internal sealed partial class GameRuntime
             await Console.Error.WriteLineAsync($"kill -{signal} for process group {processGroupId} failed: {result.StandardError.Trim()}").ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    private Process StartGameProcess(Action<ProcessStartInfo> configure)
+    private Process StartGameProcess(Action<ProcessStartInfo> configure, string gameDirectory)
     {
         ProcessStartInfo processStartInformation = new(fileName: "setsid")
         {
@@ -844,7 +854,7 @@ internal sealed partial class GameRuntime
         var sessionId = diagnostics?.CurrentSessionId;
         Channel<string> warnings = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
         _outputWarnings[process.Id] = warnings.Reader;
-        _outputTasks[process.Id] = PumpGameOutputAsync(process, sessionId, warnings.Writer);
+        _outputTasks[process.Id] = PumpGameOutputAsync(process, gameDirectory, sessionId, warnings.Writer);
 
         return process;
     }

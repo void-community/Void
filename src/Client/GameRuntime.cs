@@ -54,6 +54,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string MavenCentralRepositoryUrl = "https://repo1.maven.org/maven2";
     private const int MaximumGameOutputLineLength = 64 * 1024;
     private const int MinecraftGameId = 432;
+    // The installed CurseForge modpack runs in this folder of the game directory, which keeps its mods and configs to itself.
+    private const string ModpackDirectoryName = "modpack";
     private const string MojangVersionManifestUrl = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private const string NeoForgeMavenMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
     private const int PlayerReadTimeoutMilliseconds = 2000;
@@ -107,6 +109,16 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return ConnectThroughAgentAsync(game, $"{host}:{port}", cancellationToken);
     }
 
+    public string GetGameDirectory()
+    {
+        return Environment.GetEnvironmentVariable(variable: "MINECRAFT_DIRECTORY") ?? DefaultMinecraftDirectory;
+    }
+
+    public string GetModpackDirectory()
+    {
+        return Path.Combine(GetGameDirectory(), ModpackDirectoryName);
+    }
+
     public async Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
     {
         string? apiKey = Environment.GetEnvironmentVariable(variable: "CURSEFORGE_API_KEY");
@@ -115,8 +127,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
             throw new InvalidOperationException(message: "CURSEFORGE_API_KEY is not set");
 
         int parallelDownloads = GetCurseForgeParallelDownloads(Environment.GetEnvironmentVariable(variable: "CURSEFORGE_PARALLEL_DOWNLOADS"));
-        string minecraftDirectory = GetMinecraftDirectory();
+        string minecraftDirectory = GetGameDirectory();
+        string modpackDirectory = GetModpackDirectory();
         string portableMinecraftVersion;
+
+        // The modpack runs in its own directory, so vanilla and NeoForge starts in the game directory never load its mods or configs.
+        MoveModpackIntoItsDirectory(minecraftDirectory, modpackDirectory);
 
         using (HttpClient httpClient = CreateUpstreamHttpClient())
         {
@@ -127,11 +143,18 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 apiKey,
                 CreateCurseForgeApiBaseUri(),
                 parallelDownloads,
-                minecraftDirectory,
+                modpackDirectory,
                 UpstreamRetryDelay,
                 cancellationToken
             ).ConfigureAwait(continueOnCapturedContext: false);
         }
+
+        // A modpack without options of its own starts with the consumer's, which also turn off Minecraft's first-launch screens.
+        string modpackOptionsPath = Path.Combine(modpackDirectory, path2: "options.txt");
+        string optionsPath = Path.Combine(minecraftDirectory, path2: "options.txt");
+
+        if (!File.Exists(modpackOptionsPath) && File.Exists(optionsPath))
+            File.Copy(optionsPath, modpackOptionsPath);
 
         var armLaunchOptions = await PrepareMinecraftAsync(
             () => PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken),
@@ -142,7 +165,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         string preparedMinecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         await Console.Error.WriteLineAsync($"Prepared Minecraft {preparedMinecraftVersion} for the modpack").ConfigureAwait(continueOnCapturedContext: false);
 
-        return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await LaunchGameAsync(minecraftDirectory, modpackDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<RunningGame> LaunchNeoForgeAsync(
@@ -346,20 +369,14 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
     public async Task WriteOptionsAsync(string options, CancellationToken cancellationToken)
     {
-        string minecraftDirectory = GetMinecraftDirectory();
+        string minecraftDirectory = GetGameDirectory();
+        string modpackDirectory = GetModpackDirectory();
         GC.KeepAlive(Directory.CreateDirectory(minecraftDirectory));
-        string destinationPath = Path.Combine(minecraftDirectory, path2: "options.txt");
-        string temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        await WriteOptionsFileAsync(minecraftDirectory, options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        try
-        {
-            await File.WriteAllTextAsync(temporaryPath, options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            File.Move(temporaryPath, destinationPath, overwrite: true);
-        }
-        finally
-        {
-            File.Delete(temporaryPath);
-        }
+        // The options apply to the next launch of any kind, and the installed modpack runs in its own directory.
+        if (Directory.Exists(modpackDirectory))
+            await WriteOptionsFileAsync(modpackDirectory, options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     internal static string CreateMaximumHeapArgument(int memoryMb)
@@ -605,11 +622,6 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return null;
     }
 
-    private static string GetMinecraftDirectory()
-    {
-        return Environment.GetEnvironmentVariable(variable: "MINECRAFT_DIRECTORY") ?? DefaultMinecraftDirectory;
-    }
-
     private static bool HasPortableMinecraftArgument(IEnumerable<string> arguments, string argumentName)
     {
         return arguments.Any(
@@ -647,7 +659,23 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return string.IsNullOrWhiteSpace(responseJson) ? null : JsonSerializer.Deserialize<TrackerResponse>(responseJson, TrackerJsonOptions);
     }
 
-    private async Task PumpGameOutputAsync(Process process, Guid? sessionId, ChannelWriter<string> warnings)
+    private static async Task WriteOptionsFileAsync(string directory, string options, CancellationToken cancellationToken)
+    {
+        string destinationPath = Path.Combine(directory, path2: "options.txt");
+        string temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+
+        try
+        {
+            await File.WriteAllTextAsync(temporaryPath, options, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            File.Move(temporaryPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
+    }
+
+    private async Task PumpGameOutputAsync(Process process, string gameDirectory, Guid? sessionId, ChannelWriter<string> warnings)
     {
         DateTime launchedAt = DateTime.UtcNow;
         int crashed = 0;
@@ -662,7 +690,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         void CrashReported(string reportPath)
         {
             // Chat is logged to the same output, so only a crash report this game saved counts.
-            if (CrashReports.IsReport(reportPath, GetMinecraftDirectory(), launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
+            if (CrashReports.IsReport(reportPath, gameDirectory, launchedAt) && Interlocked.Exchange(ref crashed, value: 1) is 0)
                 crashedGameEnd = EndCrashedGameAsync(process);
         }
 
