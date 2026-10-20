@@ -28,7 +28,7 @@ public final class FatalErrorReportTransformerTest {
         Assert.assertNotNull(transformed);
         MethodHandle record = MethodHandles.lookup().findStatic(FatalErrorReportTransformerTest.class, "record",
             MethodType.methodType(void.class, Throwable.class, Path.class, Path.class));
-        Path hooksJar = VoidClientAgent.writeGameHooksJar();
+        Path hooksJar = GameHooksJar.write();
 
         try (URLClassLoader bootstrap = new URLClassLoader(new URL[] { hooksJar.toUri().toURL() }, null)) {
             bootstrap.loadClass(VoidClientAgent.GameHooksName.replace('/', '.'))

@@ -4,9 +4,10 @@ import java.lang.invoke.MethodHandle;
 import java.nio.file.Path;
 
 /**
- * Receives the calls the agent injects into game and mod classes. The agent loads this class from the bootstrap class path because
- * mod loaders such as NeoForge 1.21.1 define those classes in loaders that can't see the agent jar, while every loader still
- * delegates to the bootstrap loader. It must therefore depend on nothing but JDK classes.
+ * Receives the calls the agent injects into game and mod classes. The build packages it alone in void-client-hooks.jar, which the agent's
+ * Boot-Class-Path puts on the bootstrap class path before the game starts. Mod loaders such as NeoForge 1.21.1 define those classes in
+ * loaders that can't see the agent jar, while every loader still delegates to the bootstrap loader, and Fabric only delegates classes
+ * whose class file the platform class loader can see too. It must therefore depend on nothing but JDK classes.
  */
 public final class GameHooks {
     private static volatile MethodHandle playerRegistration;

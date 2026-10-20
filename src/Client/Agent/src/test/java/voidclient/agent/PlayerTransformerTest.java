@@ -61,7 +61,7 @@ public class PlayerTransformerTest {
         byte[] transformed = PlayerTransformer.instrumentPlayerConstructors(bytes(ProfileHolder.class));
         assertNotNull(transformed);
         MethodHandle target = MethodHandles.lookup().findStatic(PlayerTransformerTest.class, registration, MethodType.methodType(void.class, Object.class));
-        Path hooksJar = VoidClientAgent.writeGameHooksJar();
+        Path hooksJar = GameHooksJar.write();
 
         try (URLClassLoader bootstrap = new URLClassLoader(new URL[] { hooksJar.toUri().toURL() }, null)) {
             bootstrap.loadClass(VoidClientAgent.GameHooksName.replace('/', '.'))

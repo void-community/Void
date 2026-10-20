@@ -212,7 +212,8 @@ RUN dotnet publish PortableMinecraftClient.csproj --configuration Release --outp
 FROM scratch AS application-files
 
 COPY --from=dotnet-builder /publish/ /app/
-COPY --from=dotnet-builder /source/Agent/target/void-client-agent.jar /opt/portableminecraftclient/void-client-agent.jar
+# The agent's manifest puts the hooks jar next to it on the bootstrap class path.
+COPY --from=dotnet-builder /source/Agent/target/void-client-agent.jar /source/Agent/target/void-client-hooks.jar /opt/portableminecraftclient/
 COPY --chmod=0755 entrypoint /usr/local/bin/portableminecraftclient-entrypoint
 COPY --chmod=0755 launch-portableminecraftclient /usr/local/bin/launch-portableminecraftclient
 COPY --chmod=0755 java-x86_64 /usr/local/bin/java-x86_64
