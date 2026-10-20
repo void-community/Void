@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -331,41 +332,58 @@ internal sealed partial class GameRuntime
     }
 
     /// <summary>
-    /// Picks the newest build from a Modrinth version list (newest first), including pre-releases, because older Sodium
-    /// releases can target loader internals that newer NeoForge builds for the same Minecraft version no longer have.
+    /// Runs every file in the image's preparation directory in name order once Minecraft and its mod loader are installed, so an image
+    /// built on the client can add files for the exact Minecraft version. A script that fails fails the start, and the rest don't run.
     /// </summary>
-    internal static SodiumDownload? SelectSodiumDownload(JsonElement versions)
+    internal async Task RunPreparationScriptsAsync(
+        string scriptsDirectory,
+        string minecraftDirectory,
+        string portableMinecraftVersion,
+        string minecraftVersion,
+        CancellationToken cancellationToken
+    )
     {
-        foreach (var version in versions.EnumerateArray())
+        if (!Directory.Exists(scriptsDirectory))
+            return;
+
+        // Scripts know the loaders by the names of their starts.
+        string kind = portableMinecraftVersion.Split(separator: ':')[0];
+        string loader = kind is "mojang" ? "vanilla" : kind;
+
+        foreach (string scriptPath in Directory.EnumerateFiles(scriptsDirectory).Order(StringComparer.Ordinal))
         {
-            if (!version.TryGetProperty(propertyName: "files", out var files))
-                continue;
+            string scriptName = Path.GetFileName(scriptPath);
+            var startInformation = CreateProcessStartInformation(scriptPath, []);
+            startInformation.Environment[key: "MINECRAFT_DIRECTORY"] = minecraftDirectory;
+            startInformation.Environment[key: "MINECRAFT_LOADER"] = loader;
+            startInformation.Environment[key: "MINECRAFT_VERSION"] = minecraftVersion;
+            await Console.Error.WriteLineAsync($"Running preparation script {scriptName} for {loader} Minecraft {minecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
+            ProcessTextResult result;
 
-            string? downloadUrl = null;
-
-            foreach (var file in files.EnumerateArray())
+            try
             {
-                bool primaryFound = file.TryGetProperty(propertyName: "primary", out var primary);
-                bool uniformResourceLocatorFound = file.TryGetProperty(propertyName: "url", out var uniformResourceLocator);
-
-                if (primaryFound && primary.GetBoolean() && uniformResourceLocatorFound)
-                {
-                    downloadUrl = uniformResourceLocator.GetString();
-
-                    break;
-                }
+                result = await RunProcessTextAsync(startInformation, PreparationScriptTimeLimit, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            }
+            catch (TimeoutException exception)
+            {
+                throw MinecraftPreparationFailure($"Preparation script {scriptName} didn't finish within {PreparationScriptTimeLimit.TotalMinutes:0} minutes", exception);
+            }
+            catch (Win32Exception exception)
+            {
+                throw MinecraftPreparationFailure($"Preparation script {scriptName} couldn't run: {exception.Message}", exception);
             }
 
-            if (downloadUrl is null)
+            await Console.Error.WriteAsync(result.StandardOutput + result.StandardError).ConfigureAwait(continueOnCapturedContext: false);
+
+            if (result.ExitCode is 0)
                 continue;
 
-            string versionNumber = version.TryGetProperty(propertyName: "version_number", out var number) ? number.GetString() ?? "unknown" : "unknown";
-            string versionType = version.TryGetProperty(propertyName: "version_type", out var type) ? type.GetString() ?? "unknown" : "unknown";
+            string output = string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError;
+            string[] lastLines = [.. output.Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).TakeLast(count: 3)];
+            string reason = lastLines.Length is 0 ? "it printed nothing" : string.Join(separator: "; ", lastLines);
 
-            return new SodiumDownload(versionNumber, versionType, new Uri(downloadUrl, UriKind.Absolute));
+            throw MinecraftPreparationFailure($"Preparation script {scriptName} failed with exit code {result.ExitCode}: {reason}");
         }
-
-        return null;
     }
 
     /// <summary>Creates the failure of a CurseForge install, which is unavailable when starting later may succeed.</summary>
@@ -635,65 +653,6 @@ internal sealed partial class GameRuntime
         }
 
         return portablemcVersion;
-    }
-
-    private static async Task InstallSodiumAsync(string modsDirectory, string portableMinecraftVersion, string minecraftVersion, CancellationToken cancellationToken)
-    {
-        string sodiumPath = Path.Combine(modsDirectory, path2: "sodium.jar");
-        string temporarySodiumPath = Path.Combine(modsDirectory, $".sodium.jar.{Guid.NewGuid():N}");
-        int separatorIndex = portableMinecraftVersion.IndexOf(value: ':', StringComparison.Ordinal);
-        string loader = separatorIndex < 0 ? "mojang" : portableMinecraftVersion[..separatorIndex];
-        string loaders = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { loader }));
-        string gameVersions = Uri.EscapeDataString(JsonSerializer.Serialize(new[] { minecraftVersion }));
-
-        File.Delete(sodiumPath);
-
-        try
-        {
-            using HttpClient httpClient = new();
-
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(input: "caunt/Void");
-
-            Uri versionsUri = new($"https://api.modrinth.com/v2/project/AANobbMI/version?loaders={loaders}&game_versions={gameVersions}", UriKind.Absolute);
-
-            using var versionsResponse = await httpClient.GetAsync(versionsUri, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            var successfulVersionsResponse = versionsResponse.EnsureSuccessStatusCode();
-
-            using var versionsStream = await successfulVersionsResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            using var versionsDocument = await JsonDocument.ParseAsync(versionsStream, cancellationToken: cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            if (SelectSodiumDownload(versionsDocument.RootElement) is not { } sodiumDownload)
-            {
-                await Console.Error.WriteLineAsync($"Sodium was not found for {loader} Minecraft {minecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
-
-                return;
-            }
-
-            using var sodiumResponse = await httpClient.GetAsync(sodiumDownload.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            var successfulSodiumResponse = sodiumResponse.EnsureSuccessStatusCode();
-
-            using (var sodiumFile = File.Create(temporarySodiumPath))
-                await successfulSodiumResponse.Content.CopyToAsync(sodiumFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            File.Move(temporarySodiumPath, sodiumPath, overwrite: true);
-
-            await Console.Error.WriteLineAsync($"Installed Sodium {sodiumDownload.VersionNumber} ({sodiumDownload.VersionType}) for {loader} Minecraft {minecraftVersion}").ConfigureAwait(continueOnCapturedContext: false);
-        }
-        catch (Exception exception) when (exception is HttpRequestException or JsonException)
-        {
-            await Console.Error.WriteLineAsync($"Sodium download failed for {loader} Minecraft {minecraftVersion}: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
-        }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            await Console.Error.WriteLineAsync($"Sodium download failed for {loader} Minecraft {minecraftVersion}: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
-        }
-        finally
-        {
-            File.Delete(temporarySodiumPath);
-        }
     }
 
     private static bool IsProcessGroupRunning(int processGroupId)
@@ -968,6 +927,4 @@ internal sealed partial class GameRuntime
     /// downloading it again later may succeed.
     /// </summary>
     internal sealed record CurseForgeDownloadResult(bool Downloaded, IReadOnlyList<string> Failures, bool Transient);
-
-    internal sealed record SodiumDownload(string VersionNumber, string VersionType, Uri DownloadUri);
 }

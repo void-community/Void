@@ -164,7 +164,7 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
-The client also installs Sodium when a build exists for that Minecraft version.
+Vanilla and NeoForge starts load only the mods in the game directory's `mods` folder. An image built on the client can add files for the exact Minecraft version with [**preparation scripts**](/docs/client/images/#preparing-games).
 
 ### CurseForge
 
@@ -396,7 +396,7 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 | `client.process.out_of_memory` | Minecraft ran out of memory and was killed. |
 | `client.process.unresponsive` | Minecraft printed nothing for 5 minutes before opening its window, so the client closed it. |
 | `client.install.unavailable` | A server the game is installed from, such as CurseForge or Mojang, stayed unavailable after retries. Starting again later may work. The stage is `curseforge` or `minecraft`, as below. |
-| `client.install.failed` | The game couldn't be installed. Stage `curseforge` means the modpack couldn't be installed, for example because it or one of its files doesn't exist; stage `minecraft` means Minecraft or its mod loader couldn't be prepared, for example because the version doesn't exist. |
+| `client.install.failed` | The game couldn't be installed. Stage `curseforge` means the modpack couldn't be installed, for example because it or one of its files doesn't exist; stage `minecraft` means Minecraft or its mod loader couldn't be prepared, for example because the version doesn't exist, or one of the image's [**preparation scripts**](/docs/client/images/#preparing-games) failed. |
 | `client.connect.rejected` | The server disconnected the game while it was joining. |
 | `client.connect.failed` | The game couldn't connect for another reason. |
 | `client.connection.lost` | The game left a server it had joined. Only in [`disconnect`](#after-a-connection-ends). |

@@ -528,34 +528,15 @@ internal sealed partial class GameRuntime
         CancellationToken cancellationToken
     )
     {
-        string configurationDirectory = Path.Combine(minecraftDirectory, path2: "config");
-        string modsDirectory = Path.Combine(minecraftDirectory, path2: "mods");
         string optionsPath = Path.Combine(minecraftDirectory, path2: "options.txt");
-        string sodiumOptionsPath = Path.Combine(configurationDirectory, path2: "sodium-options.json");
-        string serversPath = Path.Combine(minecraftDirectory, path2: "servers.dat");
-        GC.KeepAlive(Directory.CreateDirectory(configurationDirectory));
-        GC.KeepAlive(Directory.CreateDirectory(modsDirectory));
+        GC.KeepAlive(Directory.CreateDirectory(Path.Combine(minecraftDirectory, path2: "mods")));
 
         if (!File.Exists(optionsPath) || new FileInfo(optionsPath).Length == 0)
             File.Copy(PortableMinecraftOptionsPath, optionsPath, overwrite: true);
 
-        if (!File.Exists(sodiumOptionsPath))
-            File.Copy(PortableMinecraftSodiumOptionsPath, sodiumOptionsPath);
-
-        if (!File.Exists(serversPath))
-        {
-            await File.WriteAllBytesAsync(
-                serversPath,
-                Convert.FromHexString(
-                    s: "0a0000090007736572766572730a0000000101000668696464656e000800026970000a766f69643a32353536350800046e616d65000a566f69642050726f78790000"
-                ),
-                cancellationToken
-            ).ConfigureAwait(continueOnCapturedContext: false);
-        }
-
         string minecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        await InstallSodiumAsync(modsDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await RunPreparationScriptsAsync(PortableMinecraftPreparationDirectory, minecraftDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private async Task ResizeWindowToDisplayAsync(string windowId, CancellationToken cancellationToken = default)

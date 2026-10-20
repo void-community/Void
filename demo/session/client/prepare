@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Lists the session's proxy in the multiplayer menu, and adds Sodium to NeoForge games because the demo renders in software.
+# Sodium is optional: without it the game still starts, so its failures only log.
+set -uo pipefail
+
+user_agent="void-demo-client (+https://github.com/void-community/Void)"
+mods="$MINECRAFT_DIRECTORY/mods"
+config="$MINECRAFT_DIRECTORY/config"
+
+[[ -e "$MINECRAFT_DIRECTORY/servers.dat" ]] || cp /opt/void-demo/servers.dat "$MINECRAFT_DIRECTORY/servers.dat"
+[[ "$MINECRAFT_LOADER" == neoforge ]] || exit 0
+
+mkdir -p "$mods" "$config"
+[[ -e "$config/sodium-options.json" ]] || cp /opt/void-demo/sodium-options.json "$config/sodium-options.json"
+# A Sodium build targets one Minecraft version, so the jar of an earlier start goes.
+rm -f "$mods/sodium.jar"
+
+if ! versions=$(curl --fail --silent --show-error --retry 3 --user-agent "$user_agent" --get \
+    --data-urlencode 'loaders=["neoforge"]' --data-urlencode "game_versions=[\"$MINECRAFT_VERSION\"]" \
+    https://api.modrinth.com/v2/project/AANobbMI/version); then
+  echo "Sodium lookup failed for Minecraft $MINECRAFT_VERSION" >&2
+  exit 0
+fi
+
+# Newest first, pre-releases included, because older releases can miss loader internals that newer NeoForge builds changed.
+url=$(jq -r 'first(.[].files[] | select(.primary) | .url) // empty' <<< "$versions")
+
+if [[ -z "$url" ]]; then
+  echo "Sodium has no NeoForge build for Minecraft $MINECRAFT_VERSION" >&2
+  exit 0
+fi
+
+download=$(mktemp "$mods/.sodium.jar.XXXXXX")
+
+if curl --fail --silent --show-error --location --retry 3 --user-agent "$user_agent" --output "$download" "$url"; then
+  mv "$download" "$mods/sodium.jar"
+  echo "Installed Sodium $url for Minecraft $MINECRAFT_VERSION" >&2
+else
+  rm -f "$download"
+  echo "Sodium download failed for Minecraft $MINECRAFT_VERSION" >&2
+fi

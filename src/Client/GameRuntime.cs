@@ -70,7 +70,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string PortableMinecraftLegacyJvmExecutablePath = "/usr/lib/jvm/zulu-8/bin/java";
     private const string PortableMinecraftLegacyJvmPath = "/usr/local/bin/java-arm64-lwjgl2";
     private const string PortableMinecraftOptionsPath = "/opt/portableminecraftclient/options.txt";
-    private const string PortableMinecraftSodiumOptionsPath = "/opt/portableminecraftclient/sodium-options.json";
+    // An image built on the client puts scripts here to prepare vanilla and NeoForge games for their exact Minecraft version.
+    private const string PortableMinecraftPreparationDirectory = "/etc/portableminecraftclient/prepare.d";
     private const int ProcessStopTimeoutMilliseconds = 10000;
     private const int ScreenCaptureMaximumAttempts = 3;
     private const int ScreenCaptureTimeoutMilliseconds = 10000;
@@ -83,6 +84,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     };
     // A game that printed nothing for this long has stopped responding. Loading games log as they go, however long they take.
     private static readonly TimeSpan OutputSilenceLimit = TimeSpan.FromMinutes(minutes: 5);
+    private static readonly TimeSpan PreparationScriptTimeLimit = TimeSpan.FromMinutes(minutes: 5);
     private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
     // Each retry of an upstream request waits this much longer than the one before.
     private static readonly TimeSpan UpstreamRetryDelay = TimeSpan.FromSeconds(seconds: 2);

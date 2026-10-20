@@ -34,7 +34,8 @@ func (server *Server) runRefreshLoop(ctx context.Context) {
 }
 
 func (server *Server) refreshSessionImages(ctx context.Context) {
-	if err := server.pullClientImage(ctx); err != nil {
+	clientImageChanged, err := server.pullClientImage(ctx)
+	if err != nil {
 		log.Printf("Images: failed to refresh %s: %v", clientImage, err)
 	}
 
@@ -43,8 +44,13 @@ func (server *Server) refreshSessionImages(ctx context.Context) {
 		log.Printf("Images: failed to refresh %s: %v", voidBaseImage, err)
 	}
 
-	if !server.SessionImagesBuilt || baseImageChanged {
-		output, err := runDockerCommand(ctx, dockerBuildCommandTimeout, "compose", "--project-name", sessionImagesProjectName, "--file", "session.yml", "build", "dashboard", "void")
+	// A change marks the images unbuilt until a build succeeds, so a failed build is retried on the next pass.
+	if clientImageChanged || baseImageChanged {
+		server.SessionImagesBuilt = false
+	}
+
+	if !server.SessionImagesBuilt {
+		output, err := runDockerCommand(ctx, dockerBuildCommandTimeout, "compose", "--project-name", sessionImagesProjectName, "--file", "session.yml", "build", "dashboard", "void", "client")
 		if err != nil {
 			log.Printf("Images: failed to build session images: %v: %s", err, lastLines(string(output), 20))
 			return
@@ -64,21 +70,22 @@ func (server *Server) refreshSessionImages(ctx context.Context) {
 	})
 }
 
-func (server *Server) pullClientImage(ctx context.Context) error {
+// pullClientImage pulls the client image the demo's client image builds on, and reports whether it changed.
+func (server *Server) pullClientImage(ctx context.Context) (bool, error) {
 	previousDigest := server.localImageDigests(ctx, clientImage)
 
 	if output, err := runDockerCommand(ctx, dockerBuildCommandTimeout, "pull", "--quiet", clientImage); err != nil {
-		return errorWithOutput(err, output)
+		return false, errorWithOutput(err, output)
 	}
 
 	currentDigest := server.localImageDigests(ctx, clientImage)
 	if currentDigest != previousDigest {
 		log.Printf("Images: client image updated to %s", currentDigest)
-	} else {
-		log.Printf("Images: client image up to date (%s)", currentDigest)
+		return true, nil
 	}
 
-	return nil
+	log.Printf("Images: client image up to date (%s)", currentDigest)
+	return false, nil
 }
 
 // refreshVoidBaseImage pulls caunt/void:dev only when Docker Hub reports a digest the local image lacks.

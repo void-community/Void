@@ -34,7 +34,7 @@ Pull the published image and run it in the background behind a reverse proxy or 
 
 ## Automatic updates
 The controller refreshes everything sessions depend on at startup and then every `REFRESH_INTERVAL_SECONDS`, so new Minecraft releases need no restart or redeploy:
-- Pulls `ghcr.io/void-community/portable-minecraft-client:latest` and rebuilds the shared session images when `caunt/void:dev` changes. New sessions use them; running sessions are not touched.
+- Pulls `ghcr.io/void-community/portable-minecraft-client:latest` and rebuilds the shared session images when it or `caunt/void:dev` changes, including the demo's client image, which adds Sodium and the server list. New sessions use them; running sessions are not touched.
 - Recreates only the shared Paper server when a newer Paper build or ViaVersion, ViaBackwards or ViaRewind release is available. Updates wait until no session is active. A new Minecraft version or plugin release is forced after `BACKEND_RECREATE_GRACE_SECONDS`, ending active sessions; a build-only Paper update always waits.
 - Asks each client for the newest Minecraft release with a stable NeoForge build that the Paper server and ViaVersion accept.
 

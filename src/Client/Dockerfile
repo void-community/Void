@@ -221,7 +221,7 @@ COPY --chmod=0755 java-arm64-lwjgl2 /usr/local/bin/java-arm64-lwjgl2
 # Shadows /usr/bin/xmessage so native dialogs opened by mods are answered with their negative button instead of blocking.
 COPY --chmod=0755 xmessage /usr/local/bin/xmessage
 COPY nginx.conf /etc/nginx/nginx.conf
-COPY options.txt sodium-options.json splash.tcl /opt/portableminecraftclient/
+COPY options.txt splash.tcl /opt/portableminecraftclient/
 
 FROM runtime AS latest
 

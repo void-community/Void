@@ -16,7 +16,7 @@
       "automerge": true
     },
     {
-      "matchFileNames": ["demo/session/void/Dockerfile"],
+      "matchFileNames": ["demo/session/void/Dockerfile", "demo/session/client/Dockerfile"],
       "pinDigests": false
     }
   ]

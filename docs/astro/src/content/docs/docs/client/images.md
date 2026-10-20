@@ -71,6 +71,24 @@ docker run --name void-client --rm -d -p 8080:80 \
   ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
+## Preparing Games
+
+An image built on the client can prepare vanilla and NeoForge games, for example to add a mod for the exact Minecraft version. Once Minecraft and its mod loader are installed, and before the game launches, the client runs every file in `/etc/portableminecraftclient/prepare.d` in name order, with:
+
+| Variable | Value |
+| :------- | :---- |
+| `MINECRAFT_DIRECTORY` | The [game directory](#persistent-game-directory). |
+| `MINECRAFT_VERSION` | The Minecraft version, such as `1.21.1`. |
+| `MINECRAFT_LOADER` | `vanilla` or `neoforge`. |
+
+```dockerfile
+FROM ghcr.io/void-community/portable-minecraft-client:latest
+
+COPY --chmod=0755 prepare /etc/portableminecraftclient/prepare.d/10-prepare
+```
+
+Each file must be executable. A script that exits with a code other than `0`, can't run, or runs longer than 5 minutes fails the start with `client.install.failed`, and the scripts after it don't run. Their output appears in the container log and the start's [**diagnostic session**](/docs/client/api/#diagnostics). CurseForge starts don't run them, because a modpack brings its own files.
+
 ## Memory
 
 The container's memory holds the game's Java heap, set with `memoryMb`, and everything else: the rest of the game's memory and the client itself. Give it at least 1 GiB more than `memoryMb`, and more for large modpacks:

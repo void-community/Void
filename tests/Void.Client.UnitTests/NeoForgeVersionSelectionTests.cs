@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Void.Client;
 using Xunit;
 
@@ -137,42 +136,5 @@ public sealed class NeoForgeVersionSelectionTests
         Assert.Equal(["26.4-snapshot-4", "26.3", "26.2"], manifest.Versions.Select(version => version.Id));
         Assert.Equal("release", manifest.Versions[1].Type);
         Assert.Equal(new Uri("https://piston-meta.mojang.com/v1/packages/b/26.3.json"), manifest.Versions[1].MetadataUri);
-    }
-
-    [Fact]
-    public void SelectsNewestSodiumBuildIncludingPreReleases()
-    {
-        using var versions = JsonDocument.Parse("""
-            [
-              { "version_number": "mc26.3-0.9.3-beta.1-neoforge", "version_type": "beta", "files": [{ "primary": true, "url": "https://cdn.modrinth.com/beta.jar" }] },
-              { "version_number": "mc26.3-0.9.2-neoforge", "version_type": "release", "files": [{ "primary": true, "url": "https://cdn.modrinth.com/release.jar" }] }
-            ]
-            """);
-
-        var download = GameRuntime.SelectSodiumDownload(versions.RootElement);
-
-        Assert.NotNull(download);
-        Assert.Equal("mc26.3-0.9.3-beta.1-neoforge", download.VersionNumber);
-        Assert.Equal(new Uri("https://cdn.modrinth.com/beta.jar"), download.DownloadUri);
-    }
-
-    [Fact]
-    public void FallsBackToSodiumPreReleaseWhenNoReleaseExists()
-    {
-        using var versions = JsonDocument.Parse("""
-            [
-              { "version_number": "mc26.4-0.9.4-alpha.1-neoforge", "version_type": "alpha", "files": [{ "primary": true, "url": "https://cdn.modrinth.com/alpha.jar" }] }
-            ]
-            """);
-
-        Assert.Equal("alpha", GameRuntime.SelectSodiumDownload(versions.RootElement)?.VersionType);
-    }
-
-    [Fact]
-    public void SelectsNoSodiumWhenNoneIsPublished()
-    {
-        using var versions = JsonDocument.Parse("[]");
-
-        Assert.Null(GameRuntime.SelectSodiumDownload(versions.RootElement));
     }
 }

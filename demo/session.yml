@@ -10,8 +10,9 @@ services:
       - itzg_and_dashboard
   
   client:
-    image: ghcr.io/void-community/portable-minecraft-client:latest
-    pull_policy: missing
+    image: local/void-demo-client:latest
+    pull_policy: never
+    build: session/client
     restart: unless-stopped
     networks:
       - default
