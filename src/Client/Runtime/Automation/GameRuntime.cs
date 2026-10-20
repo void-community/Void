@@ -39,6 +39,11 @@ internal sealed partial class GameRuntime
             .ToDictionary(window => window.Id, window => firstSeen.GetValueOrDefault(window.Id, now), StringComparer.Ordinal);
     }
 
+    private static GameClientException MinecraftPreparationFailure(string message, Exception? innerException = null)
+    {
+        return new GameClientException(code: "client.install.failed", operation: "install", stage: "minecraft", message, innerException);
+    }
+
     private async Task<MinecraftWindowLease> AcquirePreparedWindowLeaseAsync(string display, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -503,8 +508,8 @@ internal sealed partial class GameRuntime
         string optionsPath = Path.Combine(minecraftDirectory, path2: "options.txt");
         string sodiumOptionsPath = Path.Combine(configurationDirectory, path2: "sodium-options.json");
         string serversPath = Path.Combine(minecraftDirectory, path2: "servers.dat");
-        var configurationDirectoryInformation = Directory.CreateDirectory(configurationDirectory);
-        var modsDirectoryInformation = Directory.CreateDirectory(modsDirectory);
+        GC.KeepAlive(Directory.CreateDirectory(configurationDirectory));
+        GC.KeepAlive(Directory.CreateDirectory(modsDirectory));
 
         if (!File.Exists(optionsPath) || new FileInfo(optionsPath).Length == 0)
             File.Copy(PortableMinecraftOptionsPath, optionsPath, overwrite: true);
@@ -523,31 +528,7 @@ internal sealed partial class GameRuntime
             ).ConfigureAwait(continueOnCapturedContext: false);
         }
 
-        List<string> portableMinecraftArguments = [portableMinecraftVersion, "--demo", "--main-dir", minecraftDirectory, "--output", "machine"];
-
-        portableMinecraftArguments.AddRange(CreateArmPortableMinecraftArguments(armLaunchOptions, [], isLaunch: false));
-
-        var preparationResult = await RunProcessTextAsync(
-            CreateProcessStartInformation(PortableMinecraftDryRunPath, portableMinecraftArguments),
-            TimeSpan.FromMinutes(minutes: 5),
-            cancellationToken
-        ).ConfigureAwait(continueOnCapturedContext: false);
-
-        if (!string.IsNullOrWhiteSpace(preparationResult.StandardError))
-            await Console.Error.WriteAsync(preparationResult.StandardError).ConfigureAwait(continueOnCapturedContext: false);
-
-        if (preparationResult.ExitCode != 0)
-            throw new InvalidOperationException($"Portable Minecraft preparation exited with code {preparationResult.ExitCode}: {preparationResult.StandardError}");
-
-        string? minecraftVersion = preparationResult.StandardOutput
-            .Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(static line => line.TrimEnd(trimChar: '\r').Split(separator: '\t'))
-            .Where(static fields => fields.Length > 1 && fields[0] == "loaded_hierarchy")
-            .Select(static fields => fields[^1])
-            .LastOrDefault();
-
-        if (string.IsNullOrWhiteSpace(minecraftVersion))
-            throw new InvalidOperationException(message: "Portable Minecraft preparation did not report a Minecraft version");
+        string minecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         await InstallSodiumAsync(modsDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
@@ -595,6 +576,71 @@ internal sealed partial class GameRuntime
 
         if (result.ExitCode is not 0)
             throw new ExternalProcessException(command[0], command[1..], result.ExitCode, result.StandardOutput, result.StandardError);
+    }
+
+    /// <summary>
+    /// Downloads and installs Minecraft and its mod loader without starting them, retrying through the dry-run script, so the launch itself
+    /// downloads nothing that could fail.
+    /// </summary>
+    /// <returns>The Minecraft version PortableMC loaded.</returns>
+    private async Task<string> RunPortableMinecraftDryRunAsync(
+        string minecraftDirectory,
+        string portableMinecraftVersion,
+        ArmLaunchOptions? armLaunchOptions,
+        CancellationToken cancellationToken
+    )
+    {
+        List<string> portableMinecraftArguments = [portableMinecraftVersion, "--demo", "--main-dir", minecraftDirectory, "--output", "machine"];
+
+        portableMinecraftArguments.AddRange(CreateArmPortableMinecraftArguments(armLaunchOptions, [], isLaunch: false));
+
+        ProcessTextResult preparationResult;
+
+        try
+        {
+            preparationResult = await RunProcessTextAsync(
+                CreateProcessStartInformation(PortableMinecraftDryRunPath, portableMinecraftArguments),
+                TimeSpan.FromMinutes(minutes: 5),
+                cancellationToken
+            ).ConfigureAwait(continueOnCapturedContext: false);
+        }
+        catch (TimeoutException exception)
+        {
+            throw MinecraftPreparationFailure($"Minecraft {portableMinecraftVersion} could not be prepared within 5 minutes", exception);
+        }
+
+        if (!string.IsNullOrWhiteSpace(preparationResult.StandardError))
+            await Console.Error.WriteAsync(preparationResult.StandardError).ConfigureAwait(continueOnCapturedContext: false);
+
+        List<string[]> outputFields = [.. preparationResult.StandardOutput
+            .Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(static line => line.TrimEnd(trimChar: '\r').Split(separator: '\t'))];
+
+        if (preparationResult.ExitCode != 0)
+        {
+            // PortableMC reports what went wrong on its machine-readable output, while the script only counts the attempts on its errors.
+            string[] errors =
+            [
+                .. outputFields
+                    .Where(static fields => fields[0].Contains(value: "error", StringComparison.Ordinal))
+                    .Select(static fields => string.Join(separator: ' ', fields))
+                    .Distinct()
+                    .TakeLast(count: 3)
+            ];
+
+            string reason = errors.Length is 0 ? preparationResult.StandardError.Trim() : string.Join(separator: "; ", errors);
+
+            throw MinecraftPreparationFailure($"Minecraft {portableMinecraftVersion} could not be prepared (exit code {preparationResult.ExitCode}): {reason}");
+        }
+
+        string? minecraftVersion = outputFields
+            .Where(static fields => fields.Length > 1 && fields[0] == "loaded_hierarchy")
+            .Select(static fields => fields[^1])
+            .LastOrDefault();
+
+        return string.IsNullOrWhiteSpace(minecraftVersion)
+            ? throw MinecraftPreparationFailure($"Minecraft {portableMinecraftVersion} was prepared without reporting its version")
+            : minecraftVersion;
     }
 
     private async Task<ProcessTextResult> RunProcessTextAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)

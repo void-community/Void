@@ -101,7 +101,7 @@ public sealed class CurseForgeDownloadTests : IDisposable
         StubHandler handler = new(request => request.RequestUri?.Host == "edge.forgecdn.net" ? new HttpResponseMessage(HttpStatusCode.Forbidden) : Content("abc"));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, TestContext.Current.CancellationToken);
 
         Assert.True(result.Downloaded);
         Assert.Equal("abc", await File.ReadAllTextAsync(DestinationPath, TestContext.Current.CancellationToken));
@@ -115,7 +115,7 @@ public sealed class CurseForgeDownloadTests : IDisposable
         StubHandler handler = new(request => Content(request.RequestUri?.Host == "edge.forgecdn.net" ? "tampered" : "abc"));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, TestContext.Current.CancellationToken);
 
         Assert.True(result.Downloaded);
         Assert.Equal("abc", await File.ReadAllTextAsync(DestinationPath, TestContext.Current.CancellationToken));
@@ -128,7 +128,7 @@ public sealed class CurseForgeDownloadTests : IDisposable
         StubHandler handler = new(request => request.RequestUri?.Host == "edge.forgecdn.net" ? Content("tampered") : new HttpResponseMessage(HttpStatusCode.NotFound));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, TestContext.Current.CancellationToken);
 
         Assert.False(result.Downloaded);
         Assert.Equal(2, result.Failures.Count);
@@ -142,10 +142,42 @@ public sealed class CurseForgeDownloadTests : IDisposable
         StubHandler handler = new(request => new HttpResponseMessage(HttpStatusCode.Forbidden));
         using HttpClient httpClient = new(handler);
 
-        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TestContext.Current.CancellationToken);
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, TestContext.Current.CancellationToken);
 
         Assert.Equal([("edge.forgecdn.net", false), ("www.curseforge.com", true)], handler.Requests);
         Assert.False(result.Downloaded);
+    }
+
+    [Fact]
+    public async Task RetriesOnlyCandidatesThatFailedTransiently()
+    {
+        // Issue #1613: every candidate was tried once, so a short CDN outage failed the download within milliseconds.
+        int cdnRequests = 0;
+        StubHandler handler = new(request => request.RequestUri?.Host == "edge.forgecdn.net"
+            ? ++cdnRequests == 1 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Content("abc")
+            : new HttpResponseMessage(HttpStatusCode.Forbidden));
+        using HttpClient httpClient = new(handler);
+
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Downloaded);
+        Assert.Equal(["edge.forgecdn.net", "www.curseforge.com", "edge.forgecdn.net"], handler.Requests.Select(static request => request.Host));
+        Assert.Equal("abc", await File.ReadAllTextAsync(DestinationPath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task OtherContentIsNotDownloadedAgain()
+    {
+        StubHandler handler = new(request => request.RequestUri?.Host == "edge.forgecdn.net" ? Content("tampered") : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        using HttpClient httpClient = new(handler);
+
+        var result = await GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, TestContext.Current.CancellationToken);
+
+        Assert.False(result.Downloaded);
+        Assert.True(result.Transient);
+        Assert.Equal(["edge.forgecdn.net", "www.curseforge.com", "www.curseforge.com", "www.curseforge.com"], handler.Requests.Select(static request => request.Host));
+        Assert.Equal(["edge.forgecdn.net served content that does not match SHA-1 " + AbcSha1, "www.curseforge.com returned 503"], result.Failures);
+        Assert.Empty(Directory.GetFiles(_directory));
     }
 
     [Fact]
@@ -156,7 +188,7 @@ public sealed class CurseForgeDownloadTests : IDisposable
         StubHandler handler = new(request => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stalledStream) });
         using HttpClient httpClient = new(handler);
 
-        var download = GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, cancellation.Token);
+        var download = GameRuntime.DownloadCurseForgeFileAsync(httpClient, Candidates(), AbcSha1, apiKey: "key", DestinationPath, TimeSpan.Zero, cancellation.Token);
         await stalledStream.Stalled.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Single(Directory.GetFiles(_directory));
         await cancellation.CancelAsync();

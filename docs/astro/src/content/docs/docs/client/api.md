@@ -172,7 +172,7 @@ curl --fail-with-body \
 Replace the example `fileId` with the file you want to start.
 :::
 
-If any modpack file can't be downloaded, the launch fails with an error that lists every missing file.
+Requests to CurseForge and downloads that fail temporarily are retried a few times. If a modpack file still can't be downloaded, the start fails with an error that lists every missing file.
 
 The game directory holds one modpack at a time. Starting the installed modpack again starts it right away. Starting another modpack or file replaces it, downloading only the files that aren't there yet. A failed or stopped start leaves no modpack installed, so the next start installs again and reuses what was downloaded. Files the previous modpack added in subfolders such as `config/` are removed. Worlds, files the game created, and `options.txt` stay.
 
@@ -362,6 +362,8 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 | `client.process.crashed` | Minecraft or its Java runtime crashed. The message has the error from the crash report or the Java error log. |
 | `client.process.exited` | Minecraft ended without a stop request. |
 | `client.process.out_of_memory` | Minecraft ran out of memory and was killed. |
+| `client.install.unavailable` | CurseForge stayed unavailable after retries. Starting again later may work. |
+| `client.install.failed` | The game couldn't be installed. Stage `curseforge` means the modpack couldn't be installed, for example because it or one of its files doesn't exist; stage `minecraft` means Minecraft or its mod loader couldn't be prepared. |
 | `client.connect.rejected` | The server disconnected the game while it was joining. |
 | `client.connect.failed` | The game couldn't connect for another reason. |
 | `client.chat.failed` | The chat message couldn't be sent. |

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Void.Client;
+using Void.Client.Failures;
 using Xunit;
 
 namespace Void.Client.UnitTests;
@@ -46,9 +47,11 @@ public sealed class CurseForgeInstallTests : IDisposable
         await File.WriteAllTextAsync(Path.Join(_directory, "options.txt"), "renderDistance:2", TestContext.Current.CancellationToken);
         curseForge.Failing.Add(Broken.Id);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => PrepareAsync(curseForge, B));
+        var exception = await Assert.ThrowsAsync<GameClientException>(() => PrepareAsync(curseForge, B));
 
         Assert.Contains("broken-1.0.jar", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("client.install.unavailable", exception.Failure.Code);
+        Assert.Equal(3, curseForge.Downloads.GetValueOrDefault($"503 {Broken.FileName}"));
         Assert.False(File.Exists(Path.Join(_directory, ".curseforge-modpack")));
         Assert.Equal(["only-b-1.0.jar", "shared-1.0.jar"], Files("mods"));
         // The previous modpack's scripts and configs are gone, while the consumer's options stay.
@@ -75,7 +78,7 @@ public sealed class CurseForgeInstallTests : IDisposable
         FakeCurseForge curseForge = new([A, B]);
         await PrepareAsync(curseForge, A);
         curseForge.Failing.Add(Broken.Id);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => PrepareAsync(curseForge, B));
+        await Assert.ThrowsAsync<GameClientException>(() => PrepareAsync(curseForge, B));
         curseForge.Failing.Clear();
 
         await PrepareAsync(curseForge, B);
@@ -109,6 +112,50 @@ public sealed class CurseForgeInstallTests : IDisposable
 
         Assert.Equal(["broken-1.0.jar", "only-b-1.0.jar", "shared-1.0.jar"], Files("mods"));
         Assert.Equal(1, curseForge.Downloads[Shared.FileName]);
+    }
+
+    [Fact]
+    public async Task TransientFailuresAreRetried()
+    {
+        // Issue #1613: one 503 from the API or a download failed the whole start.
+        FakeCurseForge curseForge = new([A]) { ApiFailures = 2 };
+        curseForge.FailingOnce.Add(OnlyInA.Id);
+
+        await PrepareAsync(curseForge, A);
+
+        Assert.Equal(1, curseForge.Downloads[$"503 {OnlyInA.FileName}"]);
+        Assert.Equal(1, curseForge.Downloads[OnlyInA.FileName]);
+        Assert.Equal(["only-a-1.0.jar", "overridden-1.0.jar", "shared-1.0.jar"], Files("mods"));
+    }
+
+    [Fact]
+    public async Task UnavailableApiIsReportedAfterItsRetries()
+    {
+        FakeCurseForge curseForge = new([A]);
+        curseForge.Failing.Add(0);
+
+        var exception = await Assert.ThrowsAsync<GameClientException>(() => PrepareAsync(curseForge, A));
+
+        Assert.Equal("client.install.unavailable", exception.Failure.Code);
+        Assert.Equal("curseforge", exception.Failure.Stage);
+        Assert.Contains("GET /v1/mods/search?gameId=432&slug=pack-a failed after 3 attempt(s): 503", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(3, curseForge.ApiRequests);
+    }
+
+    [Theory]
+    [InlineData("unknown-pack", "modpack not found: unknown-pack")]
+    [InlineData("pack-b", "broken-1.0.jar (mod 13006, file 3006)")]
+    public async Task FailuresThatStartingAgainCannotFixAreReportedAsFailed(string slug, string message)
+    {
+        FakeCurseForge curseForge = new([A, B]);
+        curseForge.Missing.Add(Broken.Id);
+        Modpack modpack = slug == B.Slug ? B : A with { Slug = slug };
+
+        var exception = await Assert.ThrowsAsync<GameClientException>(() => PrepareAsync(curseForge, modpack));
+
+        Assert.Equal("client.install.failed", exception.Failure.Code);
+        Assert.Equal("curseforge", exception.Failure.Stage);
+        Assert.Contains(message, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -206,6 +253,7 @@ public sealed class CurseForgeInstallTests : IDisposable
                     ApiBaseUri,
                     parallelDownloads: 2,
                     _directory,
+                    TimeSpan.Zero,
                     cancellationToken ?? TestContext.Current.CancellationToken
                 );
             }
@@ -262,12 +310,25 @@ public sealed class CurseForgeInstallTests : IDisposable
     {
         private readonly Dictionary<int, ModpackFile> _files = modpacks.SelectMany(static modpack => modpack.Files).DistinctBy(static file => file.Id).ToDictionary(static file => file.Id);
         private readonly Dictionary<int, byte[]> _archives = modpacks.ToDictionary(static modpack => modpack.FileId, static modpack => Convert.FromBase64String(modpack.Archive.Content));
+        private int _apiRequests;
         private int _searches;
 
+        /// <summary>How many of the next API requests answer 503.</summary>
+        public int ApiFailures { get; set; }
+
+        public int ApiRequests => _apiRequests;
+
+        /// <summary>Downloads by file name, and failed downloads as "503 file name".</summary>
         public ConcurrentDictionary<string, int> Downloads { get; } = new(StringComparer.Ordinal);
 
-        /// <summary>File ids whose downloads fail, or 0 to fail every API request.</summary>
+        /// <summary>File ids whose downloads answer 503, or 0 to fail every API request.</summary>
         public HashSet<int> Failing { get; } = [];
+
+        /// <summary>File ids whose next download answers 503.</summary>
+        public HashSet<int> FailingOnce { get; } = [];
+
+        /// <summary>File ids that no longer exist.</summary>
+        public HashSet<int> Missing { get; } = [];
 
         public int Searches => _searches;
 
@@ -280,7 +341,14 @@ public sealed class CurseForgeInstallTests : IDisposable
             Uri uri = request.RequestUri!;
 
             if (uri.Host == ApiBaseUri.Host)
-                return Failing.Contains(0) ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : await ApiAsync(request, uri, cancellationToken);
+            {
+                Interlocked.Increment(ref _apiRequests);
+
+                if (Failing.Contains(0) || ApiFailures-- > 0)
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+
+                return await ApiAsync(request, uri, cancellationToken);
+            }
 
             if (uri.Host != "files.curseforge.test")
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -290,8 +358,15 @@ public sealed class CurseForgeInstallTests : IDisposable
             if (_archives.TryGetValue(id, out byte[]? archive))
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(archive) };
 
-            if (Failing.Contains(id))
+            if (Missing.Contains(id))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            if (Failing.Contains(id) || FailingOnce.Remove(id))
+            {
+                Downloads.AddOrUpdate($"503 {_files[id].FileName}", 1, static (_, count) => count + 1);
+
                 return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            }
 
             if (Stalling == id)
             {
@@ -311,9 +386,8 @@ public sealed class CurseForgeInstallTests : IDisposable
             {
                 Interlocked.Increment(ref _searches);
                 string slug = uri.Query.Split("slug=")[1];
-                Modpack modpack = modpacks.Single(modpack => modpack.Slug == slug);
 
-                return Json(new[] { new { id = modpack.ProjectId, slug } });
+                return Json(modpacks.Where(modpack => modpack.Slug == slug).Select(modpack => new { id = modpack.ProjectId, slug }));
             }
 
             if (uri.AbsolutePath == "/v1/mods/files")

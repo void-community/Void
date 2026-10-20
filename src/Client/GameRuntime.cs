@@ -79,6 +79,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         PropertyNameCaseInsensitive = false
     };
     private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
+    // Each retry of an upstream request waits this much longer than the one before.
+    private static readonly TimeSpan UpstreamRetryDelay = TimeSpan.FromSeconds(seconds: 2);
     private readonly AsyncLock _windowOperations = new();
     private readonly ConcurrentDictionary<int, Task> _outputTasks = new();
     private readonly ConcurrentDictionary<int, ChannelReader<string>> _outputWarnings = new();
@@ -112,10 +114,26 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         string minecraftDirectory = GetMinecraftDirectory();
         string portableMinecraftVersion;
 
-        using (HttpClient httpClient = new())
-            portableMinecraftVersion = await PrepareCurseForgeAsync(httpClient, slug, fileId, apiKey, CreateCurseForgeApiBaseUri(), parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        using (HttpClient httpClient = CreateUpstreamHttpClient())
+        {
+            portableMinecraftVersion = await PrepareCurseForgeAsync(
+                httpClient,
+                slug,
+                fileId,
+                apiKey,
+                CreateCurseForgeApiBaseUri(),
+                parallelDownloads,
+                minecraftDirectory,
+                UpstreamRetryDelay,
+                cancellationToken
+            ).ConfigureAwait(continueOnCapturedContext: false);
+        }
 
         var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        // The modpack brings its own mods and options, so only Minecraft and its mod loader are prepared, where downloads are retried.
+        string preparedMinecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await Console.Error.WriteLineAsync($"Prepared Minecraft {preparedMinecraftVersion} for the modpack").ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }

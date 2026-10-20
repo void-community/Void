@@ -118,7 +118,8 @@ internal sealed partial class GameRuntime
     /// <summary>
     /// Downloads the first candidate that answers successfully with content matching the published SHA-1 to <paramref name="destinationPath" />,
     /// recording why the others were skipped. Content streams through a temporary file next to the destination and only replaces it once its
-    /// hash matches, so several large files can download at once without being held in memory, and nothing partial is left behind.
+    /// hash matches, so several large files can download at once without being held in memory, and nothing partial is left behind. Candidates
+    /// that failed transiently are tried again a few times, while ones that refused the file or served other content are not.
     /// </summary>
     internal static async Task<CurseForgeDownloadResult> DownloadCurseForgeFileAsync(
         HttpClient httpClient,
@@ -126,29 +127,42 @@ internal sealed partial class GameRuntime
         string? expectedSha1,
         string apiKey,
         string destinationPath,
+        TimeSpan retryDelay,
         CancellationToken cancellationToken
     )
     {
-        List<string> failures = [];
+        CandidateFailure?[] failures = new CandidateFailure?[candidates.Count];
+        List<int> pending = [.. Enumerable.Range(start: 0, candidates.Count)];
         string temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.download";
 
         try
         {
-            foreach (var candidate in candidates)
+            for (int round = 1; round <= UpstreamRequestAttempts && pending.Count is not 0; round++)
             {
-                string? failure = await TryDownloadCurseForgeCandidateAsync(httpClient, candidate, expectedSha1, apiKey, temporaryPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-                if (failure is null)
+                if (round > 1)
                 {
-                    File.Move(temporaryPath, destinationPath, overwrite: true);
-
-                    return new CurseForgeDownloadResult(Downloaded: true, failures);
+                    await Console.Error.WriteLineAsync($"Download of {Path.GetFileName(destinationPath)} failed transiently; attempt {round}/{UpstreamRequestAttempts}").ConfigureAwait(continueOnCapturedContext: false);
+                    await Task.Delay(retryDelay * (round - 1), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                 }
 
-                failures.Add(failure);
+                foreach (int index in pending)
+                {
+                    failures[index] = await TryDownloadCurseForgeCandidateAsync(httpClient, candidates[index], expectedSha1, apiKey, temporaryPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                    if (failures[index] is null)
+                    {
+                        File.Move(temporaryPath, destinationPath, overwrite: true);
+
+                        return new CurseForgeDownloadResult(Downloaded: true, DescribeFailures(failures), Transient: false);
+                    }
+                }
+
+                pending = [.. pending.Where(index => failures[index] is { Transient: true })];
             }
 
-            return new CurseForgeDownloadResult(Downloaded: false, failures);
+            bool transient = pending.Count is not 0;
+
+            return new CurseForgeDownloadResult(Downloaded: false, DescribeFailures(failures), transient);
         }
         finally
         {
@@ -193,6 +207,12 @@ internal sealed partial class GameRuntime
         return IsExpectedSha1(await CopyWithSha1Async(file, Stream.Null, cancellationToken).ConfigureAwait(continueOnCapturedContext: false), expectedSha1);
     }
 
+    /// <summary>Tells whether an upstream may answer differently later: it timed out, limited the rate, or failed itself.</summary>
+    internal static bool IsTransientStatus(HttpStatusCode statusCode)
+    {
+        return statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int)statusCode >= 500;
+    }
+
     internal static async Task<string> PrepareCurseForgeAsync(
         HttpClient httpClient,
         string slug,
@@ -201,39 +221,58 @@ internal sealed partial class GameRuntime
         Uri curseForgeApiBaseUri,
         int parallelDownloads,
         string minecraftDirectory,
+        TimeSpan retryDelay,
         CancellationToken cancellationToken
     )
     {
-        GC.KeepAlive(Directory.CreateDirectory(minecraftDirectory));
-
-        string markerFile = Path.Combine(minecraftDirectory, CurseForgeMarkerFileName);
-        string versionFile = Path.Combine(minecraftDirectory, CurseForgeVersionFileName);
-        string marker = $"{slug} {fileId}";
-        string existingMarker = File.Exists(markerFile) ? (await File.ReadAllTextAsync(markerFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim() : "";
-        string portablemcVersion;
-
-        await Console.Error.WriteLineAsync($"Starting CurseForge modpack '{slug}' file '{fileId}'").ConfigureAwait(continueOnCapturedContext: false);
-
-        if (existingMarker == marker)
+        try
         {
-            if (!File.Exists(versionFile))
-                throw new InvalidOperationException($"PortableMC version cache file is missing: {versionFile}");
+            GC.KeepAlive(Directory.CreateDirectory(minecraftDirectory));
 
-            portablemcVersion = (await File.ReadAllTextAsync(versionFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim();
+            string markerFile = Path.Combine(minecraftDirectory, CurseForgeMarkerFileName);
+            string versionFile = Path.Combine(minecraftDirectory, CurseForgeVersionFileName);
+            string marker = $"{slug} {fileId}";
+            string existingMarker = File.Exists(markerFile) ? (await File.ReadAllTextAsync(markerFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim() : "";
+            string portablemcVersion;
 
-            await Console.Error.WriteLineAsync($"Using existing installation in {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
+            await Console.Error.WriteLineAsync($"Starting CurseForge modpack '{slug}' file '{fileId}'").ConfigureAwait(continueOnCapturedContext: false);
+
+            if (existingMarker == marker)
+            {
+                if (!File.Exists(versionFile))
+                    throw new InvalidOperationException($"PortableMC version cache file is missing: {versionFile}");
+
+                portablemcVersion = (await File.ReadAllTextAsync(versionFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)).Trim();
+
+                await Console.Error.WriteLineAsync($"Using existing installation in {minecraftDirectory}").ConfigureAwait(continueOnCapturedContext: false);
+            }
+            else
+            {
+                portablemcVersion = await InstallModpack(
+                    httpClient,
+                    slug,
+                    fileId,
+                    curseForgeApiKey,
+                    curseForgeApiBaseUri,
+                    parallelDownloads,
+                    minecraftDirectory,
+                    retryDelay,
+                    cancellationToken
+                ).ConfigureAwait(continueOnCapturedContext: false);
+
+                await File.WriteAllTextAsync(versionFile, portablemcVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                await File.WriteAllTextAsync(markerFile, marker, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                await Console.Error.WriteLineAsync(value: "Installation marker updated").ConfigureAwait(continueOnCapturedContext: false);
+            }
+
+            return portablemcVersion;
         }
-        else
+        catch (Exception exception) when (exception is not GameClientException && !cancellationToken.IsCancellationRequested)
         {
-            portablemcVersion = await InstallModpack(httpClient, slug, fileId, curseForgeApiKey, curseForgeApiBaseUri, parallelDownloads, minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            await File.WriteAllTextAsync(versionFile, portablemcVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            await File.WriteAllTextAsync(markerFile, marker, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            await Console.Error.WriteLineAsync(value: "Installation marker updated").ConfigureAwait(continueOnCapturedContext: false);
+            // Such as an unknown modpack, a manifest the client can't use, or a disk error, none of which starting again would change.
+            throw CurseForgeInstallFailure(unavailable: false, exception.Message, exception);
         }
-
-        return portablemcVersion;
     }
 
     /// <summary>
@@ -313,6 +352,19 @@ internal sealed partial class GameRuntime
         return null;
     }
 
+    /// <summary>Creates the failure of a CurseForge install, which is unavailable when starting later may succeed.</summary>
+    private static GameClientException CurseForgeInstallFailure(bool unavailable, string message, Exception? innerException = null)
+    {
+        string code = unavailable ? "client.install.unavailable" : "client.install.failed";
+
+        return new GameClientException(code, operation: "install", stage: "curseforge", message, innerException);
+    }
+
+    private static List<string> DescribeFailures(IEnumerable<CandidateFailure?> failures)
+    {
+        return [.. failures.OfType<CandidateFailure>().Select(static failure => failure.Message)];
+    }
+
     private static async Task<string> InstallModpack(
         HttpClient httpClient,
         string slug,
@@ -321,10 +373,11 @@ internal sealed partial class GameRuntime
         Uri apiBaseUri,
         int parallelDownloads,
         string minecraftDirectory,
+        TimeSpan retryDelay,
         CancellationToken cancellationToken
     )
     {
-        CurseForgeApiClient curseForgeClient = new(httpClient, apiBaseUri, apiKey);
+        CurseForgeApiClient curseForgeClient = new(httpClient, apiBaseUri, apiKey, retryDelay);
 
         await Console.Error.WriteLineAsync(value: "Resolving CurseForge project").ConfigureAwait(continueOnCapturedContext: false);
         var searchResult = await curseForgeClient.SearchModsAsync(MinecraftGameId, slug, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -337,10 +390,14 @@ internal sealed partial class GameRuntime
         var archiveFile = await curseForgeClient.GetModFileAsync(project.Id, fileId, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         var archiveDownloadUris = CreateCurseForgeDownloadUris(project.Id, archiveFile.Id, archiveFile.FileName, archiveFile.DownloadUrl);
         string archivePath = Path.Combine(Path.GetTempPath(), $"void-curseforge-{project.Id}-{archiveFile.Id}-{Guid.NewGuid():N}.zip");
-        var archiveDownload = await DownloadCurseForgeFileAsync(httpClient, archiveDownloadUris, GetCurseForgeSha1(archiveFile.Hashes), apiKey, archivePath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var archiveDownload = await DownloadCurseForgeFileAsync(httpClient, archiveDownloadUris, GetCurseForgeSha1(archiveFile.Hashes), apiKey, archivePath, retryDelay, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         if (!archiveDownload.Downloaded)
-            throw new InvalidOperationException($"Modpack archive {slug} file {fileId} could not be downloaded: {string.Join(separator: "; ", archiveDownload.Failures)}");
+        {
+            string failures = string.Join(separator: "; ", archiveDownload.Failures);
+
+            throw CurseForgeInstallFailure(archiveDownload.Transient, $"Modpack archive {slug} file {fileId} could not be downloaded: {failures}");
+        }
 
         await Console.Error.WriteLineAsync(value: "Reading modpack manifest").ConfigureAwait(continueOnCapturedContext: false);
 
@@ -437,7 +494,7 @@ internal sealed partial class GameRuntime
         {
             int totalFileCount = allFileMetadata.Count;
             int downloadIndex = 0;
-            ConcurrentDictionary<int, string> missingFiles = [];
+            ConcurrentDictionary<int, (string Description, bool Transient)> missingFiles = [];
             ParallelOptions parallelOptions = new() { MaxDegreeOfParallelism = parallelDownloads, CancellationToken = cancellationToken };
 
             await Console.Error.WriteLineAsync($"Downloading {totalFileCount} CurseForge files, {parallelDownloads} at a time").ConfigureAwait(continueOnCapturedContext: false);
@@ -467,13 +524,13 @@ internal sealed partial class GameRuntime
 
                     var fileDownloadUris = CreateCurseForgeDownloadUris(fileMeta.ModId, fileMeta.Id, fileMeta.FileName, fileMeta.DownloadUrl);
 
-                    var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, expectedSha1, apiKey, destinationPath, downloadCancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    var fileDownload = await DownloadCurseForgeFileAsync(httpClient, fileDownloadUris, expectedSha1, apiKey, destinationPath, retryDelay, downloadCancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
                     if (fileDownload.Downloaded)
                         return;
 
                     string missingFile = $"{fileMeta.FileName} (mod {fileMeta.ModId}, file {fileMeta.Id})";
-                    missingFiles[position] = missingFile;
+                    missingFiles[position] = (missingFile, fileDownload.Transient);
 
                     await Console.Error.WriteLineAsync($"[{fileNumber}/{totalFileCount}] Could not download {missingFile}: {string.Join(separator: "; ", fileDownload.Failures)}").ConfigureAwait(continueOnCapturedContext: false);
                 }
@@ -481,9 +538,13 @@ internal sealed partial class GameRuntime
 
             if (!missingFiles.IsEmpty)
             {
-                var missingFilesInManifestOrder = missingFiles.OrderBy(static missingFile => missingFile.Key).Select(static missingFile => missingFile.Value);
+                var missingFilesInManifestOrder = missingFiles.OrderBy(static missingFile => missingFile.Key).Select(static missingFile => missingFile.Value.Description);
 
-                throw new InvalidOperationException($"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFilesInManifestOrder)}");
+                // One file that can't be downloaded at all makes the modpack uninstallable, however often it's started again.
+                throw CurseForgeInstallFailure(
+                    missingFiles.Values.All(static missingFile => missingFile.Transient),
+                    $"{missingFiles.Count} CurseForge files could not be downloaded: {string.Join(separator: ", ", missingFilesInManifestOrder)}"
+                );
             }
         }
         else
@@ -715,8 +776,8 @@ internal sealed partial class GameRuntime
     /// <summary>
     /// Streams one candidate to <paramref name="temporaryPath" /> and checks it against the published SHA-1.
     /// </summary>
-    /// <returns><see langword="null" /> when the file matches; otherwise, why the candidate was skipped.</returns>
-    private static async Task<string?> TryDownloadCurseForgeCandidateAsync(
+    /// <returns><see langword="null" /> when the file matches; otherwise, why the candidate was skipped and whether trying again may help.</returns>
+    private static async Task<CandidateFailure?> TryDownloadCurseForgeCandidateAsync(
         HttpClient httpClient,
         Uri candidate,
         string? expectedSha1,
@@ -735,7 +796,7 @@ internal sealed partial class GameRuntime
             using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             if (!response.IsSuccessStatusCode)
-                return $"{candidate.Host} returned {(int)response.StatusCode}";
+                return new CandidateFailure($"{candidate.Host} returned {(int)response.StatusCode}", IsTransientStatus(response.StatusCode));
 
             string actualSha1;
             var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -748,19 +809,23 @@ internal sealed partial class GameRuntime
                     actualSha1 = await CopyWithSha1Async(source, target, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             }
 
-            return IsExpectedSha1(actualSha1, expectedSha1) ? null : $"{candidate.Host} served content that does not match SHA-1 {expectedSha1}";
+            // The same edge cache usually answers again, so other content isn't worth another download.
+            return IsExpectedSha1(actualSha1, expectedSha1) ? null : new CandidateFailure($"{candidate.Host} served content that does not match SHA-1 {expectedSha1}", Transient: false);
         }
         catch (HttpRequestException exception)
         {
-            return $"{candidate.Host} failed: {exception.Message}";
+            return new CandidateFailure($"{candidate.Host} failed: {exception.Message}", Transient: true);
         }
         catch (IOException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return $"{candidate.Host} failed: {exception.Message}";
+            // A connection lost mid-file may work next time, while writing the file, such as to a full disk, would fail again.
+            bool connectionLost = exception is HttpIOException || exception.InnerException is SocketException;
+
+            return new CandidateFailure($"{candidate.Host} failed: {exception.Message}", connectionLost);
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return $"{candidate.Host} timed out: {exception.Message}";
+            return new CandidateFailure($"{candidate.Host} timed out: {exception.Message}", Transient: true);
         }
     }
 
@@ -882,7 +947,13 @@ internal sealed partial class GameRuntime
         }
     }
 
-    internal sealed record CurseForgeDownloadResult(bool Downloaded, IReadOnlyList<string> Failures);
+    private readonly record struct CandidateFailure(string Message, bool Transient);
+
+    /// <summary>
+    /// Tells whether a file was downloaded, why candidates were skipped, and whether one still failed transiently at the end, so that
+    /// downloading it again later may succeed.
+    /// </summary>
+    internal sealed record CurseForgeDownloadResult(bool Downloaded, IReadOnlyList<string> Failures, bool Transient);
 
     internal sealed record SodiumDownload(string VersionNumber, string VersionType, Uri DownloadUri);
 }

@@ -10,11 +10,12 @@ internal sealed partial class GameRuntime
 
     internal sealed record CurseForgeFileHash([property: JsonPropertyName("value")] string? Value, [property: JsonPropertyName("algo")] int Algo);
 
-    private sealed class CurseForgeApiClient(HttpClient httpClient, Uri baseUri, string apiKey)
+    private sealed class CurseForgeApiClient(HttpClient httpClient, Uri baseUri, string apiKey, TimeSpan retryDelay)
     {
         private readonly string _apiKey = apiKey;
         private readonly Uri _baseUri = baseUri;
         private readonly HttpClient _httpClient = httpClient;
+        private readonly TimeSpan _retryDelay = retryDelay;
         private readonly JsonSerializerOptions _javaScriptObjectNotationOptions = new(JsonSerializerDefaults.Web);
 
         public async Task<List<CurseForgeFile>> GetFilesAsync(List<int> fileIds, CancellationToken cancellationToken)
@@ -41,31 +42,66 @@ internal sealed partial class GameRuntime
 
         private async Task<TResponse> GetAsync<TResponse>(string relativeUrl, CancellationToken cancellationToken)
         {
-            using HttpRequestMessage request = new(HttpMethod.Get, new Uri(_baseUri, relativeUrl));
-
-            return await SendAsync<TResponse>(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            return await SendAsync<TResponse>(() => new HttpRequestMessage(HttpMethod.Get, new Uri(_baseUri, relativeUrl)), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }
 
         private async Task<TResponse> PostAsync<TResponse>(string relativeUrl, CurseForgeFilesRequest body, CancellationToken cancellationToken)
         {
-            using HttpRequestMessage request = new(HttpMethod.Post, new Uri(_baseUri, relativeUrl))
-            {
-                Content = JsonContent.Create(body, options: _javaScriptObjectNotationOptions)
-            };
-
-            return await SendAsync<TResponse>(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            return await SendAsync<TResponse>(
+                () => new HttpRequestMessage(HttpMethod.Post, new Uri(_baseUri, relativeUrl)) { Content = JsonContent.Create(body, options: _javaScriptObjectNotationOptions) },
+                cancellationToken
+            ).ConfigureAwait(continueOnCapturedContext: false);
         }
 
-        private async Task<TResponse> SendAsync<TResponse>(HttpRequestMessage request, CancellationToken cancellationToken)
+        /// <summary>
+        /// Sends a request until CurseForge answers it, retrying network errors, timeouts, rate limits and server errors. A sent request
+        /// can't be sent again, so each attempt creates its own. Responses are read in full, so a connection lost mid-answer is retried too.
+        /// </summary>
+        private async Task<TResponse> SendAsync<TResponse>(Func<HttpRequestMessage> createRequest, CancellationToken cancellationToken)
         {
-            request.Headers.Add(name: "x-api-key", _apiKey);
+            for (int attempt = 1; attempt <= UpstreamRequestAttempts; attempt++)
+            {
+                using var request = createRequest();
 
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                request.Headers.Add(name: "x-api-key", _apiKey);
 
-            var successfulResponse = response.EnsureSuccessStatusCode();
+                string failure;
+                bool transient;
 
-            return await successfulResponse.Content.ReadFromJsonAsync<TResponse>(_javaScriptObjectNotationOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
-                   ?? throw new InvalidOperationException(message: "CurseForge API returned an empty response");
+                try
+                {
+                    using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return await response.Content.ReadFromJsonAsync<TResponse>(_javaScriptObjectNotationOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
+                               ?? throw new InvalidOperationException(message: "CurseForge API returned an empty response");
+                    }
+
+                    failure = $"{(int)response.StatusCode} {response.ReasonPhrase}";
+                    transient = IsTransientStatus(response.StatusCode);
+                }
+                catch (HttpRequestException exception)
+                {
+                    failure = exception.Message;
+                    transient = true;
+                }
+                catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    failure = $"timed out: {exception.Message}";
+                    transient = true;
+                }
+
+                string requestDescription = $"CurseForge {request.Method} {request.RequestUri?.PathAndQuery}";
+
+                if (!transient || attempt == UpstreamRequestAttempts)
+                    throw CurseForgeInstallFailure(transient, $"{requestDescription} failed after {attempt} attempt(s): {failure}");
+
+                await Console.Error.WriteLineAsync($"{requestDescription} failed on attempt {attempt}/{UpstreamRequestAttempts}: {failure}").ConfigureAwait(continueOnCapturedContext: false);
+                await Task.Delay(_retryDelay * attempt, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            }
+
+            throw new InvalidOperationException(message: "CurseForge request attempts were exhausted");
         }
     }
 
