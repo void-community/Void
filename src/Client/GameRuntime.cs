@@ -179,6 +179,11 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         };
     }
 
+    public long? ReadMemoryLimitMb()
+    {
+        return CgroupMemory.ReadMemoryLimitMb();
+    }
+
     public async Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken)
     {
         // The agent publishes its endpoint before the game opens a window, so without it nothing would ever report the menu.

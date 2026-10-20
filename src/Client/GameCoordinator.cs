@@ -192,12 +192,6 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         return task.Exception?.GetBaseException() ?? new TaskCanceledException(task);
     }
 
-    private static bool IsMaximumHeapArgument(string argument)
-    {
-        return argument.StartsWith(value: "-Xmx", StringComparison.Ordinal)
-               || argument.StartsWith(value: "--jvm-arg=-Xmx", StringComparison.Ordinal);
-    }
-
     private static async Task ObservePlayersAsync(Task<GamePlayers> operation, TaskCompletionSource<GamePlayers> completion)
     {
         await ((Task)operation).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
@@ -759,16 +753,9 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        if (memoryMb is <= 0)
+        if (FindMemoryProblem(memoryMb, arguments) is { } memoryProblem)
         {
-            message.Completion.SetException(BadRequest(message: "memoryMb must be a positive integer"));
-
-            return;
-        }
-
-        if (memoryMb is not null && arguments.Any(IsMaximumHeapArgument))
-        {
-            message.Completion.SetException(BadRequest(message: "memoryMb cannot be combined with an -Xmx JVM argument"));
+            message.Completion.SetException(BadRequest(memoryProblem));
 
             return;
         }

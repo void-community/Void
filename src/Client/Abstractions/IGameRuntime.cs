@@ -23,6 +23,10 @@ internal interface IGameRuntime
 
     Task<string?> ReadDisconnectReasonAsync(RunningGame game, CancellationToken cancellationToken);
 
+    /// <summary>Reads the memory limit of the container the game runs in.</summary>
+    /// <returns>The limit in MiB, or <see langword="null"/> when the container has none or it can't be read.</returns>
+    long? ReadMemoryLimitMb();
+
     /// <summary>Reads whether the game has finished loading and shown a menu.</summary>
     /// <returns>The menu, or <see langword="null"/> while the game is still loading.</returns>
     Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken);

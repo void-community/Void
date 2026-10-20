@@ -105,6 +105,8 @@ The client also closes a game that can't go on by itself, with the same result: 
 If no operation was running at the time, `operation` and `operationState` still describe the last one.
 A failed game can be started again.
 
+When the whole container is killed instead, for example for [running out of memory on Kubernetes](/docs/client/images/#memory), the client starts over as `idle` with `operationId` `0`, and the [diagnostic session](#listing-sessions) of that game says it was cut off.
+
 ## Starting a Game
 
 One game runs at a time. A start request is accepted when the state is `idle` or `failed` and returns `409 Conflict` otherwise.
@@ -114,7 +116,7 @@ All start requests accept these optional fields:
 | Field | Description |
 | :---- | :---------- |
 | `arguments` | [PortableMC start arguments](https://github.com/mindstorm38/portablemc), such as `["--username", "TestPlayer"]`. Without a username, the game uses a generated offline name. |
-| `memoryMb` | Maximum Java heap of the game in MiB. It does not limit the container's memory. Don't combine it with an `-Xmx` argument. |
+| `memoryMb` | Maximum Java heap of the game in MiB. It must be lower than the container's [**memory limit**](/docs/client/images/#memory), which also holds the rest of the game and the client. Don't combine it with an `-Xmx` argument. |
 
 Mojang's launcher gives Minecraft 2 GiB, or 4 GiB from 26.1 onwards. See [**Minecraft Java Edition memory allocation**](https://help.minecraft.net/hc/en-us/articles/39083573916941).
 
@@ -446,6 +448,8 @@ Game logs and screenshots can contain player names, server addresses, and chat.
 ```
 
 `status` is the session's latest game status. `lastFailure` keeps the session's most recent failure even after a stop clears it from the status. `endedAt` is `null` while the session is running. `warnings` lists evidence that is missing or was cut short.
+
+If the client itself was killed while a game ran, its session ends when the client starts again with the same diagnostics directory: `endedAt` is when its last evidence was saved, `status` is the last state recorded, and `warnings` says the client was stopped before the session ended.
 
 ### Archive contents
 

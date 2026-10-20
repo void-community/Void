@@ -14,6 +14,7 @@ namespace Void.Client;
 /// <summary>Owns bounded session evidence independently of the current game lifecycle.</summary>
 internal sealed class SessionDiagnostics
 {
+    private const string InterruptedSessionWarning = "The client was stopped before this session ended, for example because its container ran out of memory";
     private const int ManifestReserveBytes = 256 * 1024;
     private const int MaximumFileBytes = 2 * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -427,12 +428,25 @@ internal sealed class SessionDiagnostics
                             if (metadata is null || metadata.SessionId != id)
                                 continue;
 
-                            Session session = new(metadata with { EndedAt = metadata.EndedAt ?? DateTimeOffset.UtcNow }, directory, minecraftDirectory: "");
+                            Session session = new(metadata, directory, minecraftDirectory: "");
+                            DateTimeOffset lastWrittenAt = metadata.StartedAt;
 
                             foreach (string? file in Directory.EnumerateFiles(directory).Where(static file => !IsLink(file)))
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
-                                session.FileSizes[Path.GetFileName(file)] = new FileInfo(file).Length;
+                                FileInfo fileInformation = new(file);
+                                session.FileSizes[Path.GetFileName(file)] = fileInformation.Length;
+
+                                if (fileInformation.LastWriteTimeUtc > lastWrittenAt)
+                                    lastWrittenAt = fileInformation.LastWriteTimeUtc;
+                            }
+
+                            // Every way a session ends completes it, so one that never did was cut off with the client, and its evidence
+                            // stops when that happened.
+                            if (metadata.EndedAt is null)
+                            {
+                                session.Metadata = metadata with { EndedAt = lastWrittenAt };
+                                AddWarning(session, InterruptedSessionWarning);
                             }
 
                             session.StoredBytes = session.FileSizes.Values.Sum();

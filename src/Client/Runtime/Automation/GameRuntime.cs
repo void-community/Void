@@ -312,7 +312,7 @@ internal sealed partial class GameRuntime
                 ? [.. arguments.Append(CreateMaximumHeapArgument(value)).Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>()]
                 : [.. arguments.Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>()];
 
-            long? initialOutOfMemoryKillCount = CgroupMemoryEvents.ReadOutOfMemoryKillCount();
+            long? initialOutOfMemoryKillCount = CgroupMemory.ReadOutOfMemoryKillCount();
             Process process;
 
             try

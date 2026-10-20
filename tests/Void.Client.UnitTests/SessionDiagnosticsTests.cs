@@ -100,6 +100,33 @@ public class SessionDiagnosticsTests : IDisposable
     }
 
     [Fact]
+    public async Task SessionTheClientNeverEndedEndsAtItsLastEvidenceWithAWarning()
+    {
+        // Issue #1614: a container killed for running out of memory takes the client with it, so nothing ends the running session.
+        var diagnostics = Create();
+        var interrupted = await diagnostics.BeginAsync("interrupted", "", TestContext.Current.CancellationToken);
+        await diagnostics.RecordAsync(
+            new(GameState.Ready, 1, "start-vanilla", OperationState.Succeeded, 1, null, null, "Game menu is ready", null, null, [], DateTimeOffset.UtcNow, interrupted),
+            TestContext.Current.CancellationToken
+        );
+        await diagnostics.WriteOutputAsync(interrupted, "stdout", "output", TestContext.Current.CancellationToken);
+        var completed = await diagnostics.BeginAsync("completed", "", TestContext.Current.CancellationToken);
+        await diagnostics.CompleteAsync(completed, TestContext.Current.CancellationToken);
+        DateTime lastEvidence = DateTime.UnixEpoch.AddSeconds(Math.Ceiling((DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds) + 300);
+
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(_directory, "evidence", interrupted.ToString())))
+            File.SetLastWriteTimeUtc(file, lastEvidence);
+
+        var sessions = await Create().ListAsync(TestContext.Current.CancellationToken);
+        var reloaded = Assert.Single(sessions, session => session.SessionId == interrupted);
+
+        Assert.Equal(new DateTimeOffset(lastEvidence), reloaded.EndedAt);
+        Assert.Equal(GameState.Ready, reloaded.Status?.State);
+        Assert.Contains("The client was stopped before this session ended, for example because its container ran out of memory", reloaded.Warnings);
+        Assert.Empty(Assert.Single(sessions, session => session.SessionId == completed).Warnings);
+    }
+
+    [Fact]
     public async Task StorageFailureStillReturnsManifestWithCollectionWarning()
     {
         Directory.CreateDirectory(_directory);

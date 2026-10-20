@@ -71,6 +71,22 @@ docker run --name void-client --rm -d -p 8080:80 \
   ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
+## Memory
+
+The container's memory holds the game's Java heap, set with `memoryMb`, and everything else: the rest of the game's memory and the client itself. Give it at least 1 GiB more than `memoryMb`, and more for large modpacks:
+
+```bash
+docker run --name void-client --rm -d -p 8080:80 \
+  --memory 3g \
+  ghcr.io/void-community/portable-minecraft-client:latest
+```
+
+A start with a `memoryMb` that isn't lower than the container's limit is rejected with `400 Bad Request`.
+
+When the container runs out of memory, the system kills the game, and the client reports `client.process.out_of_memory`.
+
+On Kubernetes 1.28 or later with cgroup v2, the kubelet kills every process in the container instead, so the client restarts without reporting it. The pod's `status.containerStatuses[].lastState.terminated.reason` is then `OOMKilled`, and with a volume at the [**diagnostics directory**](/docs/client/api/#retention), such as an `emptyDir`, the game's diagnostic session survives and says it was cut off. Setting `singleProcessOOMKill: true` in the kubelet configuration (Kubernetes 1.32 or later) kills only the game, so the client can report it.
+
 ## CurseForge Configuration
 
 Starting a CurseForge modpack requires `CURSEFORGE_API_KEY`:

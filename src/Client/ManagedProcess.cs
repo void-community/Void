@@ -49,7 +49,7 @@ internal sealed class ManagedProcess(
 
     // The kernel kills the game's JVM rather than the launcher, whose exit code stays 0, so only the cgroup's kill counter tells.
     public bool WasOutOfMemoryKilled => process.HasExited && (_wasOutOfMemoryKilled ??= initialOutOfMemoryKillCount is { } initialCount
-                                               && CgroupMemoryEvents.ReadOutOfMemoryKillCount() is { } currentCount
+                                               && CgroupMemory.ReadOutOfMemoryKillCount() is { } currentCount
                                                && currentCount > initialCount);
 
     /// <summary>

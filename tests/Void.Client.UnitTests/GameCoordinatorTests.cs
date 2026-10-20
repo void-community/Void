@@ -130,6 +130,40 @@ public sealed class GameCoordinatorTests
     }
 
     [Theory]
+    [InlineData(3000, 2048L, false)]
+    [InlineData(2048, 2048L, false)]
+    [InlineData(2047, 2048L, true)]
+    [InlineData(3000, null, true)]
+    public async Task MemoryMustBeLowerThanTheContainerLimit(int memoryMb, long? limitMb, bool launched)
+    {
+        // Issue #1614: a heap the container can't hold ends with the game, or the whole container, killed for running out of memory.
+        var runtime = new FakeGameRuntime { MemoryLimitMb = limitMb };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        if (launched)
+        {
+            await coordinator.StartVanillaAsync(new("1.21.1", [], memoryMb), CancellationToken.None);
+            runtime.CompleteLaunch();
+            await WaitForStateAsync(coordinator, GameState.Ready);
+
+            Assert.Equal(memoryMb, runtime.LastMemoryMb);
+
+            await coordinator.StopGameAsync(CancellationToken.None);
+        }
+        else
+        {
+            var exception = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.StartVanillaAsync(new("1.21.1", [], memoryMb), CancellationToken.None));
+
+            Assert.Equal(400, exception.StatusCode);
+            Assert.Equal($"memoryMb must be lower than the container's memory limit of {limitMb} MiB", exception.Message);
+            Assert.Equal(0, runtime.LaunchCount);
+        }
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Theory]
     [InlineData("vanilla")]
     [InlineData("neoforge")]
     [InlineData("curseforge")]
@@ -864,6 +898,9 @@ public sealed class GameCoordinatorTests
 
         /// <summary>What the game reports about its menu, or <see langword="null"/> while it loads. Games show their title screen by default.</summary>
         public GameMenu? Menu { get; set; } = new("TitleScreen", Problem: null);
+
+        /// <summary>The container's memory limit in MiB. Containers have none by default.</summary>
+        public long? MemoryLimitMb { get; init; }
         public bool FailDisconnectReads { get; init; }
         public int DisconnectReads => Volatile.Read(ref _disconnectReads);
         public bool BlockStop { get; init; }
@@ -965,6 +1002,8 @@ public sealed class GameCoordinatorTests
                 ? Task.FromException<string?>(new InvalidOperationException("The Minecraft agent did not report the connection"))
                 : Task.FromResult(DisconnectReason);
         }
+
+        public long? ReadMemoryLimitMb() => MemoryLimitMb;
 
         public Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken) => Task.FromResult(Menu);
 

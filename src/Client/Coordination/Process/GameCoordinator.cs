@@ -8,6 +8,29 @@ internal sealed partial class GameCoordinator
     // Session diagnostics retain this many status warnings.
     private const int MaximumStatusWarnings = 8;
 
+    private static bool IsMaximumHeapArgument(string argument)
+    {
+        return argument.StartsWith(value: "-Xmx", StringComparison.Ordinal)
+               || argument.StartsWith(value: "--jvm-arg=-Xmx", StringComparison.Ordinal);
+    }
+
+    private string? FindMemoryProblem(int? memoryMb, string[] arguments)
+    {
+        if (memoryMb is not { } heapMb)
+            return null;
+
+        if (heapMb <= 0)
+            return "memoryMb must be a positive integer";
+
+        if (arguments.Any(IsMaximumHeapArgument))
+            return "memoryMb cannot be combined with an -Xmx JVM argument";
+
+        // The container's memory also holds the rest of the game and the client, so a heap that large ends with the game killed.
+        return runtime.ReadMemoryLimitMb() is { } limitMb && heapMb >= limitMb
+            ? $"memoryMb must be lower than the container's memory limit of {limitMb} MiB"
+            : null;
+    }
+
     private async Task HandleGameWarningAsync(GameWarning warning)
     {
         bool fromCurrentGame = _game?.Process.Id == warning.ProcessId;
