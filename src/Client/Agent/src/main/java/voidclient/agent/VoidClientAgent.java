@@ -47,6 +47,7 @@ public final class VoidClientAgent {
             GameAutomationController.initialize(instrumentation);
             instrumentation.addTransformer(new NettyReadInterestTransformer(), true);
             instrumentation.addTransformer(new DataFixerWarmupTransformer(), true);
+            instrumentation.addTransformer(new FatalErrorWindowTransformer(), true);
 
             if (installGameHooks(instrumentation)) {
                 instrumentation.addTransformer(new PlayerTransformer());
@@ -162,7 +163,8 @@ public final class VoidClientAgent {
 
             try {
                 String className = type.getName().replace('.', '/');
-                if (NettyReadInterestTransformer.ChannelName.equals(className) || DataFixerWarmupTransformer.BuilderName.equals(className)) {
+                if (NettyReadInterestTransformer.ChannelName.equals(className) || DataFixerWarmupTransformer.BuilderName.equals(className)
+                    || FatalErrorWindowTransformer.HandlerName.equals(className)) {
                     instrumentation.retransformClasses(type);
                     continue;
                 }

@@ -88,7 +88,7 @@ Treat it as failed if it reports `failed` or `canceled`, or if `operationId` cha
 ### When the game ends on its own
 
 The game should only end through `POST /api/game/stop`. If Minecraft quits, crashes, or is killed instead, `state` becomes `failed` with failure code `client.process.exited`, or `client.process.out_of_memory` when it ran out of memory.
-When Minecraft reports a crash but is still running 10 seconds later, such as NeoForge showing a mod loading error, the client closes it, with the same result.
+The client also closes a game that can't go on by itself, with the same result: NeoForge showing that mods failed to load, or Minecraft still running 10 seconds after it reported a crash.
 If no operation was running at the time, `operation` and `operationState` still describe the last one.
 A failed game can be started again.
 
