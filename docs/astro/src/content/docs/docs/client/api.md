@@ -3,30 +3,38 @@ title: API Reference
 description: Control the Docker Minecraft client over HTTP.
 ---
 
-The client API is available under `/api` on container port `80`.
-JSON property names and enum values use camel case.
+The API is served under `/api` on container port `80`. Request and response bodies are JSON with camel case names and enum values, unless noted otherwise.
+The examples publish the port as `8080`.
 
 ## Endpoints
 
 | Method | Path | Success | Description |
 | :----- | :--- | :------ | :---------- |
-| `GET` | `/api/health` | `200` | Check whether the client service is ready. |
-| `GET` | `/api/game/status` | `200` | Read the game state and latest operation. |
-| `GET` | `/api/game/diagnostics` | `200` | List retained diagnostic sessions. |
-| `GET` | `/api/game/diagnostics/{sessionId}` | `200` | Download a session diagnostic ZIP. |
-| `GET` | `/api/game/players` | `200` | Read the live local player and client-tracked players. |
-| `PUT` | `/api/game/options` | `204` | Replace Minecraft `options.txt`. |
-| `POST` | `/api/game/start/vanilla` | `202` | Start a Mojang vanilla release. |
-| `POST` | `/api/game/start/neoforge` | `202` | Start a NeoForge release, the newest with a stable build by default. |
-| `POST` | `/api/game/start/curseforge` | `202` | Start a CurseForge modpack file. |
-| `POST` | `/api/game/connect` | `200` | Converge the running game on a server connection. |
-| `POST` | `/api/game/send-chat` | `204` | Send chat text or a command. |
-| `GET` | `/api/game/screenshot` | `200` | Return the Minecraft window as `image/png`. |
-| `POST` | `/api/game/stop` | `200` | Stop the current game. |
+| `GET` | `/api/health` | `200` | Check that the API is ready. |
+| `GET` | `/api/game/status` | `200` | Read the game state and the latest operation. |
+| `POST` | `/api/game/start/vanilla` | `202` | Start a vanilla Minecraft release. |
+| `POST` | `/api/game/start/neoforge` | `202` | Start NeoForge. |
+| `POST` | `/api/game/start/curseforge` | `202` | Start a CurseForge modpack. |
+| `POST` | `/api/game/connect` | `200` | Connect the game to a server. |
+| `POST` | `/api/game/send-chat` | `204` | Send a chat message or a command. |
+| `GET` | `/api/game/players` | `200` | Read the local player and the players around it. |
+| `GET` | `/api/game/screenshot` | `200` | Capture the game window as `image/png`. |
+| `PUT` | `/api/game/options` | `204` | Replace Minecraft's `options.txt`. |
+| `POST` | `/api/game/stop` | `200` | Stop the game. |
+| `GET` | `/api/game/diagnostics` | `200` | List diagnostic sessions. |
+| `GET` | `/api/game/diagnostics/{sessionId}` | `200` | Download a session's diagnostics as ZIP. |
 
-## Status and Operations
+## Health
 
-`GET /api/game/status` returns the current state and the most recently accepted operation:
+```bash
+curl --fail http://localhost:8080/api/health
+```
+
+Returns `200 OK` with the text `ok` once the API accepts requests, and `503 Service Unavailable` before that.
+
+## Status
+
+`GET /api/game/status` describes the game and the most recent operation:
 
 ```json
 {
@@ -48,31 +56,176 @@ JSON property names and enum values use camel case.
 
 | Field | Description |
 | :---- | :---------- |
-| `state` | Game lifecycle: `idle`, `starting`, `ready`, `connected`, `stopping`, or `failed`. |
-| `operationId` | Increasing identifier for the latest accepted operation. |
-| `sessionId` | Diagnostic session identifier assigned to an accepted launch; `null` before the first launch. Retained after stop until another launch is accepted. |
-| `operation` | Latest operation: `start-vanilla`, `start-neoforge`, `start-curseforge`, `options`, `connect`, `send-chat`, `screenshot`, or `stop`; otherwise `null`. |
+| `state` | The game's state, described below. |
+| `operationId` | Identifier of the latest operation. It increases with every accepted operation. |
+| `sessionId` | [Diagnostic session](#diagnostics) of the latest launch, or `null` before the first one. |
+| `operation` | The latest operation: `start-vanilla`, `start-neoforge`, `start-curseforge`, `connect`, `send-chat`, `screenshot`, `options`, or `stop`. |
 | `operationState` | `none`, `running`, `succeeded`, `failed`, or `canceled`. |
-| `processId` | Minecraft process identifier while it is running. |
-| `exitCode` | Process exit code after the game exits, when available. It can be `0` even after a crash, so use `state` and `failure` to tell how the game ended. |
-| `server` | Connected `host` and `port`, otherwise `null`. |
-| `message` | Short description of the current result. |
-| `error` | Failure message, otherwise `null`. |
-| `failure` | Structured runtime failure with `code`, `operation`, `stage`, `message`, `exceptionType`, and full `stackTrace`; otherwise `null`. |
-| `warnings` | Non-fatal messages associated with the state. |
-| `updatedAt` | ISO 8601 timestamp of the latest status change. |
+| `processId` | Process identifier while the game runs. |
+| `exitCode` | Exit code once the game has exited. It can be `0` even after a crash, so use `state` and `failure` instead. |
+| `server` | `host` and `port` of the connected server, otherwise `null`. |
+| `message` | Short human-readable description. |
+| `error` | Error message when something failed, otherwise `null`. |
+| `failure` | [Failure details](#failures) when something failed, otherwise `null`. |
+| `warnings` | Non-fatal notes, such as a dialog the client dismissed. |
+| `updatedAt` | Time of the latest change. |
 
-Start operations return this status with `202 Accepted` and a `Location: /api/game/status` header.
-Save its `operationId`, then poll until the same operation reports `ready` and `succeeded`.
-Stop polling with a failure if the identifier changes or the operation becomes `failed` or `canceled`.
+| State | Meaning |
+| :---- | :------ |
+| `idle` | No game is running. |
+| `starting` | The game is being prepared and launched. |
+| `ready` | The game is running and not connected to a server. |
+| `connected` | The game is connected to a server. |
+| `stopping` | The game is being stopped. |
+| `failed` | The launch failed, or the game ended without a stop request. |
 
-Runtime failures are also returned in the `failure` extension of HTTP Problem Details responses. Any end of the game other than `POST /api/game/stop`, whether Minecraft quit, crashed or was killed, sets `state` to `failed` with `client.process.exited`, or `client.process.out_of_memory` when it ran out of memory. When no operation was running, `operation` and `operationState` keep describing the last operation. Stack traces intentionally expose container implementation details and should not be forwarded to untrusted consumers.
+### Waiting for an operation
 
-Mods sometimes open native message boxes while Minecraft loads, and nobody can click them inside the container. The client answers every message box opened through `xmessage`, which LWJGL's dialogs use, with its negative button (Cancel or No) and adds a warning such as `Dialog "Memory Settings" answered with Cancel: …` to `warnings`. When `connect` meets a mod screen it can't navigate, such as a memory warning shown before the title screen, it presses the screen's Proceed button and reports that in `warnings` too. If a window from another process stays over the game for 10 seconds during `connect` or `send-chat`, the operation fails with stage `window.blocked` and names that window instead of waiting forever.
+Start requests return the status with `202 Accepted` and keep running in the background.
+Save the returned `operationId` and poll `/api/game/status` until that operation reaches `ready` and `succeeded`.
+Treat it as failed if it reports `failed` or `canceled`, or if `operationId` changes to another operation.
 
-## Live Players
+### When the game ends on its own
 
-`GET /api/game/players` reads players from the running Minecraft client. It does not require a mod, server plugin, or protocol-specific configuration.
+The game should only end through `POST /api/game/stop`. If Minecraft quits, crashes, or is killed instead, `state` becomes `failed` with failure code `client.process.exited`, or `client.process.out_of_memory` when it ran out of memory.
+If no operation was running at the time, `operation` and `operationState` still describe the last one.
+A failed game can be started again.
+
+## Starting a Game
+
+One game runs at a time. A start request is accepted when the state is `idle` or `failed` and returns `409 Conflict` otherwise.
+
+All start requests accept these optional fields:
+
+| Field | Description |
+| :---- | :---------- |
+| `arguments` | [PortableMC start arguments](https://github.com/mindstorm38/portablemc), such as `["--username", "TestPlayer"]`. Without a username, the game uses a generated offline name. |
+| `memoryMb` | Maximum Java heap of the game in MiB. It does not limit the container's memory. Don't combine it with an `-Xmx` argument. |
+
+Mojang's launcher gives Minecraft 2 GiB, or 4 GiB from 26.1 onwards. See [**Minecraft Java Edition memory allocation**](https://help.minecraft.net/hc/en-us/articles/39083573916941).
+
+### Vanilla
+
+`version` is required and is a Mojang release identifier:
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"version":"1.21.8","memoryMb":2048,"arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/vanilla
+```
+
+### NeoForge
+
+`version` is an optional Minecraft release identifier. Without it, the client starts the newest Minecraft release that has a stable NeoForge build. Snapshots and pre-releases are never chosen.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"memoryMb":4096,"arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/neoforge
+```
+
+To limit that choice, for example to what your server accepts, set `maximumMinecraftVersion`. It can't be combined with `version`.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"maximumMinecraftVersion":"1.21.8","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/neoforge
+```
+
+To start a specific Minecraft version:
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"version":"1.21.1","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/neoforge
+```
+
+The client also installs Sodium when a build exists for that Minecraft version.
+
+### CurseForge
+
+`slug` is the modpack's project slug and `fileId` is the modpack file to start. The container needs a [CurseForge API key](/docs/client/images/#curseforge-configuration).
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"slug":"all-the-mods-10","fileId":1234567,"memoryMb":4096,"arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/curseforge
+```
+
+:::note
+Replace the example `fileId` with the file you want to start.
+:::
+
+If any modpack file can't be downloaded, the launch fails with an error that lists every missing file.
+
+## Connecting
+
+The game must be `ready`. `port` must be between `1` and `65535`.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"host":"minecraft-server","port":25565}' \
+  http://localhost:8080/api/game/connect
+```
+
+The response arrives once the game has joined:
+
+```json
+{
+  "server": {
+    "host": "minecraft-server",
+    "port": 25565
+  },
+  "connectedAt": "2026-08-12T12:01:00+00:00"
+}
+```
+
+Connecting is safe to repeat. Requests for the same server share one connection attempt, and a game already connected to that server returns the original response. A request for a different server returns `409 Conflict` while the game is connecting or connected.
+Canceling the HTTP request doesn't cancel the connection attempt. Use `POST /api/game/stop` to abort it.
+
+Mods that replace the main menu are supported. When the client has to work around a menu, it says so in `warnings`.
+
+A failed connection reports one of these `failure.stage` values:
+
+| Stage | Meaning |
+| :---- | :------ |
+| `connection.rejected` | The server disconnected the game while it was joining. The message is the server's reason. |
+| `player.unexpected` | The server let the game in under a different player name than it was started with. |
+| `ui.route` | The client couldn't reach the Direct Connection screen within 60 seconds. |
+| `window.blocked` | A window from another program covered the game for 10 seconds. The message names it. |
+
+If the game later leaves the server, for example after a kick or a timeout, `state` returns to `ready`, `server` becomes `null`, and `message` gives the reason.
+Switching servers behind a proxy keeps the game `connected`.
+
+## Sending Chat
+
+The game must be `connected`. Messages that start with `/` are sent as commands.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"message":"Hello from the client"}' \
+  http://localhost:8080/api/game/send-chat
+```
+
+Returns `409 Conflict` when the game isn't in a world, for example while a proxy switches servers.
+
+## Players
+
+`GET /api/game/players` returns the local player and the other players the game can see. The game must be `ready` or `connected`. No server plugin or mod is needed.
 
 ```json
 {
@@ -95,19 +248,20 @@ Mods sometimes open native message boxes while Minecraft loads, and nobody can c
 }
 ```
 
-Every returned player always contains finite `x`, `y`, and `z` coordinates plus finite body yaw, head yaw, and head pitch values in degrees. Profile identity is `null` when unavailable. A client without a current player world returns `409 Conflict`; tracker initialization or complete position or rotation failures return `503 Service Unavailable` rather than partial player data.
+Angles are in degrees. `uuid` and `name` are `null` when the game doesn't know them.
+Returns `409 Conflict` when the game isn't in a world, and `503 Service Unavailable` when the players can't be read.
 
-## Health
+## Screenshot
+
+The game must be `ready` or `connected`.
 
 ```bash
-curl --fail http://localhost:8080/api/health
+curl --fail --output minecraft.png http://localhost:8080/api/game/screenshot
 ```
-
-A ready API returns `200 OK` with `ok` as plain text. An unavailable client service returns `503 Service Unavailable`.
 
 ## Game Options
 
-Send the complete `options.txt` contents as `text/plain`:
+Send the complete contents of Minecraft's `options.txt` as `text/plain`. They apply from the next launch.
 
 ```bash
 curl --fail-with-body \
@@ -117,150 +271,13 @@ curl --fail-with-body \
   http://localhost:8080/api/game/options
 ```
 
-The options are retained in the configured Minecraft directory and used by later launches.
-
-## Starting a Game
-
-Only one game can run at a time. Every start request accepts an optional `arguments` array containing PortableMC start arguments and an optional positive `memoryMb` integer. Without `--username`, the game plays under the offline name PortableMC generates, and the client follows that name. When provided, `memoryMb` sets the Minecraft JVM maximum heap through `-Xmx`; it does not limit total container memory. Do not also provide a raw `-Xmx` argument.
-
-Mojang used a 2 GiB default before 26.1 and changed it to 4 GiB for 26.1. See [**Minecraft Java Edition memory allocation**](https://help.minecraft.net/hc/en-us/articles/39083573916941) and the [**Minecraft Java Edition 26.1 release notes**](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1).
-
-### Vanilla
-
-`version` is a Mojang release identifier:
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"version":"1.21.8","memoryMb":2048,"arguments":["--username","TestPlayer"]}' \
-  http://localhost:8080/api/game/start/vanilla
-```
-
-### NeoForge
-
-`version` is an optional Minecraft release identifier, the same form the vanilla endpoint accepts. Omit it, or send a
-blank value, to start the newest Mojang release that has a stable NeoForge build. While a new Minecraft release only has
-NeoForge beta builds, the client falls back to the newest earlier release that has a stable build. Snapshots and
-pre-releases are never selected.
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"memoryMb":4096,"arguments":["--username","TestPlayer"]}' \
-  http://localhost:8080/api/game/start/neoforge
-```
-
-`maximumMinecraftVersion` optionally caps that choice at a Mojang release identifier, for example when the server only
-accepts versions up to that release. It applies only when `version` is omitted: sending both returns `400`, and an
-identifier that is not a Mojang release fails the launch.
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"maximumMinecraftVersion":"26.2","memoryMb":4096,"arguments":["--username","TestPlayer"]}' \
-  http://localhost:8080/api/game/start/neoforge
-```
-
-Supply `version` to start NeoForge for a specific Minecraft version instead:
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"version":"1.21.1","memoryMb":2048,"arguments":["--username","TestPlayer"]}' \
-  http://localhost:8080/api/game/start/neoforge
-```
-
-Sodium is installed automatically for the exact resolved Minecraft version: the newest build on Modrinth, including betas,
-because older Sodium builds can target NeoForge internals that newer NeoForge builds no longer have. The launch continues
-without Sodium when Modrinth has no build for that version.
-On ARM64 images the client also selects the LWJGL natives and, when needed, downloads the Java runtime that the resolved
-Minecraft version requires.
-
-### CurseForge
-
-Provide a project `slug` and positive CurseForge `fileId`. The container must have `CURSEFORGE_API_KEY` configured.
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"slug":"all-the-mods-10","fileId":1234567,"memoryMb":4096,"arguments":["--username","TestPlayer"]}' \
-  http://localhost:8080/api/game/start/curseforge
-```
-
-:::note
-Replace the example CurseForge file identifier with the exact file you want to launch.
-:::
-
-Mods whose authors disallow third-party API downloads are fetched from CurseForge's CDN, and every downloaded file is checked
-against the SHA-1 hash CurseForge publishes. If any file still cannot be downloaded, the launch fails with one error that
-lists every missing file.
-
-## Connecting
-
-The game must be running. `port` must be between `1` and `65535`. Connection navigation is idempotent for a given `host` and `port`: repeated callers join the same background operation, and an already-connected game returns its original result. A different target is rejected with `409 Conflict` while connecting or connected.
-
-Canceling an HTTP caller stops only that caller's wait. The background navigation continues from whichever Minecraft screen is currently visible until the game connects, exits, or is stopped through the API. If the server lets the game in under a different name than the one it was started with, the connection fails with stage `player.unexpected` and names both players.
-
-Connecting also works from main menus that mods replace. When the client has to open the multiplayer screen itself, it adds a warning to `warnings`. If it can't reach Direct Connection within 60 seconds, the connection fails with stage `ui.route` and names the screen it was on.
-
-If the server drops the game before it has finished joining, the connection fails with stage `connection.rejected` and the disconnect reason. When a connected game leaves the server, because it was kicked, timed out or lost its connection, `state` goes back to `ready`, `server` becomes `null`, and `message` names the server and the reason. Switching servers behind a proxy keeps the game `connected`.
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"host":"minecraft-server","port":25565}' \
-  http://localhost:8080/api/game/connect
-```
-
-The confirmed connection returns:
-
-```json
-{
-  "server": {
-    "host": "minecraft-server",
-    "port": 25565
-  },
-  "connectedAt": "2026-08-12T12:01:00+00:00"
-}
-```
-
-## Sending Chat
-
-The game must be `connected`. A leading `/` sends a Minecraft command. If the game has left the server, or has no player in a world yet, such as during a proxy's server switch, the request fails with `409 Conflict` and leaves the screen untouched.
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header 'Content-Type: application/json' \
-  --data '{"message":"Hello from the client"}' \
-  http://localhost:8080/api/game/send-chat
-```
-
-## Taking a Screenshot
-
-The game must be `ready` or `connected`.
-
-```bash
-curl --fail \
-  --output minecraft.png \
-  http://localhost:8080/api/game/screenshot
-```
-
 ## Stopping
 
 ```bash
-curl --fail-with-body \
-  --request POST \
-  http://localhost:8080/api/game/stop
+curl --fail-with-body --request POST http://localhost:8080/api/game/stop
 ```
 
-The response contains `mode` and the final `status`:
+Stopping cancels any running operation, such as a start or a connection attempt, and waits until Minecraft has exited:
 
 ```json
 {
@@ -268,6 +285,7 @@ The response contains `mode` and the final `status`:
   "status": {
     "state": "idle",
     "operationId": 5,
+    "sessionId": "16721635-5993-47fc-827e-727262544c24",
     "operation": "stop",
     "operationState": "succeeded",
     "processId": null,
@@ -275,41 +293,105 @@ The response contains `mode` and the final `status`:
     "server": null,
     "message": "Game stopped",
     "error": null,
+    "failure": null,
     "warnings": [],
     "updatedAt": "2026-08-12T12:02:00+00:00"
   }
 }
 ```
 
-`mode` is `alreadyStopped`, `graceful`, or `forced`.
+| Mode | Meaning |
+| :--- | :------ |
+| `alreadyStopped` | No game was running. |
+| `graceful` | Minecraft closed when asked. |
+| `forced` | Minecraft didn't close within 10 seconds and was killed. |
 
 ## Errors
 
-Errors use the standard Problem Details JSON format.
+Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format. Failed game operations include the same `failure` object as the status:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Client connect failed",
+  "status": 500,
+  "detail": "The server is full!",
+  "failure": {
+    "code": "client.connect.rejected",
+    "operation": "connect",
+    "stage": "connection.rejected",
+    "message": "The server is full!",
+    "exceptionType": "Void.Client.Failures.GameClientException",
+    "stackTrace": "…"
+  }
+}
+```
 
 | Status | Meaning |
 | :----- | :------ |
 | `400 Bad Request` | A required value is missing or invalid. |
+| `404 Not Found` | The diagnostic session doesn't exist. |
 | `408 Request Timeout` | The request was canceled. |
-| `409 Conflict` | The requested action is not valid for the current game state or another operation is running. |
-| `500 Internal Server Error` | The operation failed unexpectedly. |
-| `503 Service Unavailable` | The client service is not ready. |
-| `504 Gateway Timeout` | A client operation exceeded its timeout. |
+| `409 Conflict` | The game's state doesn't allow the request, or another operation is running. |
+| `500 Internal Server Error` | The operation failed. |
+| `503 Service Unavailable` | The API, or the data requested, isn't available yet. |
+| `504 Gateway Timeout` | The operation timed out. |
 
+### Failures
 
-## Retained diagnostics
+| Field | Description |
+| :---- | :---------- |
+| `code` | Stable failure code to check in code. |
+| `operation` | The part of the client that failed. |
+| `stage` | The step that failed, such as the [connection stages](#connecting). |
+| `message` | Human-readable description. |
+| `exceptionType`, `stackTrace` | Details for debugging. Don't show them to untrusted users. |
 
-Each accepted launch creates a diagnostic session before preparation begins. A session includes early launch failures as well as evidence from a running game. Stopping Minecraft does not erase it, and subsequent launches receive different identifiers.
+| Code | Meaning |
+| :--- | :------ |
+| `client.process.exited` | Minecraft ended without a stop request. |
+| `client.process.out_of_memory` | Minecraft ran out of memory and was killed. |
+| `client.connect.rejected` | The server disconnected the game while it was joining. |
+| `client.connect.failed` | The game couldn't connect for another reason. |
+| `client.chat.failed` | The chat message couldn't be sent. |
+| `client.players.unavailable` | The players couldn't be read. |
+| `client.operation.timeout` | The operation timed out. |
+| `client.operation.failed` | Any other failure. |
 
-### List sessions
+## Diagnostics
 
-`GET /api/game/diagnostics` returns sessions newest first:
+Every launch creates a diagnostic session with the game's output, logs, crash reports, and a screenshot on failure. Its identifier is the `sessionId` in the start response.
+Sessions remain after the game stops, so download them before removing the container.
+
+```sh
+client_session_id=$(curl --fail --silent \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"version":"1.21.8","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/vanilla | jq -r '.sessionId')
+
+# Run the test, then stop the game.
+curl --fail --request POST http://localhost:8080/api/game/stop
+
+curl --fail --output "client-diagnostics-$client_session_id.zip" \
+  "http://localhost:8080/api/game/diagnostics/$client_session_id"
+```
+
+Downloads also work while the game runs and don't affect it. An unknown or expired session returns `404 Not Found`.
+
+:::caution
+Game logs and screenshots can contain player names, server addresses, and chat.
+:::
+
+### Listing sessions
+
+`GET /api/game/diagnostics` lists sessions, newest first:
 
 ```json
 [
   {
     "sessionId": "16721635-5993-47fc-827e-727262544c24",
-    "launch": "start-vanilla:1.21.1:",
+    "launch": "start-vanilla:1.21.8:",
     "startedAt": "2026-09-05T12:00:00+00:00",
     "endedAt": "2026-09-05T12:02:00+00:00",
     "status": null,
@@ -320,58 +402,29 @@ Each accepted launch creates a diagnostic session before preparation begins. A s
 ]
 ```
 
-`status` contains the latest game status recorded for that session when available. `lastFailure` preserves the most recent structured failure even when a successful stop has cleared the current status error. `warnings` describes missing, truncated, or unavailable evidence. `endedAt` is `null` until the session is finalized.
+`status` is the session's latest game status. `lastFailure` keeps the session's most recent failure even after a stop clears it from the status. `endedAt` is `null` while the session is running. `warnings` lists evidence that is missing or was cut short.
 
-### Download a session
-
-`GET /api/game/diagnostics/{sessionId}` returns `200 OK` with `Content-Type: application/zip` and a download filename. An unknown or expired session returns `404 Not Found`.
-
-Save the `sessionId` from the accepted start response and use that exact identifier during cleanup:
-
-```sh
-curl --fail --silent --show-error \
-  --request POST http://localhost:8080/api/game/start/vanilla \
-  --header 'Content-Type: application/json' \
-  --data '{"version":"1.21.1","arguments":["--username","TestPlayer"]}' \
-  --output launch.json
-
-client_session_id=$(jq -r '.sessionId' launch.json)
-
-# Poll readiness, connect, and perform the test before cleanup.
-curl --fail --request POST http://localhost:8080/api/game/stop
-curl --fail --silent --show-error \
-  "http://localhost:8080/api/game/diagnostics/$client_session_id" \
-  --output "client-diagnostics-$client_session_id.zip"
-```
-
-Download before removing the container. Downloads also work while Minecraft runs; they capture evidence available at that moment without changing the current operation or game state.
-
-The ZIP contains available evidence:
+### Archive contents
 
 | File | Contents |
-| :--- | :--- |
-| `session.json` | Session identity, launch description, timestamps, latest status, last failure, and collection warnings. |
-| `operations.jsonl` | Timestamped game status transitions and operation outcomes. |
-| `console-*.log` | Recent launcher, Minecraft, agent, and preparation output. |
-| `previous-*.log`, `previous-operations.jsonl` | Previous retained segment after output rotation. |
-| `logs-latest.log`, `logs-debug.log` | Recent Minecraft log contents changed during this session. |
-| `debug-disconnect-*.txt` | Minecraft disconnect reports from this session. |
-| `crash-reports-crash-*.txt` | Minecraft crash reports from this session. |
-| `failure-*.png` | Best-effort failure screenshot, when the matching game window remains available. |
+| :--- | :------- |
+| `session.json` | The session's details, as in the list. |
+| `operations.jsonl` | Every status change and operation result. |
+| `console-*.log`, `previous-*` | Recent console output of the game and the client. |
+| `logs-latest.log`, `logs-debug.log` | Minecraft's logs. |
+| `crash-reports-crash-*.txt` | Minecraft crash reports. |
+| `debug-disconnect-*.txt` | Minecraft disconnect reports. |
+| `failure-*.png` | Screenshots taken when an operation failed. |
 
-Missing reports or failed screenshots do not replace the original game error. Screenshot collection is limited to three seconds. Console output continues to appear in Docker logs. The bundle excludes credential stores and agent authentication tokens, but game logs and screenshots can still contain player names, server addresses, and chat.
-
-### Retention configuration
-
-Configure the container with Docker environment variables:
+### Retention
 
 | Variable | Default | Meaning |
-| :--- | :--- | :--- |
-| `VOID_DIAGNOSTICS_DIRECTORY` | `/var/lib/void-client/diagnostics` | Session evidence directory. |
-| `VOID_DIAGNOSTICS_MAXIMUM_SESSIONS` | `10` | Maximum retained sessions; oldest completed sessions expire first. |
-| `VOID_DIAGNOSTICS_MAXIMUM_TOTAL_MB` | `256` | Total storage budget in MiB. |
-| `VOID_DIAGNOSTICS_MAXIMUM_SESSION_MB` | `32` | Storage budget per session in MiB. |
+| :------- | :------ | :------ |
+| `VOID_DIAGNOSTICS_DIRECTORY` | `/var/lib/void-client/diagnostics` | Where sessions are stored. |
+| `VOID_DIAGNOSTICS_MAXIMUM_SESSIONS` | `10` | Maximum number of sessions kept. |
+| `VOID_DIAGNOSTICS_MAXIMUM_TOTAL_MB` | `256` | Storage for all sessions, in MiB. |
+| `VOID_DIAGNOSTICS_MAXIMUM_SESSION_MB` | `32` | Storage for one session, in MiB. |
 
-Limits must be positive and the total budget must accommodate one session. Individual evidence files are capped at 2 MiB; console and operation logs rotate to retain recent output. Collection warnings identify truncation and omitted evidence. Active sessions are protected from eviction, so reaching a storage limit can omit additional evidence until space becomes available.
+When a limit is reached, the oldest finished sessions are removed first. The running session is never removed. Evidence that doesn't fit is left out and noted in its `warnings`.
 
-Storage survives game stop and start within the same container. For persistence after container removal, mount a volume at the diagnostics directory, for example `--volume client-diagnostics:/var/lib/void-client/diagnostics`. Stored sessions are discovered when the API starts again.
+To keep sessions after the container is removed, mount a volume at the diagnostics directory, for example `--volume client-diagnostics:/var/lib/void-client/diagnostics`.
