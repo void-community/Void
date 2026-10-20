@@ -129,7 +129,10 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
             ).ConfigureAwait(continueOnCapturedContext: false);
         }
 
-        var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var armLaunchOptions = await PrepareMinecraftAsync(
+            () => PrepareArmLaunchOptionsAsync(minecraftDirectory, GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
 
         // The modpack brings its own mods and options, so only Minecraft and its mod loader are prepared, where downloads are retried.
         string preparedMinecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
@@ -149,7 +152,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         if (!string.IsNullOrWhiteSpace(version))
             return await LaunchPortableAsync($"neoforge:{version}", minecraftVersion: null, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        var selection = await ResolveLatestStableNeoForgeAsync(maximumMinecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var selection = await PrepareMinecraftAsync(() => ResolveLatestStableNeoForgeAsync(maximumMinecraftVersion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         // An exact loader build keeps the dry run and the launch on the same NeoForge version.
         return await LaunchPortableAsync($"neoforge::{selection.NeoForgeVersion}", selection.MinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);

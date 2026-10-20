@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 
+using Void.Client.Failures;
+
 namespace Void.Client;
 
 internal sealed partial class GameRuntime
@@ -221,6 +223,29 @@ internal sealed partial class GameRuntime
     private static bool IsTransientUpstreamFailure(Exception exception, CancellationToken cancellationToken)
     {
         return exception is HttpRequestException || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested);
+    }
+
+    private static GameClientException MinecraftPreparationFailure(string message, Exception? innerException = null, bool unavailable = false)
+    {
+        string code = unavailable ? "client.install.unavailable" : "client.install.failed";
+
+        return new GameClientException(code, operation: "install", stage: "minecraft", message, innerException);
+    }
+
+    /// <summary>
+    /// Runs a step that prepares Minecraft or its mod loader before the dry run, such as choosing the NeoForge build or the ARM64 natives,
+    /// and reports its failure as an install failure, which is unavailable when an upstream stayed unavailable after its retries.
+    /// </summary>
+    private static async Task<TResult> PrepareMinecraftAsync<TResult>(Func<Task<TResult>> step, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await step().ConfigureAwait(continueOnCapturedContext: false);
+        }
+        catch (Exception exception) when (exception is not GameClientException && !cancellationToken.IsCancellationRequested)
+        {
+            throw MinecraftPreparationFailure(exception.Message, exception, IsUpstreamUnavailable(exception, cancellationToken));
+        }
     }
 
     private static async Task<NeoForgeSelection> ResolveLatestStableNeoForgeAsync(string? maximumMinecraftVersion, CancellationToken cancellationToken)

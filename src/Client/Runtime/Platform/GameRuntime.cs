@@ -94,6 +94,42 @@ internal sealed partial class GameRuntime
         return arguments;
     }
 
+    /// <summary>Downloads a file, trying again a few times while the upstream is unavailable.</summary>
+    internal static async Task DownloadFileAsync(HttpClient httpClient, Uri downloadUri, string destinationPath, TimeSpan retryDelay, CancellationToken cancellationToken)
+    {
+        var destinationDirectoryInformation = Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? ".");
+        string temporaryPath = Path.Combine(destinationDirectoryInformation.FullName, $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}");
+
+        try
+        {
+            for (int attempt = 1; attempt <= UpstreamRequestAttempts; attempt++)
+            {
+                try
+                {
+                    using var response = await httpClient.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                    var successfulResponse = response.EnsureSuccessStatusCode();
+
+                    using (var temporaryFile = File.Create(temporaryPath))
+                        await successfulResponse.Content.CopyToAsync(temporaryFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
+
+                    return;
+                }
+                catch (Exception exception) when (attempt < UpstreamRequestAttempts && IsUpstreamUnavailable(exception, cancellationToken))
+                {
+                    await Console.Error.WriteLineAsync($"Download of {downloadUri} failed on attempt {attempt}/{UpstreamRequestAttempts}: {exception.Message}").ConfigureAwait(continueOnCapturedContext: false);
+                    await Task.Delay(retryDelay * attempt, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                }
+            }
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
+    }
+
     internal static string? GetMinecraftVersionFromNeoForgeVersion(string neoForgeVersion)
     {
         if (neoForgeVersion == "47.1.82" || neoForgeVersion.StartsWith(value: "1.20.1-", StringComparison.Ordinal))
@@ -151,28 +187,6 @@ internal sealed partial class GameRuntime
         return null;
     }
 
-    private static async Task DownloadFileAsync(HttpClient httpClient, Uri downloadUri, string destinationPath, CancellationToken cancellationToken)
-    {
-        var destinationDirectoryInformation = Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? ".");
-        string temporaryPath = Path.Combine(destinationDirectoryInformation.FullName, $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}");
-
-        try
-        {
-            using var response = await httpClient.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            var successfulResponse = response.EnsureSuccessStatusCode();
-
-            using (var temporaryFile = File.Create(temporaryPath))
-                await successfulResponse.Content.CopyToAsync(temporaryFile, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            File.Move(temporaryPath, destinationPath, overwrite: true);
-        }
-        finally
-        {
-            File.Delete(temporaryPath);
-        }
-    }
-
     private static async Task<string> EnsureLwjglCoreFileAsync(
         HttpClient httpClient,
         string minecraftDirectory,
@@ -190,7 +204,7 @@ internal sealed partial class GameRuntime
         string libraryPath = Path.Combine([minecraftDirectory, "libraries", "org", "lwjgl", "lwjgl", lwjglVersion, fileName]);
 
         if (!File.Exists(libraryPath))
-            await DownloadFileAsync(httpClient, downloadUri, libraryPath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await DownloadFileAsync(httpClient, downloadUri, libraryPath, UpstreamRetryDelay, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return libraryPath;
     }
@@ -343,7 +357,7 @@ internal sealed partial class GameRuntime
 
         try
         {
-            await DownloadFileAsync(httpClient, new Uri(downloadUrl, UriKind.Absolute), archivePath, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            await DownloadFileAsync(httpClient, new Uri(downloadUrl, UriKind.Absolute), archivePath, UpstreamRetryDelay, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
             var stagingDirectoryInformation = Directory.CreateDirectory(stagingDirectory);
 

@@ -39,11 +39,6 @@ internal sealed partial class GameRuntime
             .ToDictionary(window => window.Id, window => firstSeen.GetValueOrDefault(window.Id, now), StringComparer.Ordinal);
     }
 
-    private static GameClientException MinecraftPreparationFailure(string message, Exception? innerException = null)
-    {
-        return new GameClientException(code: "client.install.failed", operation: "install", stage: "minecraft", message, innerException);
-    }
-
     private async Task<MinecraftWindowLease> AcquirePreparedWindowLeaseAsync(string display, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -401,7 +396,12 @@ internal sealed partial class GameRuntime
     )
     {
         string minecraftDirectory = GetMinecraftDirectory();
-        var armLaunchOptions = await PrepareArmLaunchOptionsAsync(minecraftDirectory, minecraftVersion ?? GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+        var armLaunchOptions = await PrepareMinecraftAsync(
+            () => PrepareArmLaunchOptionsAsync(minecraftDirectory, minecraftVersion ?? GetMinecraftVersionFromPortableVersion(portableMinecraftVersion), cancellationToken),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
         await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);

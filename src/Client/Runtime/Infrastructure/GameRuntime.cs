@@ -213,6 +213,22 @@ internal sealed partial class GameRuntime
         return statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int)statusCode >= 500;
     }
 
+    /// <summary>
+    /// Tells whether a request failed because the upstream was unavailable, so trying again later may succeed: it didn't answer, timed out,
+    /// lost the connection mid-answer, or answered with a <see cref="IsTransientStatus">transient status</see>.
+    /// </summary>
+    internal static bool IsUpstreamUnavailable(Exception exception, CancellationToken cancellationToken)
+    {
+        return exception switch
+        {
+            HttpRequestException { StatusCode: { } statusCode } => IsTransientStatus(statusCode),
+            HttpRequestException => true,
+            IOException readFailure => readFailure is HttpIOException || readFailure.InnerException is SocketException,
+            TaskCanceledException => !cancellationToken.IsCancellationRequested,
+            _ => false
+        };
+    }
+
     internal static async Task<string> PrepareCurseForgeAsync(
         HttpClient httpClient,
         string slug,
@@ -819,9 +835,7 @@ internal sealed partial class GameRuntime
         catch (IOException exception) when (!cancellationToken.IsCancellationRequested)
         {
             // A connection lost mid-file may work next time, while writing the file, such as to a full disk, would fail again.
-            bool connectionLost = exception is HttpIOException || exception.InnerException is SocketException;
-
-            return new CandidateFailure($"{candidate.Host} failed: {exception.Message}", connectionLost);
+            return new CandidateFailure($"{candidate.Host} failed: {exception.Message}", IsUpstreamUnavailable(exception, cancellationToken));
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
