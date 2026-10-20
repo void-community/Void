@@ -45,7 +45,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
 
             ClassNode type = new ClassNode();
             new ClassReader(classFileBuffer).accept(type, 0);
-            boolean changed = client && instrument(type, index.plan.frame);
+            boolean changed = client && instrument(type, index.plan.frame, classBeingRedefined != null);
 
             // Without the client frame hook nothing the agent follows or automates ever runs.
             if (client && !changed && !hasClientHook(type))
@@ -70,7 +70,18 @@ final class GameAutomationTransformer implements ClassFileTransformer {
         }
     }
 
-    static boolean instrument(ClassNode type, FramePlan frame) {
+    /**
+     * Calls the agent once per client frame, from the loop right before it runs the frame. A client class that is already loaded, such as
+     * when the agent attaches to a running game, is already in that loop, which never returns and so never runs the new code. There the
+     * call goes at the start of the frame instead, which the loop enters again on the next frame.
+     */
+    static boolean instrument(ClassNode type, FramePlan frame, boolean alreadyLoaded) {
+        if (alreadyLoaded && hasClientHook(type))
+            return false;
+
+        if (alreadyLoaded && instrumentFrameStart(type, frame))
+            return true;
+
         boolean changed = false;
 
         for (MethodNode method : type.methods) {
@@ -90,6 +101,18 @@ final class GameAutomationTransformer implements ClassFileTransformer {
         }
 
         return changed;
+    }
+
+    private static boolean instrumentFrameStart(ClassNode type, FramePlan frame) {
+        for (MethodNode method : type.methods) {
+            if (!frame.frameName.equals(method.name) || !frame.frameDescriptor.equals(method.desc) || (method.access & Opcodes.ACC_STATIC) != 0)
+                continue;
+
+            method.instructions.insert(controllerCall("applyClient"));
+            return true;
+        }
+
+        return false;
     }
 
     static boolean instrumentRejections(ClassNode type, List<String> callbacks, Set<String> networkTypes) {

@@ -22,8 +22,8 @@ public final class GameAutomationTransformerTest {
             new ClassReader(input).accept(type, 0);
         }
         FramePlan plan = new FramePlan(name, "loop", "()V", "frame", "()V");
-        Assert.assertTrue(GameAutomationTransformer.instrument(type, plan));
-        Assert.assertFalse(GameAutomationTransformer.instrument(type, plan));
+        Assert.assertTrue(GameAutomationTransformer.instrument(type, plan, false));
+        Assert.assertFalse(GameAutomationTransformer.instrument(type, plan, false));
         for (MethodNode method : type.methods)
             for (AbstractInsnNode instruction : method.instructions)
                 if (instruction instanceof MethodInsnNode) {
@@ -41,6 +41,38 @@ public final class GameAutomationTransformerTest {
         Object instance = host.getConstructor().newInstance();
         Assert.assertEquals(0, Probe.calls);
         host.getMethod("loop").invoke(instance);
+        Assert.assertEquals(2, Probe.calls);
+        Assert.assertFalse(Probe.rendering);
+    }
+
+    @Test
+    public void reachesTheLoopAGameAlreadyRunsThroughTheStartOfItsFrame() throws Exception {
+        // Agents attached to a running game retransform a client class whose loop never returns, so a call added there never runs.
+        String name = FrameHost.class.getName().replace('.', '/');
+        ClassNode type = new ClassNode();
+        try (InputStream input = FrameHost.class.getResourceAsStream("/" + name + ".class")) {
+            new ClassReader(input).accept(type, 0);
+        }
+        FramePlan plan = new FramePlan(name, "loop", "()V", "frame", "()V");
+        Assert.assertTrue(GameAutomationTransformer.instrument(type, plan, true));
+        Assert.assertFalse(GameAutomationTransformer.instrument(type, plan, true));
+        for (MethodNode method : type.methods)
+            for (AbstractInsnNode instruction : method.instructions)
+                if (instruction instanceof MethodInsnNode) {
+                    MethodInsnNode call = (MethodInsnNode) instruction;
+                    if (call.owner.equals(VoidClientAgent.GameHooksName)) {
+                        Assert.assertEquals("frame", method.name);
+                        call.owner = Probe.class.getName().replace('.', '/');
+                    }
+                }
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        type.accept(writer);
+        Probe.calls = 0;
+        Probe.rendering = false;
+        Class<?> host = new BytecodeLoader().define(writer.toByteArray());
+        Object instance = host.getConstructor().newInstance();
+        host.getMethod("frame").invoke(instance);
+        host.getMethod("frame").invoke(instance);
         Assert.assertEquals(2, Probe.calls);
         Assert.assertFalse(Probe.rendering);
     }
