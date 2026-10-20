@@ -164,10 +164,10 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         // The modpack brings its own mods and options, so only Minecraft and its mod loader are prepared, where downloads are retried.
-        string preparedMinecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        await Console.Error.WriteLineAsync($"Prepared Minecraft {preparedMinecraftVersion} for the modpack").ConfigureAwait(continueOnCapturedContext: false);
+        var installation = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await Console.Error.WriteLineAsync($"Prepared Minecraft {installation.MinecraftVersion} for the modpack").ConfigureAwait(continueOnCapturedContext: false);
 
-        return await LaunchGameAsync(minecraftDirectory, modpackDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        return await LaunchGameAsync(minecraftDirectory, modpackDirectory, $"mojang:{installation.Version}", armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<RunningGame> LaunchNeoForgeAsync(
@@ -183,7 +183,6 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
         var selection = await PrepareMinecraftAsync(() => ResolveLatestStableNeoForgeAsync(maximumMinecraftVersion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        // An exact loader build keeps the dry run and the launch on the same NeoForge version.
         return await LaunchPortableAsync($"neoforge::{selection.NeoForgeVersion}", selection.MinecraftVersion, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 

@@ -418,9 +418,10 @@ internal sealed partial class GameRuntime
             cancellationToken
         ).ConfigureAwait(continueOnCapturedContext: false);
 
-        await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        string installedVersion = await PreparePortableMinecraftClientAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        return await LaunchGameAsync(minecraftDirectory, minecraftDirectory, portableMinecraftVersion, armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        // The installed build starts as is, so a mod loader build released after the dry run can't replace it.
+        return await LaunchGameAsync(minecraftDirectory, minecraftDirectory, $"mojang:{installedVersion}", armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private Process LaunchPortableMinecraftClient(
@@ -521,7 +522,8 @@ internal sealed partial class GameRuntime
         throw new TimeoutException($"A previous Minecraft window did not close before the next launch: {remainingWindow}");
     }
 
-    private async Task PreparePortableMinecraftClientAsync(
+    /// <returns>The id of the installed version.</returns>
+    private async Task<string> PreparePortableMinecraftClientAsync(
         string minecraftDirectory,
         string portableMinecraftVersion,
         ArmLaunchOptions? armLaunchOptions,
@@ -534,9 +536,17 @@ internal sealed partial class GameRuntime
         if (!File.Exists(optionsPath) || new FileInfo(optionsPath).Length == 0)
             File.Copy(PortableMinecraftOptionsPath, optionsPath, overwrite: true);
 
-        string minecraftVersion = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        var installation = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
-        await RunPreparationScriptsAsync(PortableMinecraftPreparationDirectory, minecraftDirectory, portableMinecraftVersion, minecraftVersion, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        await RunPreparationScriptsAsync(
+            PortableMinecraftPreparationDirectory,
+            minecraftDirectory,
+            portableMinecraftVersion,
+            installation.MinecraftVersion,
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+
+        return installation.Version;
     }
 
     private async Task ResizeWindowToDisplayAsync(string windowId, CancellationToken cancellationToken = default)
@@ -558,8 +568,8 @@ internal sealed partial class GameRuntime
     /// Downloads and installs Minecraft and its mod loader without starting them, retrying through the dry-run script, so the launch itself
     /// downloads nothing that could fail.
     /// </summary>
-    /// <returns>The Minecraft version PortableMC loaded.</returns>
-    private async Task<string> RunPortableMinecraftDryRunAsync(
+    /// <returns>What PortableMC installed, which starts as the same build without resolving the version again.</returns>
+    private async Task<PortableMinecraftInstallation> RunPortableMinecraftDryRunAsync(
         string minecraftDirectory,
         string portableMinecraftVersion,
         ArmLaunchOptions? armLaunchOptions,
@@ -609,14 +619,8 @@ internal sealed partial class GameRuntime
             throw MinecraftPreparationFailure($"Minecraft {portableMinecraftVersion} could not be prepared (exit code {preparationResult.ExitCode}): {reason}");
         }
 
-        string? minecraftVersion = outputFields
-            .Where(static fields => fields.Length > 1 && fields[0] == "loaded_hierarchy")
-            .Select(static fields => fields[^1])
-            .LastOrDefault();
-
-        return string.IsNullOrWhiteSpace(minecraftVersion)
-            ? throw MinecraftPreparationFailure($"Minecraft {portableMinecraftVersion} was prepared without reporting its version")
-            : minecraftVersion;
+        return ParseLoadedHierarchy(outputFields)
+               ?? throw MinecraftPreparationFailure($"Minecraft {portableMinecraftVersion} was prepared without reporting its version");
     }
 
     private async Task<ProcessTextResult> RunProcessTextAsync(ProcessStartInfo processStartInformation, TimeSpan timeout, CancellationToken cancellationToken)

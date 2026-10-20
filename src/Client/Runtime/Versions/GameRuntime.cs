@@ -55,6 +55,16 @@ internal sealed partial class GameRuntime
         return !neoForgeVersion.EndsWith(value: "-beta", StringComparison.Ordinal) && !neoForgeVersion.Contains(value: "-alpha", StringComparison.Ordinal);
     }
 
+    /// <summary>Reads what PortableMC installed from the last version hierarchy it loaded, which lists the installed version first and Minecraft last.</summary>
+    internal static PortableMinecraftInstallation? ParseLoadedHierarchy(IEnumerable<string[]> outputFields)
+    {
+        string[]? hierarchy = outputFields.LastOrDefault(static fields => fields.Length > 1 && fields[0] == "loaded_hierarchy");
+
+        return hierarchy is null || string.IsNullOrWhiteSpace(hierarchy[1]) || string.IsNullOrWhiteSpace(hierarchy[^1])
+            ? null
+            : new PortableMinecraftInstallation(hierarchy[1], hierarchy[^1]);
+    }
+
     internal static IReadOnlyList<string> ParseMavenMetadataVersions(string metadataXml)
     {
         return [.. XDocument.Parse(metadataXml).Descendants(name: "version").Select(static element => element.Value.Trim()).Where(static version => version.Length > 0)];
@@ -275,4 +285,7 @@ internal sealed partial class GameRuntime
     internal sealed record MojangVersionManifest(string LatestRelease, string LatestSnapshot, IReadOnlyList<MojangVersion> Versions);
 
     internal sealed record NeoForgeSelection(string MinecraftVersion, string NeoForgeVersion, IReadOnlyList<string> SkippedMinecraftVersions);
+
+    /// <summary>A version PortableMC installed, by the id it starts as and the Minecraft version it is built on.</summary>
+    internal sealed record PortableMinecraftInstallation(string Version, string MinecraftVersion);
 }
