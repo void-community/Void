@@ -89,12 +89,20 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
     public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
     {
-        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, cancellationToken);
+        return await RunGameAsync(testName, protocolVersion, GameSetup.Vanilla(protocolVersion), additionalLogSides, cancellationToken);
     }
 
-    public record Game(string TestName, IContainer Container, HttpClient HttpClient, IReadOnlyList<IIntegrationSide> LogSides, DateTime StartedAt, ProtocolVersion ProtocolVersion, string Username) : IAsyncDisposable
+    public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, GameSetup setup, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
     {
-        private readonly string _workingDirectory = Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, ProtocolVersion.ToString(), Username);
+        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, setup, cancellationToken);
+    }
+
+    public record Game(string TestName, IContainer Container, HttpClient HttpClient, IReadOnlyList<IIntegrationSide> LogSides, DateTime StartedAt, ProtocolVersion ProtocolVersion, GameSetup Setup, string Username) : IAsyncDisposable
+    {
+        private const string ModsDirectory = "/root/.minecraft/mods/";
+        private readonly string _workingDirectory = Setup.Loader is { } loader
+            ? Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, loader.ModLoader.ToString(), ProtocolVersion.ToString(), Username)
+            : Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, ProtocolVersion.ToString(), Username);
         private ApiProblemDetails? _lastPlayersProblem;
         private Guid? _sessionId;
         private int _step;
@@ -129,7 +137,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             GC.SuppressFinalize(this);
         }
 
-        public static async Task<Game> RunAsync(string testName, IContainer container, HttpClient httpClient, IReadOnlyList<IIntegrationSide> logSides, ProtocolVersion protocolVersion, CancellationToken cancellationToken = default)
+        public static async Task<Game> RunAsync(string testName, IContainer container, HttpClient httpClient, IReadOnlyList<IIntegrationSide> logSides, ProtocolVersion protocolVersion, GameSetup setup, CancellationToken cancellationToken = default)
         {
             var username = Convert.ToHexString(BitConverter.GetBytes(Random.Shared.Next()));
             var startedAt = DateTime.UtcNow;
@@ -138,12 +146,16 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             using var optionsResponse = await httpClient.PutAsync("/api/game/options", optionsContent, cancellationToken);
             await EnsureSuccessAsync(optionsResponse, $"Writing Minecraft {protocolVersion.FirstRelease} options", cancellationToken);
 
-            var game = new Game(testName, container, httpClient, logSides, startedAt, protocolVersion, username);
+            var game = new Game(testName, container, httpClient, logSides, startedAt, protocolVersion, setup, username);
 
             try
             {
-                await game.LogAsync($"Starting Minecraft {protocolVersion.FirstRelease}", cancellationToken);
-                await game.StartVanillaAsync(cancellationToken);
+                await game.LogAsync($"Starting {setup}", cancellationToken);
+
+                if (setup.Loader is not null)
+                    await game.InstallModsAsync(cancellationToken);
+
+                await game.StartAsync(cancellationToken);
             }
             catch
             {
@@ -263,28 +275,55 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             }
         }
 
-        private async Task StartVanillaAsync(CancellationToken cancellationToken = default)
+        private async Task StartAsync(CancellationToken cancellationToken = default)
         {
-            var memoryMb = ProtocolVersion >= ProtocolVersion.MINECRAFT_26_1 ? 2048 : 1024;
-            var request = new
+            var newerRelease = ProtocolVersion >= ProtocolVersion.MINECRAFT_26_1;
+
+            // Mod loaders and their mods need more memory than the game alone.
+            var memoryMb = Setup.Loader is null ? newerRelease ? 2048 : 1024 : newerRelease ? 3072 : 2048;
+            var version = Setup.MinecraftRelease.ToString();
+            var arguments = new[]
             {
-                version = ProtocolVersion.FirstRelease.ToString(),
-                memoryMb,
-                arguments = new[]
-                {
-                    "--fetch-exclude-all",
-                    "--username",
-                    Username,
-                    "--jvm-arg=-Djava.awt.headless=false"
-                }
+                "--fetch-exclude-all",
+                "--username",
+                Username,
+                "--jvm-arg=-Djava.awt.headless=false"
             };
 
-            using var response = await HttpClient.PostAsJsonAsync("/api/game/start/vanilla", request, cancellationToken);
-            await EnsureSuccessAsync(response, $"Starting Minecraft {ProtocolVersion.FirstRelease}", cancellationToken);
-            var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting Minecraft {ProtocolVersion.FirstRelease} launch", cancellationToken);
+            // A NeoForge build names its Minecraft version, while Forge starts take the Minecraft version and the build.
+            var (start, request) = Setup.Loader switch
+            {
+                null => ("vanilla", (object)new { version, memoryMb, arguments }),
+                { ModLoader: ModLoader.Forge } forge => ("forge", (object)new { version, loaderVersion = forge.ClientLoaderVersion, memoryMb, arguments }),
+                { } neoForge => ("neoforge", (object)new { loaderVersion = neoForge.ClientLoaderVersion, memoryMb, arguments })
+            };
+
+            using var response = await HttpClient.PostAsJsonAsync($"/api/game/start/{start}", request, cancellationToken);
+            await EnsureSuccessAsync(response, $"Starting {Setup}", cancellationToken);
+            var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting {Setup} launch", cancellationToken);
 
             _sessionId = acceptedStatus.SessionId;
             await WaitForClientReadyAsync(acceptedStatus.OperationId, cancellationToken);
+        }
+
+        /// <summary>Installs the setup's mods into the client, replacing those of an earlier game, since the client keeps mods it didn't add.</summary>
+        private async Task InstallModsAsync(CancellationToken cancellationToken = default)
+        {
+            await Container.RunCommandAsync(["sh", "-c", $"rm -rf {ModsDirectory} && mkdir -p {ModsDirectory}"], cancellationToken);
+
+            foreach (var mod in Setup.Mods)
+                await Container.CopyAsync(new FileInfo(mod.LocalPath), ModsDirectory, ct: cancellationToken);
+
+            Directory.CreateDirectory(_workingDirectory);
+            var setupJson = JsonSerializer.Serialize(new
+            {
+                minecraftRelease = Setup.MinecraftRelease.ToString(),
+                loader = Setup.Loader?.ModLoader.ToString(),
+                loaderVersion = Setup.Loader?.ClientLoaderVersion,
+                mods = Setup.Mods.Select(mod => mod.Source)
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+            await File.WriteAllTextAsync(Path.Combine(_workingDirectory, "game-setup.json"), setupJson, cancellationToken);
+            await LogAsync($"Installed mods {string.Join(", ", Setup.Mods.Select(mod => mod.FileName))}", cancellationToken);
         }
 
         public async Task JoinServerAsync(EndPoint endPoint, CancellationToken cancellationToken = default)

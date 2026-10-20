@@ -50,8 +50,8 @@ public abstract class ProxiedPlayerTestBase(IMinecraftServersFixture serversFixt
     {
         var proxyEndPoint = new IPEndPoint(IPAddress.Loopback, voidProxy.Port);
 
-        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, [clientFixture.Client2, voidProxy, servers.Server1], Timeouts.SetupTimeoutToken);
-        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, [clientFixture.Client1, voidProxy, servers.Server1], Timeouts.SetupTimeoutToken);
+        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, servers.Setup, [clientFixture.Client2, voidProxy, servers.Server1], Timeouts.SetupTimeoutToken);
+        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, servers.Setup, [clientFixture.Client1, voidProxy, servers.Server1], Timeouts.SetupTimeoutToken);
 
         disconnectionTasks.Add(voidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
         disconnectionTasks.Add(voidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));

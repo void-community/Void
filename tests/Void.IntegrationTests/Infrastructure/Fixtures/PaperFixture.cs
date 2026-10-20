@@ -20,7 +20,7 @@ public class PaperFixture : IMinecraftServersFixture, IAsyncLifetime
     /// <summary>Returns both Paper servers, which accept every protocol version through ViaVersion.</summary>
     public Task<MinecraftServers> PrepareServersAsync(ProtocolVersion protocolVersion, int serverCount, CancellationToken cancellationToken)
     {
-        return Task.FromResult(new MinecraftServers([Server1, Server2]));
+        return Task.FromResult(new MinecraftServers([Server1, Server2], GameSetup.Vanilla(protocolVersion)));
     }
 
     public async ValueTask InitializeAsync()

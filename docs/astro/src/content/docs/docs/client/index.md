@@ -93,6 +93,6 @@ Save the `sessionId` returned by the start request. After the test, stop Minecra
 
 See the [**diagnostics API reference**](/docs/client/api/#diagnostics) for request examples, bundle contents, retention settings, and persistent-volume configuration.
 
-Void's integration harness downloads a bundle at every game teardown, including failed launches. This also preserves evidence for assertions that fail after the game has stopped. Each client's bundle is stored at `steps/<test>/<protocol>/<username>/client-diagnostics-<sessionId>.zip` alongside existing screenshots and server/proxy logs. Download the `integration-steps-<os>-<shard>` artifact from the GitHub Actions run to inspect it.
+Void's integration harness downloads a bundle at every game teardown, including failed launches. This also preserves evidence for assertions that fail after the game has stopped. Each client's bundle is stored at `steps/<test>/<protocol>/<username>/client-diagnostics-<sessionId>.zip` alongside existing screenshots and server/proxy logs. Forge and NeoForge games are stored under `steps/<test>/<loader>/<protocol>/<username>/`, with a `game-setup.json` that names the loader build and the mods every side ran. Download the `integration-steps-<os>-<shard>` artifact from the GitHub Actions run to inspect it.
 
 Collection uses a separate timeout so a canceled test can still save evidence. If an older image lacks the endpoint, or the API cannot be reached, `client-diagnostics-error.txt` explains the collection failure without replacing the test's original error.

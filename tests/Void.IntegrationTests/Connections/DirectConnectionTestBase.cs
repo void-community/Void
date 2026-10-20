@@ -26,7 +26,7 @@ public abstract class DirectConnectionTestBase(IMinecraftServersFixture serversF
 
         await LoggedExecutorAsync(async () =>
         {
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(DirectConnectionTestBase), protocolVersion, [servers.Server1], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(DirectConnectionTestBase), protocolVersion, servers.Setup, [servers.Server1], Timeouts.SetupTimeoutToken))
             {
                 await game.JoinServerAsync(serverEndPoint, Timeouts.SetupTimeoutToken);
                 await servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);

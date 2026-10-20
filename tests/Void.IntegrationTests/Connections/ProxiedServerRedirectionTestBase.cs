@@ -30,7 +30,7 @@ public abstract class ProxiedServerRedirectionTestBase(IMinecraftServersFixture 
         {
             Task playerDisconnectionTask;
 
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedServerRedirectionTestBase), protocolVersion, [voidProxy, servers.Server1, servers.Server2], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedServerRedirectionTestBase), protocolVersion, servers.Setup, [voidProxy, servers.Server1, servers.Server2], Timeouts.SetupTimeoutToken))
             {
                 playerDisconnectionTask = voidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
 
