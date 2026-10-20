@@ -270,6 +270,40 @@ public sealed class GameCoordinatorTests
     }
 
     [Fact]
+    public async Task NeoForgeLaunchForwardsAnExactBuild()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        await coordinator.StartNeoForgeAsync(new(Version: null, [], LoaderVersion: " 21.1.264 "), CancellationToken.None);
+
+        Assert.Equal("21.1.264", runtime.LastNeoForgeLoaderVersion);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData("1.21.1", null)]
+    [InlineData(null, "1.21.1")]
+    public async Task NeoForgeBuildCannotBeCombinedWithAVersion(string? version, string? maximumMinecraftVersion)
+    {
+        // A NeoForge build already names its Minecraft version.
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<GameCommandException>(
+            () => coordinator.StartNeoForgeAsync(new(version, [], MaximumMinecraftVersion: maximumMinecraftVersion, LoaderVersion: "21.1.264"), CancellationToken.None)
+        );
+
+        Assert.Equal(400, exception.StatusCode);
+        Assert.Equal(0, runtime.LaunchCount);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ModLoaderLaunchForwardsTheLoaderAndItsBuild()
     {
         var runtime = new FakeGameRuntime();
@@ -948,6 +982,7 @@ public sealed class GameCoordinatorTests
         public string? LastVanillaVersion { get; private set; }
         public string? LastNeoForgeVersion { get; private set; }
         public string? LastNeoForgeMaximumMinecraftVersion { get; private set; }
+        public string? LastNeoForgeLoaderVersion { get; private set; }
         public (string Loader, string Version, string? LoaderVersion)? LastModLoaderLaunch { get; private set; }
         public RunningGame? LastConnectGame { get; private set; }
         public Channel<string> Warnings { get; private set; } = Channel.CreateUnbounded<string>();
@@ -992,9 +1027,17 @@ public sealed class GameCoordinatorTests
             return BeginLaunch(cancellationToken);
         }
 
-        public Task<RunningGame> LaunchNeoForgeAsync(string version, string? maximumMinecraftVersion, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
+        public Task<RunningGame> LaunchNeoForgeAsync(
+            string version,
+            string? loaderVersion,
+            string? maximumMinecraftVersion,
+            IReadOnlyList<string> arguments,
+            int? memoryMb,
+            CancellationToken cancellationToken
+        )
         {
             LastNeoForgeVersion = version;
+            LastNeoForgeLoaderVersion = loaderVersion;
             LastNeoForgeMaximumMinecraftVersion = maximumMinecraftVersion;
             LastMemoryMb = memoryMb;
             return BeginLaunch(cancellationToken);

@@ -27,8 +27,13 @@ internal interface IGameRuntime
         CancellationToken cancellationToken
     );
 
+    /// <summary>
+    /// Launches NeoForge: an exact build when one is given, otherwise the newest stable build for a Minecraft version, or for the newest
+    /// release that has one.
+    /// </summary>
     Task<RunningGame> LaunchNeoForgeAsync(
         string version,
+        string? loaderVersion,
         string? maximumMinecraftVersion,
         IReadOnlyList<string> arguments,
         int? memoryMb,

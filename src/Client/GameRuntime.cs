@@ -184,12 +184,16 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
     public async Task<RunningGame> LaunchNeoForgeAsync(
         string version,
+        string? loaderVersion,
         string? maximumMinecraftVersion,
         IReadOnlyList<string> arguments,
         int? memoryMb,
         CancellationToken cancellationToken
     )
     {
+        if (!string.IsNullOrWhiteSpace(loaderVersion))
+            return await LaunchPortableAsync($"neoforge::{loaderVersion}", minecraftVersion: null, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
         if (!string.IsNullOrWhiteSpace(version))
             return await LaunchPortableAsync($"neoforge:{version}", minecraftVersion: null, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 

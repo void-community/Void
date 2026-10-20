@@ -168,6 +168,16 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
+To start an exact NeoForge build, for example the one your server runs, set `loaderVersion` to the build as NeoForge's Maven names it, such as `21.1.264`, or `1.20.1-47.1.106` for Minecraft 1.20.1. The build names its Minecraft version, so it can't be combined with `version` or `maximumMinecraftVersion`.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"loaderVersion":"21.1.264","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/neoforge
+```
+
 ### Forge, Fabric, Quilt, and LegacyFabric
 
 `version` is required and is a Mojang release identifier. `loaderVersion` is an optional loader build. Without it, the client starts the loader's newest stable build for that version, or its newest build when none is stable yet.

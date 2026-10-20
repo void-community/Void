@@ -732,7 +732,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         }
 
         string? version = (message.Request?.Version ?? message.ModLoaderRequest?.Version)?.Trim();
-        string? loaderVersion = message.ModLoaderRequest?.LoaderVersion?.Trim();
+        string? loaderVersion = (message.ModLoaderRequest?.LoaderVersion ?? message.NeoForgeRequest?.LoaderVersion)?.Trim();
         string? neoForgeVersion = message.NeoForgeRequest?.Version?.Trim();
         string? maximumMinecraftVersion = message.NeoForgeRequest?.MaximumMinecraftVersion?.Trim();
         string? slug = message.CurseForgeRequest?.Slug?.Trim();
@@ -788,6 +788,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
                 "start-vanilla" => runtime.LaunchVanillaAsync(version ?? "", arguments, memoryMb, operationCancellation.Token),
                 "start-neoforge" => runtime.LaunchNeoForgeAsync(
                     neoForgeVersion ?? "",
+                    string.IsNullOrWhiteSpace(loaderVersion) ? null : loaderVersion,
                     string.IsNullOrWhiteSpace(maximumMinecraftVersion) ? null : maximumMinecraftVersion,
                     arguments,
                     memoryMb,
