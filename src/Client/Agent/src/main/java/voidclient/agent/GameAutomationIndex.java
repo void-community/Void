@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -38,29 +40,80 @@ import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 final class GameAutomationIndex {
+    private static final String ForgeMinecraftLocation = "forge:minecraft";
     private static final Map<String, IndexedCode> IndexedLocations = new HashMap<String, IndexedCode>();
 
     private GameAutomationIndex() {
     }
 
-    static synchronized IndexedCode index(URL location) {
-        if (location == null)
-            return null;
+    /**
+     * Indexes the game code a class comes from, read the way its loader serves it.
+     *
+     * @return the index, or {@code null} when that code has no game screens or can't be read yet
+     */
+    static synchronized IndexedCode index(final ClassLoader loader, String className, ProtectionDomain domain) {
+        CodeSource codeSource = domain == null ? null : domain.getCodeSource();
+        URL location = codeSource == null ? null : codeSource.getLocation();
 
-        String key = location.toExternalForm();
+        if (location == null) {
+            // Forge 1.13 to 1.16 defines Minecraft's classes without a code source. JDK classes have none either, and must never reach
+            // Forge's loader, which reads signed jars while the JDK may still be loading the classes that verify them.
+            if (loader == null || !className.startsWith("net/minecraft/"))
+                return null;
+
+            IndexedCode indexed = index(ForgeMinecraftLocation, new ModLoaderCode.TypeReader() {
+                public Map<String, ClassNode> read() throws Exception {
+                    return ModLoaderCode.readForgeMinecraft();
+                }
+            });
+
+            return indexed != null && indexed.superTypes.containsKey(className) ? indexed : null;
+        }
+
+        final URL jar = containingJar(location);
+
+        return index(jar.toExternalForm(), new ModLoaderCode.TypeReader() {
+            public Map<String, ClassNode> read() throws Exception {
+                return ModLoaderCode.isLaunchWrapper(loader) ? ModLoaderCode.readLaunchWrapper(loader, jar) : readTypes(jar.toURI());
+            }
+        });
+    }
+
+    /** Returns the jar a class file is in, for loaders such as LaunchWrapper that give every class the URL of its own entry. */
+    static URL containingJar(URL location) {
+        String path = location.getFile();
+        int entry = path.indexOf("!/");
+
+        if (!"jar".equals(location.getProtocol()) || entry < 0)
+            return location;
+
+        try {
+            return new URL(path.substring(0, entry));
+        } catch (java.net.MalformedURLException exception) {
+            return location;
+        }
+    }
+
+    private static IndexedCode index(String key, ModLoaderCode.TypeReader reader) {
         if (IndexedLocations.containsKey(key))
             return IndexedLocations.get(key);
 
+        // Reading can load classes, which come back here on the same thread and must not read the same location again.
+        IndexedLocations.put(key, null);
+
         try {
-            Map<String, ClassNode> types = readTypes(location.toURI());
+            Map<String, ClassNode> types = reader.read();
+
+            if (types == ModLoaderCode.NotYet) {
+                IndexedLocations.remove(key);
+                return null;
+            }
+
             IndexedCode indexed = types == null ? null : build(types);
-
             IndexedLocations.put(key, indexed);
-
             return indexed;
         } catch (Throwable exception) {
             // Remember the failure; re-reading the whole location for every loaded class stalls game startup.
-            IndexedLocations.put(key, null);
             GameAutomationController.recordIndexFailure(key, exception.getClass().getName() + ": " + exception.getMessage());
             return null;
         }
@@ -160,7 +213,7 @@ final class GameAutomationIndex {
         });
     }
 
-    private static void addType(Map<String, ClassNode> types, InputStream input) throws IOException {
+    static void addType(Map<String, ClassNode> types, InputStream input) throws IOException {
         ClassNode type = new ClassNode();
         new ClassReader(input).accept(type, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
         types.put(type.name, type);
@@ -504,7 +557,7 @@ final class GameAutomationIndex {
                         continue;
 
                     List<String> targets = new ArrayList<String>();
-                    AbstractInsnNode argument = previousReal(instruction);
+                    AbstractInsnNode argument = setterArgument(instruction);
                     boolean possibleConstructedTarget = argument != null && argument.getOpcode() != Opcodes.ACONST_NULL
                         && !isSelfReference(method, argument);
                     TypeInsnNode constructed = possibleConstructedTarget
@@ -672,7 +725,7 @@ final class GameAutomationIndex {
                 MethodInsnNode call = (MethodInsnNode) instruction;
 
                 if (setter.owner.equals(call.owner) && setter.name.equals(call.name) && setter.descriptor.equals(call.desc)) {
-                    AbstractInsnNode argument = previousReal(instruction);
+                    AbstractInsnNode argument = setterArgument(instruction);
 
                     if (argument != null && argument.getOpcode() == Opcodes.ACONST_NULL)
                         return true;
@@ -866,6 +919,16 @@ final class GameAutomationIndex {
             return (Integer) ((LdcInsnNode) instruction).cst;
 
         return null;
+    }
+
+    /**
+     * Returns the instruction that pushes a setter's argument, past the checkcast javac emits for a cast such as (Screen) null, which
+     * Forge's recompiled classes have.
+     */
+    static AbstractInsnNode setterArgument(AbstractInsnNode call) {
+        AbstractInsnNode argument = previousReal(call);
+
+        return argument != null && argument.getOpcode() == Opcodes.CHECKCAST ? previousReal(argument) : argument;
     }
 
     private static AbstractInsnNode previousReal(AbstractInsnNode start) {

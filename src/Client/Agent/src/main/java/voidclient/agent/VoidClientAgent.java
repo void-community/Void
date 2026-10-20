@@ -146,9 +146,7 @@ public final class VoidClientAgent {
                     continue;
                 }
 
-                java.security.ProtectionDomain protectionDomain = type.getProtectionDomain();
-                java.security.CodeSource codeSource = protectionDomain == null ? null : protectionDomain.getCodeSource();
-                GameAutomationIndex.IndexedCode index = GameAutomationIndex.index(codeSource == null ? null : codeSource.getLocation());
+                GameAutomationIndex.IndexedCode index = GameAutomationIndex.index(type.getClassLoader(), className, type.getProtectionDomain());
 
                 if (index != null && (index.plan.frame.owner.equals(className) || index.plan.rejectionCallbacks.containsKey(className)))
                     instrumentation.retransformClasses(type);

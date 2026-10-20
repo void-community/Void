@@ -1,10 +1,8 @@
 package voidclient.agent;
 
 import java.lang.instrument.ClassFileTransformer;
-import java.net.URL;
 import java.util.List;
 import java.util.Set;
-import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -29,9 +27,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
         boolean client = false;
 
         try {
-            CodeSource codeSource = protectionDomain == null ? null : protectionDomain.getCodeSource();
-            URL location = codeSource == null ? null : codeSource.getLocation();
-            GameAutomationIndex.IndexedCode index = GameAutomationIndex.index(location);
+            GameAutomationIndex.IndexedCode index = GameAutomationIndex.index(loader, className, protectionDomain);
 
             if (index == null)
                 return null;

@@ -45,4 +45,32 @@ public final class ButtonTransitionTest {
         Assert.assertEquals("k", plan.controlIdFieldName);
         Assert.assertTrue(plan.targetsParent);
     }
+
+    @Test
+    public void castScreenArgumentsKeepTheirTarget() {
+        // Forge recompiles the classes it patches, so (Screen) null and (Screen) this come with a checkcast before the setter call.
+        TransitionPlan closes = castTransition(new InsnNode(Opcodes.ACONST_NULL));
+        TransitionPlan stays = castTransition(new VarInsnNode(Opcodes.ALOAD, 0));
+
+        Assert.assertFalse(closes.targetsParent || closes.targetsSelf);
+        Assert.assertTrue(closes.targetScreenNames.isEmpty());
+        Assert.assertTrue(stays.targetsSelf);
+    }
+
+    private static TransitionPlan castTransition(org.objectweb.asm.tree.AbstractInsnNode argument) {
+        ClassNode screen = new ClassNode();
+        screen.name = "ChatScreen";
+        screen.superName = "Screen";
+        MethodNode close = new MethodNode(Opcodes.ACC_PUBLIC, "keyPressed", "()V", null, null);
+        close.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        close.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, "ChatScreen", "minecraft", "LMinecraft;"));
+        close.instructions.add(argument);
+        close.instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.CHECKCAST, "Screen"));
+        close.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "Minecraft", "setScreen", "(LScreen;)V", false));
+        close.instructions.add(new InsnNode(Opcodes.RETURN));
+        screen.methods.add(close);
+
+        return GameAutomationIndex.discoverTransitions(Collections.singletonMap(screen.name, screen), Collections.singletonMap(screen.name, screen.superName),
+            "Screen", new GameAutomationIndex.ScreenSetter("Minecraft", "setScreen", "(LScreen;)V")).get(screen.name).get(0);
+    }
 }
