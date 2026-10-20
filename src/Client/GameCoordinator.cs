@@ -101,6 +101,14 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         ).ConfigureAwait(continueOnCapturedContext: false);
     }
 
+    public async Task<GameStatus> StartModLoaderAsync(string loader, StartModLoaderGameRequest request, CancellationToken cancellationToken)
+    {
+        return await EnqueueAsync<GameStatus>(
+            completion => new StartMessage($"start-{loader}", Request: null, NeoForgeRequest: null, CurseForgeRequest: null, completion, request),
+            cancellationToken
+        ).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
     public async Task<GameStatus> StartNeoForgeAsync(StartNeoForgeGameRequest request, CancellationToken cancellationToken)
     {
         return await EnqueueAsync<GameStatus>(
@@ -723,39 +731,17 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             return;
         }
 
-        string? version = message.Request?.Version?.Trim();
+        string? version = (message.Request?.Version ?? message.ModLoaderRequest?.Version)?.Trim();
+        string? loaderVersion = message.ModLoaderRequest?.LoaderVersion?.Trim();
         string? neoForgeVersion = message.NeoForgeRequest?.Version?.Trim();
         string? maximumMinecraftVersion = message.NeoForgeRequest?.MaximumMinecraftVersion?.Trim();
         string? slug = message.CurseForgeRequest?.Slug?.Trim();
-        string[] arguments = message.Request?.Arguments ?? message.NeoForgeRequest?.Arguments ?? message.CurseForgeRequest?.Arguments ?? [];
-        int? memoryMb = message.Request?.MemoryMb ?? message.NeoForgeRequest?.MemoryMb ?? message.CurseForgeRequest?.MemoryMb;
+        string[] arguments = message.Request?.Arguments ?? message.NeoForgeRequest?.Arguments ?? message.CurseForgeRequest?.Arguments ?? message.ModLoaderRequest?.Arguments ?? [];
+        int? memoryMb = message.Request?.MemoryMb ?? message.NeoForgeRequest?.MemoryMb ?? message.CurseForgeRequest?.MemoryMb ?? message.ModLoaderRequest?.MemoryMb;
 
-        if (message.Kind is "start-vanilla" && string.IsNullOrWhiteSpace(version))
+        if ((FindStartProblem(message) ?? FindMemoryProblem(memoryMb, arguments)) is { } startProblem)
         {
-            message.Completion.SetException(BadRequest(message: "version is required"));
-
-            return;
-        }
-
-        bool maximumMinecraftVersionConflicts = !string.IsNullOrWhiteSpace(neoForgeVersion) && !string.IsNullOrWhiteSpace(maximumMinecraftVersion);
-
-        if (message.Kind is "start-neoforge" && maximumMinecraftVersionConflicts)
-        {
-            message.Completion.SetException(BadRequest(message: "maximumMinecraftVersion can only be used when version is omitted"));
-
-            return;
-        }
-
-        if (message.Kind is "start-curseforge" && (string.IsNullOrWhiteSpace(slug) || message.CurseForgeRequest?.FileId <= 0))
-        {
-            message.Completion.SetException(BadRequest(message: "slug and a positive fileId are required"));
-
-            return;
-        }
-
-        if (FindMemoryProblem(memoryMb, arguments) is { } memoryProblem)
-        {
-            message.Completion.SetException(BadRequest(memoryProblem));
+            message.Completion.SetException(BadRequest(startProblem));
 
             return;
         }
@@ -764,7 +750,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             await (diagnostics?.CompleteAsync(previousSession, _stoppingToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
 
         _sessionId = diagnostics is null ? null : await diagnostics.BeginAsync(
-            $"{message.Kind}:{version ?? neoForgeVersion ?? slug}:{message.CurseForgeRequest?.FileId}",
+            $"{message.Kind}:{version ?? neoForgeVersion ?? slug}:{loaderVersion}{message.CurseForgeRequest?.FileId}",
             message.Kind is "start-curseforge" ? runtime.GetModpackDirectory() : runtime.GetGameDirectory(),
             _stoppingToken
         ).ConfigureAwait(continueOnCapturedContext: false);
@@ -808,6 +794,7 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
                     operationCancellation.Token
                 ),
                 "start-curseforge" => runtime.LaunchCurseForgeAsync(slug ?? "", message.CurseForgeRequest?.FileId ?? 0, arguments, memoryMb, operationCancellation.Token),
+                _ when message.ModLoaderRequest is not null => runtime.LaunchModLoaderAsync(message.Kind["start-".Length..], version ?? "", loaderVersion, arguments, memoryMb, operationCancellation.Token),
                 _ => throw new InvalidOperationException($"Unknown launch kind {message.Kind}")
             };
 

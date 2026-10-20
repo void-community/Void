@@ -14,6 +14,10 @@ The examples publish the port as `8080`.
 | `GET` | `/api/game/status` | `200` | Read the game state and the latest operation. |
 | `POST` | `/api/game/start/vanilla` | `202` | Start a vanilla Minecraft release. |
 | `POST` | `/api/game/start/neoforge` | `202` | Start NeoForge. |
+| `POST` | `/api/game/start/forge` | `202` | Start Forge. |
+| `POST` | `/api/game/start/fabric` | `202` | Start Fabric. |
+| `POST` | `/api/game/start/quilt` | `202` | Start Quilt. |
+| `POST` | `/api/game/start/legacyfabric` | `202` | Start LegacyFabric. |
 | `POST` | `/api/game/start/curseforge` | `202` | Start a CurseForge modpack. |
 | `POST` | `/api/game/connect` | `200` | Connect the game to a server. |
 | `POST` | `/api/game/send-chat` | `204` | Send a chat message or a command. |
@@ -60,7 +64,7 @@ Returns `200 OK` with the text `ok` once the API accepts requests, and `503 Serv
 | `state` | The game's state, described below. |
 | `operationId` | Identifier of the latest operation. It increases with every accepted operation. |
 | `sessionId` | [Diagnostic session](#diagnostics) of the latest launch, or `null` before the first one. |
-| `operation` | The latest operation: `start-vanilla`, `start-neoforge`, `start-curseforge`, `connect`, `send-chat`, `screenshot`, `options`, or `stop`. |
+| `operation` | The latest operation: `start-vanilla`, `start-neoforge`, `start-forge`, `start-fabric`, `start-quilt`, `start-legacyfabric`, `start-curseforge`, `connect`, `send-chat`, `screenshot`, `options`, or `stop`. |
 | `operationState` | `none`, `running`, `succeeded`, `failed`, or `canceled`. |
 | `processId` | Process identifier while the game runs. |
 | `exitCode` | Exit code once the game has exited. It can be `0` even after a crash, so use `state` and `failure` instead. |
@@ -164,7 +168,29 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
-Vanilla and NeoForge starts load only the mods in the game directory's `mods` folder. An image built on the client can add files for the exact Minecraft version with [**preparation scripts**](/docs/client/images/#preparing-games).
+### Forge, Fabric, Quilt, and LegacyFabric
+
+`version` is required and is a Mojang release identifier. `loaderVersion` is an optional loader build. Without it, the client starts the loader's newest stable build for that version, or its newest build when none is stable yet.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"version":"1.20.1","loaderVersion":"47.4.0","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/forge
+```
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"version":"1.21.1","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/fabric
+```
+
+Forge builds are named as on Forge's downloads, such as `47.4.0` for 1.20.1, or `10.13.4.1614-1.7.10` for 1.7.10. A version or build that doesn't exist fails the start with `client.install.failed`.
+
+Starts other than CurseForge load only the mods in the game directory's `mods` folder. An image built on the client can add files for the exact Minecraft version with [**preparation scripts**](/docs/client/images/#preparing-games).
 
 ### CurseForge
 
@@ -184,7 +210,7 @@ Replace the example `fileId` with the file you want to start.
 
 Requests to CurseForge and downloads that fail temporarily are retried a few times. If a modpack file still can't be downloaded, the start fails with an error that lists every missing file.
 
-A modpack runs in the `modpack` folder of the game directory, with its own mods, configuration, options, worlds, logs, and crash reports. Vanilla and NeoForge starts run in the game directory itself and don't load a modpack's files. Both share the downloaded Minecraft versions, libraries, and assets.
+A modpack runs in the `modpack` folder of the game directory, with its own mods, configuration, options, worlds, logs, and crash reports. Other starts run in the game directory itself and don't load a modpack's files. All of them share the downloaded Minecraft versions, libraries, and assets.
 
 The `modpack` folder holds one modpack at a time. Starting the installed modpack again starts it right away. Starting another modpack or file replaces it, downloading only the files that aren't there yet. A failed or stopped start leaves no modpack installed, so the next start installs again and reuses what was downloaded. Files the previous modpack added in subfolders such as `config/` are removed. Worlds, files the game created, and `options.txt` stay.
 

@@ -626,27 +626,17 @@ internal sealed partial class GameRuntime
                 if (loader.Primary != true)
                     continue;
 
+                // CurseForge names a loader build as its loader and build, such as forge-47.4.0.
                 string loaderId = loader.Id ?? "";
+                string[] loaderParts = loaderId.Split(separator: '-', count: 2);
+                string loaderVersion = loaderParts.Length > 1 ? loaderParts[1] : "";
 
-                if (loaderId.StartsWith(value: "neoforge-", StringComparison.Ordinal))
+                portablemcVersion = loaderParts[0] switch
                 {
-                    portablemcVersion = $"neoforge::{loaderId["neoforge-".Length..]}";
-                }
-                else if (loaderId.StartsWith(value: "forge-", StringComparison.Ordinal))
-                {
-                    string forgeVersion = loaderId["forge-".Length..];
-                    portablemcVersion = forgeVersion.StartsWith($"{minecraftVersion}-", StringComparison.Ordinal)
-                        ? $"forge::{forgeVersion}"
-                        : $"forge::{minecraftVersion}-{forgeVersion}";
-                }
-                else
-                {
-                    portablemcVersion = loaderId.StartsWith(value: "fabric-", StringComparison.Ordinal)
-                        ? $"fabric:{minecraftVersion}:{loaderId["fabric-".Length..]}"
-                        : loaderId.StartsWith(value: "quilt-", StringComparison.Ordinal)
-                        ? $"quilt:{minecraftVersion}:{loaderId["quilt-".Length..]}"
-                        : throw new InvalidOperationException($"Unsupported mod loader for CurseForge modpack '{slug}' (file id: {fileId}): {loaderId}");
-                }
+                    "neoforge" => $"neoforge::{loaderVersion}",
+                    "forge" or "fabric" or "quilt" => CreatePortableMinecraftVersion(loaderParts[0], minecraftVersion, loaderVersion),
+                    _ => throw new InvalidOperationException($"Unsupported mod loader for CurseForge modpack '{slug}' (file id: {fileId}): {loaderId}")
+                };
 
                 break;
             }

@@ -20,6 +20,19 @@ internal sealed partial class GameRuntime
             : string.Create(CultureInfo.InvariantCulture, $"{majorVersion}.{minorVersion}.");
     }
 
+    /// <summary>Creates the PortableMC version of a mod loader for a Minecraft version, which installs its newest stable build when none is given.</summary>
+    internal static string CreatePortableMinecraftVersion(string loader, string minecraftVersion, string? loaderVersion)
+    {
+        if (string.IsNullOrEmpty(loaderVersion))
+            return $"{loader}:{minecraftVersion}";
+
+        if (loader is not "forge")
+            return $"{loader}:{minecraftVersion}:{loaderVersion}";
+
+        // Forge names its builds after the Minecraft version, which modpacks and consumers usually leave out.
+        return loaderVersion.StartsWith($"{minecraftVersion}-", StringComparison.Ordinal) ? $"forge::{loaderVersion}" : $"forge::{minecraftVersion}-{loaderVersion}";
+    }
+
     internal static string? FindLatestStableNeoForgeVersion(IEnumerable<string> neoForgeVersions, string minecraftVersion)
     {
         string? prefix = CreateNeoForgeVersionPrefix(minecraftVersion);

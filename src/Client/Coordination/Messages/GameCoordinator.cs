@@ -33,7 +33,8 @@ internal sealed partial class GameCoordinator
         StartGameRequest? Request,
         StartNeoForgeGameRequest? NeoForgeRequest,
         StartCurseForgeGameRequest? CurseForgeRequest,
-        TaskCompletionSource<GameStatus> Completion
+        TaskCompletionSource<GameStatus> Completion,
+        StartModLoaderGameRequest? ModLoaderRequest = null
     ) : Message;
     private sealed record StopCompleted(
         long OperationId,

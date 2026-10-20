@@ -8,6 +8,22 @@ internal sealed partial class GameCoordinator
     // Session diagnostics retain this many status warnings.
     private const int MaximumStatusWarnings = 8;
 
+    private static string? FindStartProblem(StartMessage message)
+    {
+        var neoForgeRequest = message.NeoForgeRequest;
+        var curseForgeRequest = message.CurseForgeRequest;
+        bool maximumMinecraftVersionConflicts = !string.IsNullOrWhiteSpace(neoForgeRequest?.Version) && !string.IsNullOrWhiteSpace(neoForgeRequest?.MaximumMinecraftVersion);
+        bool modpackMissing = string.IsNullOrWhiteSpace(curseForgeRequest?.Slug) || curseForgeRequest?.FileId <= 0;
+        bool versionMissing = string.IsNullOrWhiteSpace(message.Request?.Version ?? message.ModLoaderRequest?.Version);
+
+        return message.Kind switch
+        {
+            "start-neoforge" => maximumMinecraftVersionConflicts ? "maximumMinecraftVersion can only be used when version is omitted" : null,
+            "start-curseforge" => modpackMissing ? "slug and a positive fileId are required" : null,
+            _ => versionMissing ? "version is required" : null
+        };
+    }
+
     private static bool IsMaximumHeapArgument(string argument)
     {
         return argument.StartsWith(value: "-Xmx", StringComparison.Ordinal)

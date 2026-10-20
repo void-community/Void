@@ -167,6 +167,7 @@ public sealed class GameCoordinatorTests
     [InlineData("vanilla")]
     [InlineData("neoforge")]
     [InlineData("curseforge")]
+    [InlineData("forge")]
     public async Task LaunchForwardsConfiguredMemory(string launchType)
     {
         var runtime = new FakeGameRuntime();
@@ -178,6 +179,7 @@ public sealed class GameCoordinatorTests
             "vanilla" => await coordinator.StartVanillaAsync(new("1.21.1", [], 2048), CancellationToken.None),
             "neoforge" => await coordinator.StartNeoForgeAsync(new("1.21.1", [], 2048), CancellationToken.None),
             "curseforge" => await coordinator.StartCurseForgeAsync(new("test", 1, [], 2048), CancellationToken.None),
+            "forge" => await coordinator.StartModLoaderAsync(loader: "forge", new("1.20.1", LoaderVersion: null, [], 2048), CancellationToken.None),
             _ => throw new ArgumentOutOfRangeException(nameof(launchType), launchType, null)
         };
 
@@ -263,6 +265,38 @@ public sealed class GameCoordinatorTests
         await coordinator.StartNeoForgeAsync(new("  1.21.1  ", []), CancellationToken.None);
 
         Assert.Equal("1.21.1", runtime.LastNeoForgeVersion);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ModLoaderLaunchForwardsTheLoaderAndItsBuild()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        var status = await coordinator.StartModLoaderAsync(loader: "forge", new(" 1.20.1 ", " 47.4.0 ", []), CancellationToken.None);
+
+        Assert.Equal("start-forge", status.Operation);
+        Assert.Equal(("forge", "1.20.1", "47.4.0"), runtime.LastModLoaderLaunch);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ModLoaderLaunchRequiresAVersion()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<GameCommandException>(
+            () => coordinator.StartModLoaderAsync(loader: "fabric", new(Version: null, "0.16.5", []), CancellationToken.None)
+        );
+
+        Assert.Equal(400, exception.StatusCode);
+        Assert.Equal(0, runtime.LaunchCount);
 
         await coordinator.StopAsync(CancellationToken.None);
     }
@@ -914,6 +948,7 @@ public sealed class GameCoordinatorTests
         public string? LastVanillaVersion { get; private set; }
         public string? LastNeoForgeVersion { get; private set; }
         public string? LastNeoForgeMaximumMinecraftVersion { get; private set; }
+        public (string Loader, string Version, string? LoaderVersion)? LastModLoaderLaunch { get; private set; }
         public RunningGame? LastConnectGame { get; private set; }
         public Channel<string> Warnings { get; private set; } = Channel.CreateUnbounded<string>();
 
@@ -967,6 +1002,20 @@ public sealed class GameCoordinatorTests
 
         public Task<RunningGame> LaunchCurseForgeAsync(string slug, int fileId, IReadOnlyList<string> arguments, int? memoryMb, CancellationToken cancellationToken)
         {
+            LastMemoryMb = memoryMb;
+            return BeginLaunch(cancellationToken);
+        }
+
+        public Task<RunningGame> LaunchModLoaderAsync(
+            string loader,
+            string version,
+            string? loaderVersion,
+            IReadOnlyList<string> arguments,
+            int? memoryMb,
+            CancellationToken cancellationToken
+        )
+        {
+            LastModLoaderLaunch = (loader, version, loaderVersion);
             LastMemoryMb = memoryMb;
             return BeginLaunch(cancellationToken);
         }

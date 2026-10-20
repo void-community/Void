@@ -23,9 +23,17 @@ public sealed class PreparationScriptTests : IDisposable
 
         await RunAsync("neoforge::21.1.200", "1.21.1");
         await RunAsync("mojang:1.21.1", "1.21.1");
+        await RunAsync("forge::1.20.1-47.4.0", "1.20.1");
 
         Assert.Equal(
-            ["first neoforge 1.21.1 /game", "second neoforge 1.21.1 /game", "first vanilla 1.21.1 /game", "second vanilla 1.21.1 /game"],
+            [
+                "first neoforge 1.21.1 /game",
+                "second neoforge 1.21.1 /game",
+                "first vanilla 1.21.1 /game",
+                "second vanilla 1.21.1 /game",
+                "first forge 1.20.1 /game",
+                "second forge 1.20.1 /game"
+            ],
             await File.ReadAllLinesAsync(Log, TestContext.Current.CancellationToken)
         );
     }

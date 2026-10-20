@@ -8,6 +8,7 @@ namespace Void.Client;
 internal static class ClientApiEndpoints
 {
     private const string StatusPath = "/api/game/status";
+    private static readonly (string Loader, string Name)[] ModLoaders = [("forge", "Forge"), ("fabric", "Fabric"), ("quilt", "Quilt"), ("legacyfabric", "LegacyFabric")];
     private static readonly Action<ILogger, string, Exception?> LogClientOperationFailure = LoggerMessage.Define<string>(LogLevel.Error, new EventId(id: 1000, nameof(LogClientOperationFailure)), formatString: "Client API {Operation} failed");
 
     public static IEndpointRouteBuilder MapClientApi(this IEndpointRouteBuilder endpoints)
@@ -126,6 +127,30 @@ internal static class ClientApiEndpoints
         )
             .WithName(endpointName: "StartCurseForgeGame")
             .WithSummary(summary: "Starts a CurseForge modpack file.");
+
+        foreach (var (loader, name) in ModLoaders)
+        {
+            var modLoaderStartEndpoint = api.MapPost(
+                pattern: $"/game/start/{loader}",
+                async Task<IResult> (
+                    StartModLoaderGameRequest request,
+                    GameCoordinator coordinator,
+                    ILoggerFactory loggerFactory,
+                    CancellationToken cancellationToken
+                ) =>
+                await ExecuteAsync(
+                    $"start-{loader}",
+                    async () => Results.Accepted(
+                        StatusPath,
+                        await coordinator.StartModLoaderAsync(loader, request, cancellationToken).ConfigureAwait(continueOnCapturedContext: false)
+                    ),
+                    loggerFactory,
+                    cancellationToken
+                ).ConfigureAwait(continueOnCapturedContext: false)
+            )
+                .WithName($"Start{name}Game")
+                .WithSummary($"Starts a Minecraft version with {name}, at its newest stable build when no loaderVersion is given.");
+        }
 
         var stopEndpoint = api.MapPost(
             pattern: "/game/stop",

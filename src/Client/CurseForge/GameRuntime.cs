@@ -8,7 +8,7 @@ internal sealed partial class GameRuntime
 {
     /// <summary>
     /// Moves a modpack that an earlier client installed in the game directory itself into its own directory, so starting it again needs
-    /// no download, and vanilla and NeoForge starts no longer load its files.
+    /// no download, and the other starts no longer load its files.
     /// </summary>
     internal static void MoveModpackIntoItsDirectory(string minecraftDirectory, string modpackDirectory)
     {

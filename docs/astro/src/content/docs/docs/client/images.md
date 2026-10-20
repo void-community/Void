@@ -73,13 +73,13 @@ docker run --name void-client --rm -d -p 8080:80 \
 
 ## Preparing Games
 
-An image built on the client can prepare vanilla and NeoForge games, for example to add a mod for the exact Minecraft version. Once Minecraft and its mod loader are installed, and before the game launches, the client runs every file in `/etc/portableminecraftclient/prepare.d` in name order, with:
+An image built on the client can prepare its games, for example to add a mod for the exact Minecraft version. Once Minecraft and its mod loader are installed, and before the game launches, the client runs every file in `/etc/portableminecraftclient/prepare.d` in name order, with:
 
 | Variable | Value |
 | :------- | :---- |
 | `MINECRAFT_DIRECTORY` | The [game directory](#persistent-game-directory). |
 | `MINECRAFT_VERSION` | The Minecraft version, such as `1.21.1`. |
-| `MINECRAFT_LOADER` | `vanilla` or `neoforge`. |
+| `MINECRAFT_LOADER` | The start: `vanilla`, `neoforge`, `forge`, `fabric`, `quilt`, or `legacyfabric`. |
 
 ```dockerfile
 FROM ghcr.io/void-community/portable-minecraft-client:latest

@@ -70,7 +70,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string PortableMinecraftLegacyJvmExecutablePath = "/usr/lib/jvm/zulu-8/bin/java";
     private const string PortableMinecraftLegacyJvmPath = "/usr/local/bin/java-arm64-lwjgl2";
     private const string PortableMinecraftOptionsPath = "/opt/portableminecraftclient/options.txt";
-    // An image built on the client puts scripts here to prepare vanilla and NeoForge games for their exact Minecraft version.
+    // An image built on the client puts scripts here to prepare games other than modpacks for their exact Minecraft version.
     private const string PortableMinecraftPreparationDirectory = "/etc/portableminecraftclient/prepare.d";
     private const int ProcessStopTimeoutMilliseconds = 10000;
     private const int ScreenCaptureMaximumAttempts = 3;
@@ -133,7 +133,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         string modpackDirectory = GetModpackDirectory();
         string portableMinecraftVersion;
 
-        // The modpack runs in its own directory, so vanilla and NeoForge starts in the game directory never load its mods or configs.
+        // The modpack runs in its own directory, so the other starts in the game directory never load its mods or configs.
         MoveModpackIntoItsDirectory(minecraftDirectory, modpackDirectory);
 
         using (HttpClient httpClient = CreateUpstreamHttpClient())
@@ -168,6 +168,18 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         await Console.Error.WriteLineAsync($"Prepared Minecraft {installation.MinecraftVersion} for the modpack").ConfigureAwait(continueOnCapturedContext: false);
 
         return await LaunchGameAsync(minecraftDirectory, modpackDirectory, $"mojang:{installation.Version}", armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    public Task<RunningGame> LaunchModLoaderAsync(
+        string loader,
+        string version,
+        string? loaderVersion,
+        IReadOnlyList<string> arguments,
+        int? memoryMb,
+        CancellationToken cancellationToken
+    )
+    {
+        return LaunchPortableAsync(CreatePortableMinecraftVersion(loader, version, loaderVersion), version, arguments, memoryMb, cancellationToken);
     }
 
     public async Task<RunningGame> LaunchNeoForgeAsync(
