@@ -122,18 +122,88 @@ public sealed class CrashReportsTests
         Assert.DoesNotContain("secret-token", summary, StringComparison.Ordinal);
     }
 
+    public static TheoryData<string, string> JavaErrorLogs => new()
+    {
+        {
+            // HotSpot 21 after a SIGSEGV
+            """
+            #
+            # A fatal error has been detected by the Java Runtime Environment:
+            #
+            #  SIGSEGV (0xb) at pc=0x0000ffffa4f7f228 (sent by kill), pid=1008, tid=1008
+            #
+            # JRE version: OpenJDK Runtime Environment Zulu21.52+203-CRaC-CA (21.0.12.1+1) (build 21.0.12.1+1-LTS)
+            # Java VM: OpenJDK 64-Bit Server VM Zulu21.52+203-CRaC-CA (21.0.12.1+1-LTS, mixed mode, sharing, tiered, compressed oops, compressed class ptrs, g1 gc, linux-aarch64)
+            # Problematic frame:
+            # C  [libc.so.6+0x8f228]
+            #
+            # No core dump will be written. Core dumps have been disabled. To enable core dumping, try "ulimit -c unlimited" before starting Java again
+            #
+            # If you would like to submit a bug report, please visit:
+            #   http://www.azul.com/support/
+            #
+
+            ---------------  S U M M A R Y ------------
+
+            Command Line: -Xmx2048M -javaagent:/opt/portableminecraftclient/void-client-agent.jar=descriptor=ZA;token=secret-token net.minecraft.client.main.Main
+            """,
+            "Minecraft's Java runtime crashed: SIGSEGV (0xb) at pc=0x0000ffffa4f7f228 (sent by kill), pid=1008, tid=1008 in C [libc.so.6+0x8f228]"
+        },
+        {
+            // HotSpot 8 failing inside the runtime
+            "#\r\n# A fatal error has been detected by the Java Runtime Environment:\r\n#\r\n#  Internal Error (g1ConcurrentMark.cpp:1234), pid=7, tid=9\r\n"
+            + "#  guarantee(mark_stack_empty) failed: invariant\r\n#\r\n# JRE version: OpenJDK Runtime Environment (8.0_432-b06)\r\n# Problematic frame:\r\n"
+            + "# V  [libjvm.so+0x5f1a2c]  G1ConcurrentMark::checkpointRootsFinal(bool)+0x9c\r\n#\r\n\r\nCommand Line: token=secret-token\r\n",
+            "Minecraft's Java runtime crashed: Internal Error (g1ConcurrentMark.cpp:1234), pid=7, tid=9 guarantee(mark_stack_empty) failed: invariant "
+            + "in V [libjvm.so+0x5f1a2c] G1ConcurrentMark::checkpointRootsFinal(bool)+0x9c"
+        },
+        {
+            // Native memory exhaustion has no heading or frame
+            """
+            #
+            # There is insufficient memory for the Java Runtime Environment to continue.
+            # Native memory allocation (mmap) failed to map 65536 bytes for committing reserved memory.
+            # Possible reasons:
+            #   The system is out of physical RAM or swap space
+            # Possible solutions:
+            #   Reduce memory load on the system
+            #
+            #  Out of Memory Error (os_linux.cpp:2798), pid=12, tid=13
+            #
+
+            Command Line: token=secret-token
+            """,
+            "Minecraft's Java runtime crashed: There is insufficient memory for the Java Runtime Environment to continue. "
+            + "Native memory allocation (mmap) failed to map 65536 bytes for committing reserved memory."
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(JavaErrorLogs))]
+    public void JavaErrorSummaryHasTheErrorAndItsFrameFromTheHeader(string log, string expected)
+    {
+        string? summary = CrashReports.SummarizeJavaError(log);
+
+        Assert.Equal(expected, summary);
+        Assert.DoesNotContain("secret-token", summary, StringComparison.Ordinal);
+    }
+
     [Fact]
-    public void ReportWithoutDescriptionIsNamed()
+    public void FilesWithoutTheirHeaderAreNamed()
     {
         string minecraftDirectory = Directory.CreateTempSubdirectory().FullName;
 
         try
         {
+            DateTime launchedAt = DateTime.UtcNow.AddMinutes(-1);
+            File.WriteAllText(Path.Join(minecraftDirectory, "hs_err_pid42.log"), "Not an error log");
+            Assert.Null(CrashReports.SummarizeJavaError("Not an error log"));
+            Assert.Equal("Minecraft's Java runtime crashed, see hs_err_pid42.log", CrashReports.ReadCrashCause(minecraftDirectory, launchedAt));
+
             string report = Path.Join(Directory.CreateDirectory(Path.Join(minecraftDirectory, "crash-reports")).FullName, "crash-2026-10-20_08.28.40-client.txt");
             File.WriteAllText(report, "Not a crash report");
-
             Assert.Null(CrashReports.Summarize("Not a crash report"));
-            Assert.Equal("Minecraft crashed, see crash-reports/crash-2026-10-20_08.28.40-client.txt", CrashReports.ReadCause(report));
+            Assert.Equal("Minecraft crashed, see crash-reports/crash-2026-10-20_08.28.40-client.txt", CrashReports.ReadCrashCause(minecraftDirectory, launchedAt));
         }
         finally
         {
@@ -154,6 +224,33 @@ public sealed class CrashReportsTests
         Assert.Equal(1023, summary.Length);
         Assert.EndsWith("x…", summary, StringComparison.Ordinal);
         Assert.Equal(1024, CrashReports.Summarize(report.Replace("🧨", "zz", StringComparison.Ordinal))?.Length);
+    }
+
+    [Fact]
+    public void CrashReportExplainsMoreThanTheJavaErrorLog()
+    {
+        // The Java runtime can also fail while Minecraft exits after a crash, and only an error log of this launch counts.
+        string minecraftDirectory = Directory.CreateTempSubdirectory().FullName;
+        const string errorLog = "#\n# A fatal error has been detected by the Java Runtime Environment:\n#\n#  SIGSEGV (0xb) at pc=0x1, pid=8, tid=9\n#\n";
+
+        try
+        {
+            DateTime launchedAt = DateTime.UtcNow.AddMinutes(-1);
+            string earlier = Path.Join(minecraftDirectory, "hs_err_pid7.log");
+            File.WriteAllText(earlier, errorLog.Replace("pid=8", "pid=7", StringComparison.Ordinal));
+            File.SetLastWriteTimeUtc(earlier, launchedAt.AddMinutes(-5));
+            File.WriteAllText(Path.Join(minecraftDirectory, "hs_err_pid8.log"), errorLog);
+
+            Assert.Equal("Minecraft's Java runtime crashed: SIGSEGV (0xb) at pc=0x1, pid=8, tid=9", CrashReports.ReadCrashCause(minecraftDirectory, launchedAt));
+
+            File.WriteAllText(Path.Join(Directory.CreateDirectory(Path.Join(minecraftDirectory, "crash-reports")).FullName, "crash-2026-10-20_08.28.40-client.txt"), "Description: Crash");
+
+            Assert.Equal("Minecraft crashed (Crash)", CrashReports.ReadCrashCause(minecraftDirectory, launchedAt));
+        }
+        finally
+        {
+            Directory.Delete(minecraftDirectory, recursive: true);
+        }
     }
 
     [Fact]
@@ -191,9 +288,9 @@ public sealed class CrashReportsTests
             Assert.False(CrashReports.IsReport(link, minecraftDirectory, launchedAt));
             Assert.False(CrashReports.IsReport("\0", minecraftDirectory, launchedAt));
 
-            Assert.Equal(newest, CrashReports.Find(minecraftDirectory, launchedAt));
-            Assert.Null(CrashReports.Find(minecraftDirectory, DateTime.UtcNow.AddMinutes(1)));
-            Assert.Null(CrashReports.Find(Path.Join(minecraftDirectory, "missing"), launchedAt));
+            Assert.Equal("Minecraft crashed (Newest crash)", CrashReports.ReadCrashCause(minecraftDirectory, launchedAt));
+            Assert.Null(CrashReports.ReadCrashCause(minecraftDirectory, DateTime.UtcNow.AddMinutes(1)));
+            Assert.Null(CrashReports.ReadCrashCause(Path.Join(minecraftDirectory, "missing"), launchedAt));
         }
         finally
         {

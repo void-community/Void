@@ -20,7 +20,7 @@ internal sealed class ManagedProcess(
     private bool _crashReportRead;
     private bool? _wasOutOfMemoryKilled;
 
-    /// <summary>Gets what the crash report the game saved since its launch says, once it exited, or <see langword="null"/> without one.</summary>
+    /// <summary>Gets what the game's crash report, or its Java runtime's error log, says once it exited, or <see langword="null"/> without one.</summary>
     public string? CrashCause
     {
         get
@@ -30,7 +30,7 @@ internal sealed class ManagedProcess(
 
             if (!_crashReportRead)
             {
-                field = CrashReports.Find(minecraftDirectory, launchedAt) is { } report ? CrashReports.ReadCause(report) : null;
+                field = CrashReports.ReadCrashCause(minecraftDirectory, launchedAt);
                 _crashReportRead = true;
             }
 

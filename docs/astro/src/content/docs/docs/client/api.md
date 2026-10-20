@@ -89,7 +89,7 @@ Treat it as failed if it reports `failed` or `canceled`, or if `operationId` cha
 
 The game should only end through `POST /api/game/stop`. If Minecraft quits, crashes, or is killed instead, `state` becomes `failed` with one of these failure codes:
 
-- `client.process.crashed` when Minecraft saved a crash report. The message says what the report says, for example `Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash`.
+- `client.process.crashed` when Minecraft saved a crash report, or its Java runtime an error log. The message says what they say, for example `Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash` or `Minecraft's Java runtime crashed: SIGSEGV (0xb) at pc=…, pid=…, tid=… in C [libc.so.6+0x8f228]`.
 - `client.process.out_of_memory` when it ran out of memory and was killed.
 - `client.process.exited` otherwise.
 
@@ -357,7 +357,7 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 
 | Code | Meaning |
 | :--- | :------ |
-| `client.process.crashed` | Minecraft crashed. The message has the description and error from its crash report. |
+| `client.process.crashed` | Minecraft or its Java runtime crashed. The message has the error from the crash report or the Java error log. |
 | `client.process.exited` | Minecraft ended without a stop request. |
 | `client.process.out_of_memory` | Minecraft ran out of memory and was killed. |
 | `client.connect.rejected` | The server disconnected the game while it was joining. |
@@ -422,6 +422,7 @@ Game logs and screenshots can contain player names, server addresses, and chat.
 | `console-*.log`, `previous-*` | Recent console output of the game and the client. |
 | `logs-latest.log`, `logs-debug.log` | Minecraft's logs. |
 | `crash-reports-crash-*.txt` | Minecraft crash reports. |
+| `hs_err_pid*.log` | Error logs of the Java runtime, when it crashed. |
 | `debug-disconnect-*.txt` | Minecraft disconnect reports. |
 | `failure-*.png` | Screenshots taken when an operation failed. |
 

@@ -330,7 +330,8 @@ internal sealed class SessionDiagnostics
 
         try
         {
-            foreach (string? directoryName in new[] { "logs", "debug", "crash-reports" })
+            // The Java runtime writes its error logs to the game directory itself.
+            foreach (string? directoryName in new[] { "", "logs", "debug", "crash-reports" })
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string directory = Path.Combine(session.MinecraftDirectory, directoryName);
@@ -353,7 +354,11 @@ internal sealed class SessionDiagnostics
                                           && name.StartsWith(value: "crash-", StringComparison.Ordinal)
                                           && name.EndsWith(value: ".txt", StringComparison.Ordinal);
 
-                    if (IsLink(file) || !(isLogEvidence || isDisconnectEvidence || isCrashEvidence))
+                    bool isJavaErrorEvidence = directoryName.Length is 0
+                                              && name.StartsWith(value: "hs_err_pid", StringComparison.Ordinal)
+                                              && name.EndsWith(value: ".log", StringComparison.Ordinal);
+
+                    if (IsLink(file) || !(isLogEvidence || isDisconnectEvidence || isCrashEvidence || isJavaErrorEvidence))
                         continue;
 
                     FileInfo information = new(file);
@@ -370,12 +375,12 @@ internal sealed class SessionDiagnostics
                         continue;
 
                     if (information.Length > MaximumFileBytes)
-                        AddWarning(session, $"Truncated {directoryName}/{name} to its last {MaximumFileBytes} bytes");
+                        AddWarning(session, $"Truncated {Path.Join(directoryName, name)} to its last {MaximumFileBytes} bytes");
 
                     byte[] content = await ReadTailAsync(file, MaximumFileBytes, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
                     await WriteFileAsync(
                         session,
-                        $"{directoryName}-{name}",
+                        directoryName.Length is 0 ? name : $"{directoryName}-{name}",
                         Encoding.UTF8.GetBytes(Redact(session, Encoding.UTF8.GetString(content))),
                         append: false,
                         cancellationToken

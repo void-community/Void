@@ -135,6 +135,9 @@ public class SessionDiagnosticsTests : IDisposable
             await diagnostics.RegisterSecretAsync("private-agent-token", TestContext.Current.CancellationToken);
         await diagnostics.WriteOutputAsync(id, "stdout", "token=private-agent-token", TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(Path.Combine(gameDirectory, "debug", "disconnect-real.txt"), "private-agent-token", TestContext.Current.CancellationToken);
+        // The Java runtime's error log lists the JVM arguments, which include the agent's token.
+        await File.WriteAllTextAsync(Path.Combine(gameDirectory, "hs_err_pid42.log"), "Command Line: -javaagent:agent.jar=token=private-agent-token", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(gameDirectory, "options.txt"), "fullscreen:false", TestContext.Current.CancellationToken);
         var secretFile = Path.Combine(_directory, "credentials.txt");
         await File.WriteAllTextAsync(secretFile, "private credentials", TestContext.Current.CancellationToken);
         if (!OperatingSystem.IsWindows())
@@ -143,6 +146,8 @@ public class SessionDiagnosticsTests : IDisposable
         Assert.DoesNotContain("debug-disconnect-link.txt", files.Keys);
         Assert.All(files.Values, value => Assert.DoesNotContain("private-agent-token", value));
         Assert.Equal("[redacted]", files["debug-disconnect-real.txt"]);
+        Assert.Equal("Command Line: -javaagent:agent.jar=token=[redacted]", files["hs_err_pid42.log"]);
+        Assert.DoesNotContain("options.txt", files.Keys);
     }
 
     [Fact]
