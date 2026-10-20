@@ -209,9 +209,22 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
     public async Task<GameMenu?> ReadMenuAsync(RunningGame game, CancellationToken cancellationToken)
     {
-        // The agent publishes its endpoint before the game opens a window, so without it nothing would ever report the menu.
+        // The agent publishes its endpoint before the game opens a window, so without one it didn't start with the game, and is attached the
+        // way every other agent command attaches it. A failure is the answer, so the menu monitor doesn't attach again every second.
         if (!File.Exists(game.Tracker.DescriptorPath))
-            return new GameMenu(Screen: null, Problem: "The Minecraft agent is not running, so the client can't follow the game's screens");
+        {
+            try
+            {
+                await AttachAgentAsync(game, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
+            {
+                return new GameMenu(Screen: null, $"The client can't follow the game's screens: {exception.Message.Trim()}");
+            }
+
+            if (!File.Exists(game.Tracker.DescriptorPath))
+                return new GameMenu(Screen: null, Problem: "The Minecraft agent is not running, so the client can't follow the game's screens");
+        }
 
         var response = await QueryAgentAsync(game, command: "ready", cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 
