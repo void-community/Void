@@ -1,8 +1,5 @@
 package voidclient.agent;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Array;
@@ -664,48 +661,18 @@ public final class Tracker {
         if (type.getName().startsWith("java."))
             return null;
 
-        String resourceName = type.getName().replace('.', '/') + ".class";
-        ClassLoader loader = type.getClassLoader();
+        byte[] classFile = LoadedClassFiles.read(instrumentation, type);
 
-        try (InputStream stream = loader == null ? ClassLoader.getSystemResourceAsStream(resourceName) : loader.getResourceAsStream(resourceName)) {
-            if (stream == null)
-                return null;
-
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int count;
-
-            while ((count = stream.read(buffer)) >= 0)
-                output.write(buffer, 0, count);
-
-            return PositionSourceDiscovery.findPositionSources(output.toByteArray());
-        } catch (IOException exception) {
-            return null;
-        }
+        return classFile == null ? null : PositionSourceDiscovery.findPositionSources(classFile);
     }
 
     private static RotationSources discoverRotationSources(Class<?> type) {
         if (type.getName().startsWith("java."))
             return null;
 
-        String resourceName = type.getName().replace('.', '/') + ".class";
-        ClassLoader loader = type.getClassLoader();
+        byte[] classFile = LoadedClassFiles.read(instrumentation, type);
 
-        try (InputStream stream = loader == null ? ClassLoader.getSystemResourceAsStream(resourceName) : loader.getResourceAsStream(resourceName)) {
-            if (stream == null)
-                return null;
-
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int count;
-
-            while ((count = stream.read(buffer)) >= 0)
-                output.write(buffer, 0, count);
-
-            return RotationSourceDiscovery.findRotationSources(output.toByteArray());
-        } catch (IOException exception) {
-            return null;
-        }
+        return classFile == null ? null : RotationSourceDiscovery.findRotationSources(classFile);
     }
 
     private static String profileId(Object profile) {
