@@ -39,6 +39,9 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
     private const string ModMissingMessage = "Invalid parameter provided for 'modrinth' command";
     private readonly string _loaderMissingMessage = $"Invalid parameter provided for 'install-{loader.ToString().ToLowerInvariant()}' command";
 
+    // The image picks a loader's newest stable build, so a NeoForge release with only betas is played on its newest beta, as for Minecraft 1.21.6.
+    private readonly string?[] _loaderVersions = loader is ModLoader.NeoForge ? [null, "beta"] : [null];
+
     private (string Reason, bool Warn)? _skip;
     private MinecraftServer[]? _servers;
     private GameSetup? _setup;
@@ -112,11 +115,24 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
 
     private async Task<StartOutcome> TryStartAsync(ReleaseVersion release, List<IntegrationTestException> failures)
     {
+        foreach (var loaderVersion in _loaderVersions)
+        {
+            var outcome = await TryStartAsync(release, loaderVersion, failures);
+
+            if (outcome is not StartOutcome.LoaderMissing)
+                return outcome;
+        }
+
+        return StartOutcome.LoaderMissing;
+    }
+
+    private async Task<StartOutcome> TryStartAsync(ReleaseVersion release, string? loaderVersion, List<IntegrationTestException> failures)
+    {
         foreach (var contentMod in ContentMods)
         {
             try
             {
-                (_servers, _setup) = await StartServersAsync(release, contentMod, Timeouts.SetupTimeoutToken);
+                (_servers, _setup) = await StartServersAsync(release, loaderVersion, contentMod, Timeouts.SetupTimeoutToken);
                 return StartOutcome.Started;
             }
             catch (IntegrationTestException exception) when (exception.Message.Contains(_loaderMissingMessage, StringComparison.Ordinal))
@@ -138,9 +154,9 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
         return StartOutcome.ContentModsMissing;
     }
 
-    private async Task<(MinecraftServer[] Servers, GameSetup Setup)> StartServersAsync(ReleaseVersion release, string contentMod, CancellationToken cancellationToken)
+    private async Task<(MinecraftServer[] Servers, GameSetup Setup)> StartServersAsync(ReleaseVersion release, string? loaderVersion, string contentMod, CancellationToken cancellationToken)
     {
-        var serverTasks = Enumerable.Range(start: 1, serverCount).Select(index => ModdedServer.CreateAsync(loader, release, contentMod, $"server-{index}.log", cancellationToken)).ToArray();
+        var serverTasks = Enumerable.Range(start: 1, serverCount).Select(index => ModdedServer.CreateAsync(loader, release, loaderVersion, contentMod, $"server-{index}.log", cancellationToken)).ToArray();
 
         try
         {
