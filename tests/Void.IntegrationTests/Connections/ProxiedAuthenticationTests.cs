@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public class ProxiedAuthenticationTests(PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
+public class ProxiedAuthenticationTests : IntegrationUnitBase
 {
     private const string ExpectedKickReason = "The server is full!";
     private static readonly ProtocolVersion TestProtocolVersion = ProtocolVersion.MINECRAFT_1_21_4;
@@ -20,9 +20,10 @@ public class ProxiedAuthenticationTests(PortableMinecraftClientFixture portableM
     [Fact]
     public async Task PaperServerFullKickIsRelayedToPlayerAsync()
     {
-        if (!portableMinecraftClientFixture.Api.SupportedVersions.Contains(TestProtocolVersion))
+        if (!PortableMinecraftClient.SupportedVersions.Contains(TestProtocolVersion))
             Assert.Skip($"Protocol version {TestProtocolVersion} is not supported by the client, skipping test.");
 
+        await using var client = new ReusableGame(TestProtocolVersion, setup: null);
         await using var paperServer = await PaperServer.CreateAsync("server-full.log", Timeouts.SetupTimeoutToken, maximumPlayers: 0);
         var voidProxy = await VoidProxy.CreateAsync(
             Path.Combine(Path.GetTempPath(), nameof(ProxiedAuthenticationTests), Path.GetRandomFileName()),
@@ -35,7 +36,7 @@ public class ProxiedAuthenticationTests(PortableMinecraftClientFixture portableM
         {
             await LoggedExecutorAsync(async () =>
             {
-                await using var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedAuthenticationTests), TestProtocolVersion, [voidProxy, paperServer], Timeouts.SetupTimeoutToken);
+                await using var game = await client.BeginSessionAsync(nameof(ProxiedAuthenticationTests), [voidProxy, paperServer], Timeouts.SetupTimeoutToken);
                 var authenticationFailureTask = voidProxy.LogWriter.WaitForLineAsync(
                     line => line.Contains($"Player {game.Username} cannot authenticate on args-server-1: {{text:\"{ExpectedKickReason}\"}}", StringComparison.Ordinal),
                     Timeouts.SetupTimeoutToken);
@@ -49,7 +50,9 @@ public class ProxiedAuthenticationTests(PortableMinecraftClientFixture portableM
                 await authenticationFailureTask;
                 await paperRejectionTask;
                 await playerDisconnectionTask;
-            }, portableMinecraftClientFixture.Api, voidProxy, paperServer);
+
+                await game.EndAsync(joinedServer: null, Timeouts.StepTimeoutToken);
+            }, client, voidProxy, paperServer);
         }
 
         voidProxy.AssertNoWarningOrHigherLogsSince(voidLogWindowStartedAt);

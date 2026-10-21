@@ -14,29 +14,37 @@ using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMinecraftServersFixture serversFixture, IVoidFixture voidFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientPairFixture>
+public abstract class ProxiedPlayerTestBase(ConnectionsFixture fixture) : IntegrationUnitBase
 {
     private const double CoordinateTolerance = 1.0 / 32.0;
-    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, voidFixture.VoidProxy.Port);
+    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, fixture.VoidProxy.Port);
 
     protected async Task RunAsync()
     {
-        if (!clientFixture.Client1.SupportedVersions.Contains(protocolVersion) || !clientFixture.Client2.SupportedVersions.Contains(protocolVersion))
-            Assert.Skip($"Protocol version {protocolVersion} is not supported by the clients, skipping test.");
+        if (!PortableMinecraftClient.SupportedVersions.Contains(fixture.ProtocolVersion))
+            Assert.Skip($"Protocol version {fixture.ProtocolVersion} is not supported by the clients, skipping test.");
 
-        serversFixture.SkipIfUnavailable();
+        fixture.SkipIfUnavailable();
 
-        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion), clientFixture.Client1, clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Server1);
+        try
+        {
+            await LoggedExecutorAsync(RunAttemptAsync, fixture.Game1, fixture.Game2, fixture.VoidProxy, fixture.Server1);
+        }
+        finally
+        {
+            // No other test plays the second game, so it stops rather than holding memory while the collection goes on.
+            await fixture.Game2.ReleaseAsync();
+        }
     }
 
-    private async Task RunAttemptAsync(ProtocolVersion protocolVersion)
+    private async Task RunAttemptAsync()
     {
         using var disconnectionCancellation = new CancellationTokenSource();
         var disconnectionTasks = new List<Task>();
 
         try
         {
-            await RunPlayersAsync(protocolVersion, disconnectionCancellation.Token, disconnectionTasks);
+            await RunPlayersAsync(disconnectionCancellation.Token, disconnectionTasks);
             await Task.WhenAll(disconnectionTasks).WaitAsync(Timeouts.StepTimeout);
         }
         finally
@@ -46,21 +54,23 @@ public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMi
         }
     }
 
-    private async Task RunPlayersAsync(ProtocolVersion protocolVersion, CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
+    private async Task RunPlayersAsync(CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
     {
-        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Setup, [clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Server1], Timeouts.SetupTimeoutToken);
-        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Setup, [clientFixture.Client1, voidFixture.VoidProxy, serversFixture.Server1], Timeouts.SetupTimeoutToken);
+        await using var firstGame = await fixture.Game1.BeginSessionAsync(nameof(ProxiedPlayerTestBase), [fixture.Game2, fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
+        await using var secondGame = await fixture.Game2.BeginSessionAsync(nameof(ProxiedPlayerTestBase), [fixture.Game1, fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
 
-        disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
-        disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
+        disconnectionTasks.Add(fixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
+        disconnectionTasks.Add(fixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
 
         await ConnectPlayerAsync(firstGame);
         await ConnectPlayerAsync(secondGame);
 
         await WaitForReciprocalCoordinatesAsync(firstGame, secondGame);
+
+        await Task.WhenAll(firstGame.EndAsync(fixture.Server1, Timeouts.StepTimeoutToken), secondGame.EndAsync(fixture.Server1, Timeouts.StepTimeoutToken));
     }
 
-    private async Task ConnectPlayerAsync(PortableMinecraftClient.Game game)
+    private async Task ConnectPlayerAsync(GameSession game)
     {
         using var connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(Timeouts.StepTimeoutToken);
 
@@ -77,7 +87,7 @@ public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMi
         await WaitForLocalPlayerAsync(game, Timeouts.StepTimeoutToken);
     }
 
-    private static async Task WaitForLocalPlayerAsync(PortableMinecraftClient.Game game, CancellationToken cancellationToken)
+    private static async Task WaitForLocalPlayerAsync(GameSession game, CancellationToken cancellationToken)
     {
         try
         {
@@ -99,7 +109,7 @@ public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMi
         }
     }
 
-    private static async Task WaitForReciprocalCoordinatesAsync(PortableMinecraftClient.Game firstGame, PortableMinecraftClient.Game secondGame)
+    private static async Task WaitForReciprocalCoordinatesAsync(GameSession firstGame, GameSession secondGame)
     {
         using var playersTimeout = CancellationTokenSource.CreateLinkedTokenSource(Timeouts.StepTimeoutToken);
         PortableMinecraftClient.Game.ApiGamePlayers? firstPlayers = null;
@@ -143,7 +153,7 @@ public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMi
         }
     }
 
-    private static ReciprocalPlayers? FindReciprocalPlayers(PortableMinecraftClient.Game firstGame, PortableMinecraftClient.Game secondGame, PortableMinecraftClient.Game.ApiGamePlayers? firstPlayers, PortableMinecraftClient.Game.ApiGamePlayers? secondPlayers)
+    private static ReciprocalPlayers? FindReciprocalPlayers(GameSession firstGame, GameSession secondGame,PortableMinecraftClient.Game.ApiGamePlayers? firstPlayers, PortableMinecraftClient.Game.ApiGamePlayers? secondPlayers)
     {
         var secondAsSeenByFirst = firstPlayers?.Remote.SingleOrDefault(player => player.Name == secondGame.Username);
         var firstAsSeenBySecond = secondPlayers?.Remote.SingleOrDefault(player => player.Name == firstGame.Username);

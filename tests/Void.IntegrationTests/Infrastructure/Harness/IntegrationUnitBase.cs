@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -29,7 +30,7 @@ public class IntegrationUnitBase
         catch (Exception exception)
         {
             Console.WriteLine($"Primary integration failure:\n{exception}");
-            Console.WriteLine(CollectLogs());
+            Console.WriteLine(await CollectLogsAsync(voidLogWindowStartedAt, sides));
             throw new IntegrationTestException($"Test execution failed: {exception.Message}", exception);
         }
         finally
@@ -37,9 +38,25 @@ public class IntegrationUnitBase
             foreach (var voidProxy in voidProxies)
                 voidProxy.ClearLogs();
         }
+    }
 
-        return;
+    // Sides outlive the test, so only what they logged while it ran belongs to its failure.
+    private static async Task<string> CollectLogsAsync(DateTime since, IIntegrationSide[] sides)
+    {
+        var logs = new List<string>(sides.Length);
 
-        string CollectLogs() => $"Logs:\n\n\n{string.Join("\n\n\n", sides.Select(side => $"{side} logs:\n{string.Join("\n", side.Logs)}"))}";
+        foreach (var side in sides)
+        {
+            try
+            {
+                logs.Add($"{side} logs:\n{string.Join("\n", await side.ReadLogsAsync(since, Timeouts.StepTimeoutToken))}");
+            }
+            catch (Exception exception)
+            {
+                logs.Add($"{side} logs couldn't be read: {exception.Message}");
+            }
+        }
+
+        return $"Logs:\n\n\n{string.Join("\n\n\n", logs)}";
     }
 }

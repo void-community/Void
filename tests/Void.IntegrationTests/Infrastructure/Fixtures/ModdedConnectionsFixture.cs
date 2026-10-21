@@ -19,8 +19,11 @@ namespace Void.IntegrationTests.Infrastructure.Fixtures;
 /// picks the loader build and the content mod's build for the newest release of the version it can, and clients copy what it installed. A
 /// version the loader or mods haven't released for starts nothing, and its tests skip.
 /// </summary>
-public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion protocolVersion, int serverCount) : IMinecraftServersFixture, IAsyncLifetime
+public abstract class ModdedConnectionsFixture(ModLoader loader, ProtocolVersion protocolVersion) : ConnectionsFixture(protocolVersion)
 {
+    // Tests play on the first server, and move to the second one through the proxy.
+    private const int ServerCount = 2;
+
     /// <summary>
     /// Mods that add blocks and items and must be installed on both sides, tried in order. Together they have a build for every Forge and
     /// NeoForge release so far, and the first one keeps up with new releases.
@@ -46,19 +49,19 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
     private MinecraftServer[]? _servers;
     private GameSetup? _setup;
 
-    public bool IsAvailable => _servers is not null;
-    public IReadOnlyList<MinecraftServer> Servers => _servers ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
-    public GameSetup? Setup => _setup ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
+    public override bool IsAvailable => _servers is not null;
+    public override IReadOnlyList<MinecraftServer> Servers => _servers ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
+    public override GameSetup? Setup => _setup ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
 
-    public void SkipIfUnavailable()
+    public override void SkipIfUnavailable()
     {
         if (_skip is { } skip)
             Skip(skip.Reason, skip.Warn);
     }
 
-    public async ValueTask InitializeAsync()
+    protected override async Task StartServersAsync()
     {
-        var releases = protocolVersion.Releases.OrderDescending().ToArray();
+        var releases = ProtocolVersion.Releases.OrderDescending().ToArray();
         var failures = new List<IntegrationTestException>();
         var loaderReleased = false;
 
@@ -74,7 +77,7 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
 
         // A mod that crashed its server needs a look, unlike one that has no build for the version.
         if (failures.Count > 0)
-            throw new IntegrationTestException($"No {loader} server for Minecraft {protocolVersion} started with any content mod. First failure: {failures[0].Message}", new AggregateException(failures));
+            throw new IntegrationTestException($"No {loader} server for Minecraft {ProtocolVersion} started with any content mod. First failure: {failures[0].Message}", new AggregateException(failures));
 
         var releaseAge = DateTimeOffset.UtcNow - await MojangVersionCatalog.FindReleaseTimeAsync(releases[0], Timeouts.SetupTimeoutToken);
         var notReleasedYet = releaseAge < CatchUpPeriod;
@@ -82,19 +85,17 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
 
         _skip = (loaderReleased, notReleasedYet) switch
         {
-            (false, true) => ($"{loader} has not released a build for Minecraft {protocolVersion} yet; these tests run once it does", true),
-            (false, false) => ($"{loader} never released a build for Minecraft {protocolVersion}", false),
-            (true, true) => ($"No content mod ({projects}) has released a {loader} build for Minecraft {protocolVersion} yet; these tests run once one does", true),
-            (true, false) => ($"No content mod ({projects}) has a {loader} build for Minecraft {protocolVersion}", false)
+            (false, true) => ($"{loader} has not released a build for Minecraft {ProtocolVersion} yet; these tests run once it does", true),
+            (false, false) => ($"{loader} never released a build for Minecraft {ProtocolVersion}", false),
+            (true, true) => ($"No content mod ({projects}) has released a {loader} build for Minecraft {ProtocolVersion} yet; these tests run once one does", true),
+            (true, false) => ($"No content mod ({projects}) has a {loader} build for Minecraft {ProtocolVersion}", false)
         };
     }
 
-    public async ValueTask DisposeAsync()
+    protected override async Task DisposeServersAsync()
     {
         if (_servers is { } servers)
             await Task.WhenAll(servers.Select(server => server.DisposeAsync().AsTask()));
-
-        GC.SuppressFinalize(this);
     }
 
     /// <summary>Skips a test whose game isn't released yet with a warning, and one whose game will never exist without one.</summary>
@@ -156,7 +157,7 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
 
     private async Task<(MinecraftServer[] Servers, GameSetup Setup)> StartServersAsync(ReleaseVersion release, string? loaderVersion, string contentMod, CancellationToken cancellationToken)
     {
-        var serverTasks = Enumerable.Range(start: 1, serverCount).Select(index => ModdedServer.CreateAsync(loader, release, loaderVersion, contentMod, $"server-{index}.log", cancellationToken)).ToArray();
+        var serverTasks = Enumerable.Range(start: 1, ServerCount).Select(index => ModdedServer.CreateAsync(loader, release, loaderVersion, contentMod, $"server-{index}.log", cancellationToken)).ToArray();
 
         try
         {

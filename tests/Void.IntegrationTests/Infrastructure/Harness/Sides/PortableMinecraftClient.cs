@@ -31,7 +31,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
     private DateTime _readLogsSince = DateTime.UtcNow;
 
-    public IEnumerable<ProtocolVersion> SupportedVersions => ProtocolVersion.Range(ProtocolVersion.Oldest, ProtocolVersion.Latest);
+    public static IEnumerable<ProtocolVersion> SupportedVersions => ProtocolVersion.Range(ProtocolVersion.Oldest, ProtocolVersion.Latest);
 
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => ReadLogsAsync(_readLogsSince).GetAwaiter().GetResult();
@@ -82,79 +82,50 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         return new PortableMinecraftClient(container, httpClient);
     }
 
-    public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, CancellationToken cancellationToken = default)
-    {
-        return await RunGameAsync(testName, protocolVersion, [], cancellationToken);
-    }
-
-    public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
-    {
-        return await RunGameAsync(testName, protocolVersion, setup: null, additionalLogSides, cancellationToken);
-    }
-
     /// <param name="setup">The modded game to start, or <see langword="null"/> to start vanilla Minecraft of the protocol version.</param>
-    public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, GameSetup? setup, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
+    public async Task<Game> LaunchGameAsync(ProtocolVersion protocolVersion, GameSetup? setup, CancellationToken cancellationToken = default)
     {
-        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, setup, cancellationToken);
+        return await Game.LaunchAsync(this, protocolVersion, setup, cancellationToken);
     }
 
+    /// <summary>
+    /// A launched Minecraft game, which plays one test after another until it stops. What its tests do is written by their
+    /// <see cref="GameSession"/>, while the launch and the game's own diagnostics are written next to the steps of every test, under
+    /// <c>steps/Games</c>.
+    /// </summary>
     /// <param name="Setup">The modded game the client plays, or <see langword="null"/> when it plays vanilla Minecraft of the protocol version.</param>
-    public record Game(string TestName, IContainer Container, HttpClient HttpClient, IReadOnlyList<IIntegrationSide> LogSides, DateTime StartedAt, ProtocolVersion ProtocolVersion, GameSetup? Setup, string Username) : IAsyncDisposable
+    public record Game(PortableMinecraftClient Client, ProtocolVersion ProtocolVersion, GameSetup? Setup, string Username, DateTime LaunchedAt)
     {
         private const string ModsDirectory = "/root/.minecraft/mods/";
-        private readonly string _workingDirectory = Setup is { } setup
-            ? Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, setup.Loader.ToString(), ProtocolVersion.ToString(), Username)
-            : Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, ProtocolVersion.ToString(), Username);
 
-        private string GameName => Setup?.ToString() ?? $"Minecraft {ProtocolVersion.FirstRelease}";
         private ApiProblemDetails? _lastPlayersProblem;
         private Guid? _sessionId;
-        private int _step;
 
-        public async ValueTask DisposeAsync()
+        public HttpClient HttpClient => Client.HttpClient;
+        public IContainer Container => Client.Container;
+        public string GameName => Setup?.ToString() ?? $"Minecraft {ProtocolVersion.FirstRelease}";
+
+        /// <summary>Where the launch and the game's diagnostics are written.</summary>
+        public string WorkingDirectory => StepsDirectory("Games", ProtocolVersion, Setup, Username);
+
+        public static string StepsDirectory(string name, ProtocolVersion protocolVersion, GameSetup? setup, string username)
         {
-            await LogAsync($"Stopping Minecraft {ProtocolVersion.FirstRelease}", Timeouts.StepTimeoutToken);
-
-            try
-            {
-                try
-                {
-                    await TryMakeStepAsync("exit", Timeouts.StepTimeoutToken);
-                }
-                finally
-                {
-                    await TryWriteLogsAsync(Timeouts.StepTimeoutToken);
-                }
-            }
-            finally
-            {
-                try
-                {
-                    await StopClientAsync(Timeouts.StepTimeoutToken);
-                }
-                finally
-                {
-                    await ClientDiagnosticsDownloader.DownloadAsync(HttpClient, _sessionId, _workingDirectory);
-                }
-            }
-
-            GC.SuppressFinalize(this);
+            return setup is { } moddedSetup
+                ? Path.Combine(Directory.GetCurrentDirectory(), "steps", name, moddedSetup.Loader.ToString(), protocolVersion.ToString(), username)
+                : Path.Combine(Directory.GetCurrentDirectory(), "steps", name, protocolVersion.ToString(), username);
         }
 
-        public static async Task<Game> RunAsync(string testName, IContainer container, HttpClient httpClient, IReadOnlyList<IIntegrationSide> logSides, ProtocolVersion protocolVersion, GameSetup? setup, CancellationToken cancellationToken = default)
+        public static async Task<Game> LaunchAsync(PortableMinecraftClient client, ProtocolVersion protocolVersion, GameSetup? setup, CancellationToken cancellationToken = default)
         {
-            var username = Convert.ToHexString(BitConverter.GetBytes(Random.Shared.Next()));
-            var startedAt = DateTime.UtcNow;
+            var game = new Game(client, protocolVersion, setup, Convert.ToHexString(BitConverter.GetBytes(Random.Shared.Next())), DateTime.UtcNow);
 
             using var optionsContent = new StringContent(CreateOptionsText(protocolVersion), Encoding.UTF8, "text/plain");
-            using var optionsResponse = await httpClient.PutAsync("/api/game/options", optionsContent, cancellationToken);
+            using var optionsResponse = await client.HttpClient.PutAsync("/api/game/options", optionsContent, cancellationToken);
             await EnsureSuccessAsync(optionsResponse, $"Writing Minecraft {protocolVersion.FirstRelease} options", cancellationToken);
-
-            var game = new Game(testName, container, httpClient, logSides, startedAt, protocolVersion, setup, username);
 
             try
             {
-                await game.LogAsync($"Starting {game.GameName}", cancellationToken);
+                await LogAsync($"Starting {game.GameName}", cancellationToken);
 
                 if (setup is not null)
                     await game.InstallModsAsync(setup, cancellationToken);
@@ -163,53 +134,102 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             }
             catch
             {
-                await game.TryWriteLogsAsync(Timeouts.StepTimeoutToken);
+                await game.TryWriteLaunchLogsAsync(Timeouts.StepTimeoutToken);
+
                 try
                 {
-                    await game.StopClientAsync(Timeouts.StepTimeoutToken);
+                    await game.StopAsync(Timeouts.StepTimeoutToken);
                 }
                 catch (Exception exception)
                 {
-                    await game.LogAsync($"Cleanup after launch failure failed: {exception}", CancellationToken.None);
+                    await LogAsync($"Cleanup after launch failure failed: {exception}", CancellationToken.None);
                 }
-                finally
-                {
-                    await ClientDiagnosticsDownloader.DownloadAsync(httpClient, game._sessionId, game._workingDirectory);
-                }
+
                 throw;
             }
 
             return game;
         }
 
-        public async Task SendTextMessageAsync(string text, CancellationToken cancellationToken = default)
+        /// <summary>Stops the game, and saves its diagnostics with the launch's.</summary>
+        public async Task StopAsync(CancellationToken cancellationToken = default)
         {
-            await SendTextMessagesAsync([text], cancellationToken);
-        }
+            await LogAsync($"Stopping {GameName}", cancellationToken);
 
-        public async Task SendTextMessagesAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default)
-        {
-            foreach (var text in texts)
+            try
             {
-                // Is it a Chat Command?
-                var expectTask = text.StartsWith('/')
-                    ? Task.Delay(3_000, cancellationToken) // Give some room for client-server reaction
-                    : Container.ExpectTextAsync(text, cancellationToken); // Expect the text to appear in logs
+                using var response = await HttpClient.PostAsync("/api/game/stop", null, cancellationToken);
+                await EnsureSuccessAsync(response, $"Stopping {GameName}", cancellationToken);
+                var stopResponse = await response.Content.ReadFromJsonAsync<StopGameResponse>(cancellationToken)
+                                   ?? throw new IntegrationTestException("Stopping Minecraft returned an empty response");
 
-                await LogAsync($"Sending chat input: {text}", cancellationToken);
-                await SendChatAsync(text, cancellationToken);
-                await expectTask;
-
-                await MakeStepAsync("chat", cancellationToken);
+                if (stopResponse.Status.State is not "idle" || stopResponse.Status.OperationState is not "succeeded")
+                    throw new IntegrationTestException($"Stopping Minecraft returned unexpected state {stopResponse.Status.State}/{stopResponse.Status.OperationState}");
+            }
+            finally
+            {
+                await ClientDiagnosticsDownloader.DownloadAsync(HttpClient, _sessionId, WorkingDirectory);
             }
         }
 
-        public async Task EnsureStableAsync(CancellationToken cancellationToken = default)
+        /// <summary>Reads whether the game can begin another test, which it can while it's at its menu.</summary>
+        public async Task<bool> IsPlayableAsync(CancellationToken cancellationToken = default)
         {
-            await EnsureStableAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            var status = await ReadStatusAsync(cancellationToken);
+            return status.State is "ready";
         }
 
-        public async Task EnsureStableAsync(TimeSpan duration, CancellationToken cancellationToken = default)
+        public async Task<bool> IsConnectedAsync(CancellationToken cancellationToken = default)
+        {
+            var status = await ReadStatusAsync(cancellationToken);
+            return status.State is "connected";
+        }
+
+        public async Task JoinServerAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
+        {
+            var (dockerHost, dockerPort) = endPoint.AsDockerHostPort;
+
+            await LogAsync($"Navigating the Minecraft UI to {dockerHost}:{dockerPort}", cancellationToken);
+
+            using var response = await HttpClient.PostAsJsonAsync("/api/game/connect", new { host = dockerHost, port = dockerPort }, cancellationToken);
+            await EnsureSuccessAsync(response, $"Navigating Minecraft {ProtocolVersion.FirstRelease} to {dockerHost}:{dockerPort}", cancellationToken);
+        }
+
+        public async Task JoinServerExpectingFailureAsync(EndPoint endPoint, string expectedReason, CancellationToken cancellationToken = default)
+        {
+            var (dockerHost, dockerPort) = endPoint.AsDockerHostPort;
+            using var response = await HttpClient.PostAsJsonAsync("/api/game/connect", new { host = dockerHost, port = dockerPort }, cancellationToken);
+            var problem = await ReadProblemDetailsAsync(response, cancellationToken);
+
+            if (response.IsSuccessStatusCode || problem?.Failure?.Code is not "client.connect.rejected" || problem.Detail?.Contains(expectedReason, StringComparison.Ordinal) is not true)
+                throw new IntegrationTestException($"Minecraft {ProtocolVersion.FirstRelease} did not report the expected native rejection {expectedReason}: HTTP {(int)response.StatusCode}, {JsonSerializer.Serialize(problem)}");
+
+            await LogAsync($"Minecraft {ProtocolVersion.FirstRelease} confirmed the native connection rejection: {problem.Detail}", cancellationToken);
+        }
+
+        /// <summary>Leaves the server, so the game can join one again.</summary>
+        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            await LogAsync($"Disconnecting {GameName}", cancellationToken);
+
+            using var response = await HttpClient.PostAsync("/api/game/disconnect", null, cancellationToken);
+
+            // Each test leaves its server so the next one can join again, which images older than the endpoint can't.
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
+                throw new IntegrationTestException("The client image predates POST /api/game/disconnect");
+
+            await EnsureSuccessAsync(response, $"Disconnecting {GameName}", cancellationToken);
+        }
+
+        public async Task SendChatAsync(string text, CancellationToken cancellationToken = default)
+        {
+            await LogAsync($"Sending chat input: {text}", cancellationToken);
+
+            using var response = await HttpClient.PostAsJsonAsync("/api/game/send-chat", new { message = text }, cancellationToken);
+            await EnsureSuccessAsync(response, $"Sending chat input: {text}", cancellationToken);
+        }
+
+        public async Task WaitForLogsSilenceAsync(TimeSpan duration, CancellationToken cancellationToken = default)
         {
             var timestamp = Stopwatch.GetTimestamp();
             await LogAsync($"Waiting for logs to become stable for {duration.TotalSeconds:F2} seconds", cancellationToken);
@@ -235,7 +255,6 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 await Task.Delay(remainingDuration, cancellationToken);
 
             await LogAsync($"Logs are stable after {Stopwatch.GetElapsedTime(timestamp).TotalSeconds:F2} seconds", cancellationToken);
-            await MakeStepAsync("stable", cancellationToken);
         }
 
         public async Task<ApiGamePlayers?> TryReadPlayersAsync(CancellationToken cancellationToken = default)
@@ -279,6 +298,21 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             }
         }
 
+        public async Task<byte[]> TakeScreenshotAsync(CancellationToken cancellationToken = default)
+        {
+            using var response = await HttpClient.GetAsync("/api/game/screenshot", cancellationToken);
+            await EnsureSuccessAsync(response, "Taking Minecraft screenshot", cancellationToken);
+
+            return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        }
+
+        public static Task LogAsync(string message, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Console.WriteLine($"{LogMessagePrefix} {message}");
+            return Task.CompletedTask;
+        }
+
         private async Task StartAsync(CancellationToken cancellationToken = default)
         {
             var newerRelease = ProtocolVersion >= ProtocolVersion.MINECRAFT_26_1;
@@ -315,7 +349,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             foreach (var mod in setup.Mods)
                 await Container.CopyAsync(mod.Content, $"{ModsDirectory}{mod.FileName}", ct: cancellationToken);
 
-            Directory.CreateDirectory(_workingDirectory);
+            Directory.CreateDirectory(WorkingDirectory);
             var setupJson = JsonSerializer.Serialize(new
             {
                 minecraftRelease = setup.MinecraftRelease.ToString(),
@@ -323,77 +357,47 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 loaderVersion = setup.LoaderVersion,
                 mods = setup.Mods.Select(mod => mod.FileName)
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
-            await File.WriteAllTextAsync(Path.Combine(_workingDirectory, "game-setup.json"), setupJson, cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(WorkingDirectory, "game-setup.json"), setupJson, cancellationToken);
             await LogAsync($"Installed mods {string.Join(", ", setup.Mods.Select(mod => mod.FileName))}", cancellationToken);
         }
 
-        public async Task JoinServerAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
+        private async Task<ApiStatus> ReadStatusAsync(CancellationToken cancellationToken = default)
         {
-            var (dockerHost, dockerPort) = endPoint.AsDockerHostPort;
+            using var response = await HttpClient.GetAsync("/api/game/status", cancellationToken);
+            await EnsureSuccessAsync(response, "Reading Minecraft client status", cancellationToken);
 
-            await LogAsync($"Navigating the Minecraft UI to {dockerHost}:{dockerPort}", cancellationToken);
-
-            using var response = await HttpClient.PostAsJsonAsync("/api/game/connect", new { host = dockerHost, port = dockerPort }, cancellationToken);
-            await EnsureSuccessAsync(response, $"Navigating Minecraft {ProtocolVersion.FirstRelease} to {dockerHost}:{dockerPort}", cancellationToken);
-        }
-
-        public async Task JoinServerExpectingFailureAsync(EndPoint endPoint, string expectedReason, CancellationToken cancellationToken = default)
-        {
-            var (dockerHost, dockerPort) = endPoint.AsDockerHostPort;
-            using var response = await HttpClient.PostAsJsonAsync("/api/game/connect", new { host = dockerHost, port = dockerPort }, cancellationToken);
-            var problem = await ReadProblemDetailsAsync(response, cancellationToken);
-
-            if (response.IsSuccessStatusCode || problem?.Failure?.Code is not "client.connect.rejected" || problem.Detail?.Contains(expectedReason, StringComparison.Ordinal) is not true)
-                throw new IntegrationTestException($"Minecraft {ProtocolVersion.FirstRelease} did not report the expected native rejection {expectedReason}: HTTP {(int)response.StatusCode}, {JsonSerializer.Serialize(problem)}");
-
-            await LogAsync($"Minecraft {ProtocolVersion.FirstRelease} confirmed the native connection rejection: {problem.Detail}", cancellationToken);
-        }
-
-        private async Task SendChatAsync(string text, CancellationToken cancellationToken = default)
-        {
-            using var response = await HttpClient.PostAsJsonAsync("/api/game/send-chat", new { message = text }, cancellationToken);
-            await EnsureSuccessAsync(response, $"Sending chat input: {text}", cancellationToken);
-        }
-
-        private async Task StopClientAsync(CancellationToken cancellationToken = default)
-        {
-            using var response = await HttpClient.PostAsync("/api/game/stop", null, cancellationToken);
-            await EnsureSuccessAsync(response, $"Stopping Minecraft {ProtocolVersion.FirstRelease}", cancellationToken);
-            var stopResponse = await response.Content.ReadFromJsonAsync<StopGameResponse>(cancellationToken)
-                               ?? throw new IntegrationTestException("Stopping Minecraft returned an empty response");
-
-            if (stopResponse.Status.State is not "idle" || stopResponse.Status.OperationState is not "succeeded")
-                throw new IntegrationTestException($"Stopping Minecraft returned unexpected state {stopResponse.Status.State}/{stopResponse.Status.OperationState}");
+            return await ReadApiStatusAsync(response, "Reading Minecraft client status", cancellationToken);
         }
 
         private async Task WaitForClientReadyAsync(long operationId, CancellationToken cancellationToken = default)
         {
-            while (true)
+            var status = await ReadStatusAsync(cancellationToken);
+
+            while (status.OperationId != operationId || status is not { State: "ready", OperationState: "succeeded" })
             {
-                using var response = await HttpClient.GetAsync("/api/game/status", cancellationToken);
-                await EnsureSuccessAsync(response, "Reading Minecraft client status", cancellationToken);
-
-                var status = await ReadApiStatusAsync(response, "Reading Minecraft client status", cancellationToken);
-
                 if (status.OperationId != operationId)
                     throw new IntegrationTestException($"Minecraft launch operation {operationId} was superseded by {status.OperationId}");
-
-                if (status.State is "ready" && status.OperationState is "succeeded")
-                    return;
 
                 if (status.State is "failed" || status.OperationState is "failed" or "canceled")
                     throw new IntegrationTestException($"Starting Minecraft {ProtocolVersion.FirstRelease} failed: {status.Error ?? "client entered failed state"}");
 
                 await Task.Delay(TimeSpan.FromMilliseconds(ClientStatePollDelayMilliseconds), cancellationToken);
+                status = await ReadStatusAsync(cancellationToken);
             }
         }
 
-        private async Task<byte[]> TakeScreenshotAsync(CancellationToken cancellationToken = default)
+        private async Task TryWriteLaunchLogsAsync(CancellationToken cancellationToken = default)
         {
-            using var response = await HttpClient.GetAsync("/api/game/screenshot", cancellationToken);
-            await EnsureSuccessAsync(response, "Taking Minecraft screenshot", cancellationToken);
-
-            return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            try
+            {
+                Directory.CreateDirectory(WorkingDirectory);
+                var logs = await Client.ReadLogsAsync(LaunchedAt, cancellationToken);
+                await File.WriteAllLinesAsync(Path.Combine(WorkingDirectory, Client.LogFileName), logs, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                await LogAsync($"Failed to write launch logs: {exception.Message}", CancellationToken.None);
+            }
         }
 
         private static async Task EnsureSuccessAsync(HttpResponseMessage response, string operation, CancellationToken cancellationToken = default)
@@ -447,54 +451,6 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             catch (JsonException)
             {
                 return default;
-            }
-        }
-
-        private Task LogAsync(string message, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Console.WriteLine($"{LogMessagePrefix} {message}");
-            return Task.CompletedTask;
-        }
-
-        private async Task MakeStepAsync(string action, CancellationToken cancellationToken = default)
-        {
-            _ = Directory.CreateDirectory(_workingDirectory);
-            await File.WriteAllBytesAsync(Path.Combine(_workingDirectory, $"step-{++_step}-{action}.png"), await TakeScreenshotAsync(cancellationToken), cancellationToken);
-        }
-
-        private async Task TryMakeStepAsync(string action, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                await MakeStepAsync(action, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                await LogAsync($"Failed to write {action} step: {exception.Message}", CancellationToken.None);
-            }
-        }
-
-        private async Task TryWriteLogsAsync(CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                await WriteLogsAsync(cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                await LogAsync($"Failed to write step logs: {exception.Message}", CancellationToken.None);
-            }
-        }
-
-        private async Task WriteLogsAsync(CancellationToken cancellationToken = default)
-        {
-            _ = Directory.CreateDirectory(_workingDirectory);
-
-            foreach (var side in LogSides)
-            {
-                var logs = await side.ReadLogsAsync(StartedAt, cancellationToken);
-                await File.WriteAllLinesAsync(Path.Combine(_workingDirectory, side.LogFileName), logs, cancellationToken);
             }
         }
 

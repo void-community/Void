@@ -7,7 +7,7 @@ namespace Void.IntegrationTests.Generators.Sources;
 /// <summary>
 /// Generates a test class of every connection test family for every server type and protocol version, from the oldest to the latest one the
 /// proxy supports, such as <c>PaperDirectConnectionTests_1_12_1</c> and <c>ForgeDirectConnectionTests_1_12_1</c>. Each class runs in a test
-/// collection of its server type, protocol version and number of servers, whose fixture holds the servers the collection's classes share.
+/// collection of its server type and protocol version, whose fixture holds the servers, proxy and games the collection's classes share.
 /// </summary>
 [Generator(LanguageNames.CSharp)]
 public sealed class ConnectionTestsGenerator : IIncrementalGenerator
@@ -31,33 +31,21 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
         new(
             Name: "DirectConnectionTests",
             BaseClassName: "DirectConnectionTestBase",
-            ClientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
-            ServerPair: false,
-            Proxied: false,
             MethodNameFormat: "PortableMinecraftClientConnectsTo{0}Server"
         ),
         new(
             Name: "ProxiedConnectionTests",
             BaseClassName: "ProxiedConnectionTestBase",
-            ClientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
-            ServerPair: false,
-            Proxied: true,
             MethodNameFormat: "PortableMinecraftClientConnectsTo{0}ServerThroughProxy"
         ),
         new(
             Name: "ProxiedPlayerTests",
             BaseClassName: "global::Void.IntegrationTests.Connections.ProxiedPlayerTestBase",
-            ClientFixture: ("PortableMinecraftClientPairFixture", "clientFixture"),
-            ServerPair: false,
-            Proxied: true,
             MethodNameFormat: "PortableMinecraftClientsExposeReciprocalCoordinates"
         ),
         new(
             Name: "ProxiedServerRedirectionTests",
             BaseClassName: "ProxiedServerRedirectionTestBase",
-            ClientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
-            ServerPair: true,
-            Proxied: true,
             MethodNameFormat: "PortableMinecraftClientMovesBetween{0}ServersThroughProxy"
         )
     ];
@@ -91,20 +79,18 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
         {
             foreach (var key in ProtocolVersionKeys)
             {
-                foreach (var serverPair in new[] { false, true })
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
 
-                    if (serverType.IsModded)
-                    {
-                        sourceBuilder.AppendLine($"public sealed class {ModdedFixtureName(serverType, key, serverPair)}() : {FixturesNamespace}.ModdedServersFixture(global::Void.IntegrationTests.Infrastructure.Harness.ModLoader.{serverType.Name}, global::Void.Minecraft.Network.ProtocolVersion.MINECRAFT_{key}, serverCount: {(serverPair ? 2 : 1)});");
-                        sourceBuilder.AppendLine();
-                    }
+                var protocolVersion = $"global::Void.Minecraft.Network.ProtocolVersion.MINECRAFT_{key}";
 
-                    sourceBuilder.AppendLine("[global::Xunit.CollectionDefinition]");
-                    sourceBuilder.AppendLine($"public sealed class {CollectionName(serverType, key, serverPair)} : global::Xunit.ICollectionFixture<{FixtureTypeName(serverType, key, serverPair)}>;");
-                    sourceBuilder.AppendLine();
-                }
+                // Paper's servers play every protocol version, so every Paper collection plays on the same ones.
+                sourceBuilder.AppendLine(serverType.IsModded
+                    ? $"public sealed class {FixtureName(serverType, key)}() : {FixturesNamespace}.ModdedConnectionsFixture(global::Void.IntegrationTests.Infrastructure.Harness.ModLoader.{serverType.Name}, {protocolVersion});"
+                    : $"public sealed class {FixtureName(serverType, key)}({FixturesNamespace}.PaperFixture paperFixture) : {FixturesNamespace}.PaperConnectionsFixture(paperFixture, {protocolVersion});");
+                sourceBuilder.AppendLine();
+                sourceBuilder.AppendLine("[global::Xunit.CollectionDefinition]");
+                sourceBuilder.AppendLine($"public sealed class {CollectionName(serverType, key)} : global::Xunit.ICollectionFixture<{FixtureName(serverType, key)}>;");
+                sourceBuilder.AppendLine();
             }
         }
 
@@ -114,7 +100,6 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
     private static string GenerateFamilySource(Family family, CancellationToken cancellationToken)
     {
         var sourceBuilder = new StringBuilder();
-        var clientFixtureTypeName = $"{FixturesNamespace}.{family.ClientFixture.TypeName}";
 
         sourceBuilder.AppendLine("// <auto-generated />");
         sourceBuilder.AppendLine("#nullable enable");
@@ -131,15 +116,9 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var className = $"{serverType.Name}{family.Name}_{key}";
-                var protocolVersion = $"global::Void.Minecraft.Network.ProtocolVersion.MINECRAFT_{key}";
-                var serversFixture = FixtureTypeName(serverType, key, family.ServerPair);
-                var voidFixture = $"{FixturesNamespace}.VoidFixture<{serversFixture}>";
-                var clientParameter = family.ClientFixture.ParameterName;
 
-                sourceBuilder.AppendLine($"[global::Xunit.Collection(typeof(global::{CollectionsNamespace}.{CollectionName(serverType, key, family.ServerPair)}))]");
-                sourceBuilder.AppendLine(family.Proxied
-                    ? $"public sealed class {className}({serversFixture} serversFixture, {voidFixture} voidFixture, {clientFixtureTypeName} {clientParameter}) : {family.BaseClassName}({protocolVersion}, serversFixture, voidFixture, {clientParameter}), global::Xunit.IClassFixture<{voidFixture}>"
-                    : $"public sealed class {className}({serversFixture} serversFixture, {clientFixtureTypeName} {clientParameter}) : {family.BaseClassName}({protocolVersion}, serversFixture, {clientParameter})");
+                sourceBuilder.AppendLine($"[global::Xunit.Collection(typeof(global::{CollectionsNamespace}.{CollectionName(serverType, key)}))]");
+                sourceBuilder.AppendLine($"public sealed class {className}(global::{CollectionsNamespace}.{FixtureName(serverType, key)} fixture) : {family.BaseClassName}(fixture)");
                 sourceBuilder.AppendLine("{");
                 sourceBuilder.AppendLine("    [global::Xunit.Fact]");
                 sourceBuilder.AppendLine($"    public async global::System.Threading.Tasks.Task {methodName}()");
@@ -154,35 +133,21 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
         return sourceBuilder.ToString();
     }
 
-    private static string CollectionName(ServerType serverType, string key, bool serverPair)
+    private static string CollectionName(ServerType serverType, string key)
     {
-        return $"{serverType.Name}{ServersName(serverPair)}Collection_{key}";
+        return $"{serverType.Name}ConnectionsCollection_{key}";
     }
 
-    private static string ModdedFixtureName(ServerType serverType, string key, bool serverPair)
+    private static string FixtureName(ServerType serverType, string key)
     {
-        return $"{serverType.Name}{ServersName(serverPair)}Fixture_{key}";
-    }
-
-    /// <summary>Paper's collections share one fixture with the shared Paper servers, while a mod loader's collection has a generated fixture of its own.</summary>
-    private static string FixtureTypeName(ServerType serverType, string key, bool serverPair)
-    {
-        return serverType.IsModded ? $"global::{CollectionsNamespace}.{ModdedFixtureName(serverType, key, serverPair)}" : $"{FixturesNamespace}.PaperServersFixture";
-    }
-
-    private static string ServersName(bool serverPair)
-    {
-        return serverPair ? "ServerPair" : "Server";
+        return $"{serverType.Name}ConnectionsFixture_{key}";
     }
 
     /// <param name="Name">The server type's name, which prefixes its collections and test classes, and names its mod loader when it's modded.</param>
     private sealed record ServerType(string Name, bool IsModded);
 
     /// <param name="Name">The family's class name without its server type prefix and protocol version suffix.</param>
-    /// <param name="BaseClassName">The test base the family's classes derive from.</param>
-    /// <param name="ClientFixture">The client fixture the base takes last, by type name in the fixtures namespace and parameter name.</param>
-    /// <param name="ServerPair">Whether the family plays on two servers.</param>
-    /// <param name="Proxied">Whether the family plays through the proxy, which its classes start in front of the collection's servers.</param>
+    /// <param name="BaseClassName">The test base the family's classes derive from, which takes the collection's fixture.</param>
     /// <param name="MethodNameFormat">The test method name, with <c>{0}</c> standing for the server type.</param>
-    private sealed record Family(string Name, string BaseClassName, (string TypeName, string ParameterName) ClientFixture, bool ServerPair, bool Proxied, string MethodNameFormat);
+    private sealed record Family(string Name, string BaseClassName, string MethodNameFormat);
 }
