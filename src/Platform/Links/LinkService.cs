@@ -187,7 +187,7 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
         }
         catch (StreamException) when (player.Context.Channel is { IsAlive: true })
         {
-            // A server can drop a joining player and accept them on the next try, as Forge servers before 1.13 do when their login races
+            // A server can drop a joining player on a transient failure of its own and accept them on the next try
             logger.LogInformation("Server {Server} closed the connection while player {Player} was joining it, trying again", server, player);
         }
 
