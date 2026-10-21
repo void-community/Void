@@ -77,10 +77,14 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
 
                     if (result is ConnectionResult.Connected)
                         return ConnectionResult.Connected;
+
+                    // A player that a server kicked while joining has no other server to try
+                    if (player.Context.Channel is not { IsAlive: true })
+                        return result;
                 }
-                catch (StreamException)
+                catch (StreamException) when (player.Context.Channel is { IsAlive: true })
                 {
-                    // Try next server
+                    // Try next server, unless the player is the one who left
                 }
             }
 
@@ -136,9 +140,13 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
     private async ValueTask<ConnectionResult> ConnectOrKickAsync(IPlayer player, IServer server, bool anonymous = false, CancellationToken cancellationToken = default)
     {
         var previousServer = player.Server;
-        var result = await ConnectCoreAsync(player, server, anonymous, cancellationToken);
+        var result = await ConnectOrFailAsync(server);
 
         if (result is ConnectionResult.Connected)
+            return result;
+
+        // A player that left or was kicked while joining has no server to go back to
+        if (player.Context.Channel is not { IsAlive: true })
             return result;
 
         if (previousServer is null)
@@ -147,13 +155,27 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
             return result;
         }
 
-        result = await ConnectCoreAsync(player, previousServer, anonymous, cancellationToken);
+        result = await ConnectOrFailAsync(previousServer);
 
         if (result is not ConnectionResult.NotConnected)
             return result;
 
         await player.KickAsync("Could not connect you to the target server nor back to the previous server.", cancellationToken);
         return result;
+
+        async ValueTask<ConnectionResult> ConnectOrFailAsync(IServer server)
+        {
+            try
+            {
+                return await ConnectCoreAsync(player, server, anonymous, cancellationToken);
+            }
+            catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+            {
+                // Otherwise the player would be left without any server
+                logger.LogWarning("Server {Server} closed the connection while player {Player} was joining it", server, player);
+                return ConnectionResult.NotConnected;
+            }
+        }
     }
 
     private async ValueTask<ConnectionResult> ConnectCoreAsync(IPlayer player, IServer server, bool anonymous = false, CancellationToken cancellationToken = default)

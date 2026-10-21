@@ -112,7 +112,8 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         {
             var kicked = await events.ThrowWithResultAsync(playerKickEvent, cancellationToken);
 
-            if (kicked)
+            // Only a live link notices the player leaving, so a player that is still joining a server has nothing to wait for
+            if (kicked && links.TryGetLink(player, out var playingLink) && playingLink.IsAlive)
             {
                 var timestamp = Stopwatch.GetTimestamp();
 

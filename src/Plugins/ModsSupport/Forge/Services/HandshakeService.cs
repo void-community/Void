@@ -25,12 +25,50 @@ namespace Void.Proxy.Plugins.ModsSupport.Forge.Services;
 
 public class HandshakeService(IPlayerContext context, IPluginService plugins, Plugin plugin) : IEventListener
 {
+    private const string LegacyHandshakeChannel = "FML|HS";
+    private const byte LegacyServerHelloDiscriminator = 0;
+    private static readonly byte[] LegacyHandshakeResetData = [0xFE, 0x00];
+
     private readonly ConcurrentDictionary<IPlayer, PlayerCachedMods> _playerMods = [];
+    private bool _joinedServer;
 
     [Subscribe]
     public void OnPlayerDisconnect(PlayerDisconnectedEvent @event)
     {
         _ = _playerMods.TryRemove(@event.Player, out _);
+    }
+
+    [Subscribe]
+    public void OnPlayerJoinedServer(PlayerJoinedServerEvent @event)
+    {
+        _joinedServer = true;
+    }
+
+    [Subscribe]
+    public async ValueTask OnLegacyServerHello(MessageReceivedEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event is not { Direction: Direction.Clientbound, Message: PluginMessagePacket { Channel: LegacyHandshakeChannel } packet } || packet.Data.Span is not [LegacyServerHelloDiscriminator, ..])
+            return;
+
+        // A legacy Forge client that has finished a handshake ignores the next server's hello until it's reset. 1.7 clients don't mark
+        // themselves as Forge, and vanilla clients ignore the reset, so every player that has joined a server gets one.
+        if (!_joinedServer)
+            return;
+
+        context.Logger.LogDebug("Resetting legacy Forge handshake before {Server} starts it", @event.Link.Server);
+        await @event.Link.SendPacketAsync(Side.Client, new PluginMessagePacket { Channel = LegacyHandshakeChannel, Data = LegacyHandshakeResetData }, cancellationToken);
+    }
+
+    [Subscribe]
+    public void OnLegacyPluginMessageWhileSwitching(MessageReceivedEvent @event)
+    {
+        if (!_joinedServer || @event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13)
+            return;
+
+        // Until the next server's Join Game, the player's mods keep sending messages about the world it is leaving, which only the
+        // handshake with the next server should get past
+        if (@event is { Direction: Direction.Serverbound, Link.IsAlive: false, Message: PluginMessagePacket { Channel: not (LegacyHandshakeChannel or "REGISTER" or "UNREGISTER") } })
+            @event.Cancel();
     }
 
     [Subscribe]

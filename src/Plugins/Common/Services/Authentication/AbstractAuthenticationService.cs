@@ -211,7 +211,8 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
             if (playerAuthenticationResult != AuthenticationResult.AlreadyAuthenticated)
                 await FinishPlayerLoginAsync(@event.Link, cancellationToken);
 
-            await FinishServerAuthenticationAsync(@event.Link, playerAuthenticationResult, handshakeBuildEventResult, cancellationToken);
+            if (!await FinishServerAuthenticationAsync(@event.Link, playerAuthenticationResult, handshakeBuildEventResult, cancellationToken))
+                serverAuthenticationResult = AuthenticationResult.NotAuthenticatedServer;
         }
 
         @event.Result = serverAuthenticationResult;
@@ -300,9 +301,9 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         return ValueTask.CompletedTask;
     }
 
-    protected virtual ValueTask FinishServerAuthenticationAsync(ILink link, AuthenticationResult authenticationResult, HandshakeBuildEventResult handshakeBuildEventResult, CancellationToken cancellationToken)
+    protected virtual ValueTask<bool> FinishServerAuthenticationAsync(ILink link, AuthenticationResult authenticationResult, HandshakeBuildEventResult handshakeBuildEventResult, CancellationToken cancellationToken)
     {
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(true);
     }
 
     protected static async ValueTask<bool> VerifyMojangProfile(IPlayer player, CancellationToken cancellationToken)
