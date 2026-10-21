@@ -292,14 +292,12 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             };
 
             // A NeoForge build names its Minecraft version, while Forge starts take the Minecraft version and the build.
-            var (start, request) = Setup.Loader switch
+            using var response = Setup.Loader switch
             {
-                null => ("vanilla", (object)new { version, memoryMb, arguments }),
-                { ModLoader: ModLoader.Forge } forge => ("forge", (object)new { version, loaderVersion = forge.ClientLoaderVersion, memoryMb, arguments }),
-                { } neoForge => ("neoforge", (object)new { loaderVersion = neoForge.ClientLoaderVersion, memoryMb, arguments })
+                null => await HttpClient.PostAsJsonAsync("/api/game/start/vanilla", new { version, memoryMb, arguments }, cancellationToken),
+                { ModLoader: ModLoader.Forge } forge => await HttpClient.PostAsJsonAsync("/api/game/start/forge", new { version, loaderVersion = forge.ClientLoaderVersion, memoryMb, arguments }, cancellationToken),
+                { } neoForge => await HttpClient.PostAsJsonAsync("/api/game/start/neoforge", new { loaderVersion = neoForge.ClientLoaderVersion, memoryMb, arguments }, cancellationToken)
             };
-
-            using var response = await HttpClient.PostAsJsonAsync($"/api/game/start/{start}", request, cancellationToken);
             await EnsureSuccessAsync(response, $"Starting {Setup}", cancellationToken);
             var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting {Setup} launch", cancellationToken);
 
