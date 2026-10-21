@@ -22,7 +22,7 @@ public class VoidFixture<TServersFixture>(TServersFixture serversFixture) : IVoi
         if (!serversFixture.IsAvailable)
             return;
 
-        _voidProxy = await VoidProxy.CreateAsync(Path.Combine(Path.GetTempPath(), nameof(VoidFixture<>), Path.GetRandomFileName()), targetServers: [.. serversFixture.Servers.Servers.Select(server => $"localhost:{server.Port}")], cancellationToken: Timeouts.SetupTimeoutToken);
+        _voidProxy = await VoidProxy.CreateAsync(Path.Combine(Path.GetTempPath(), nameof(VoidFixture<>), Path.GetRandomFileName()), targetServers: [.. serversFixture.Servers.Select(server => $"localhost:{server.Port}")], cancellationToken: Timeouts.SetupTimeoutToken);
         _voidLogWindowStartedAt = DateTime.UtcNow;
     }
 

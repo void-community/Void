@@ -31,11 +31,17 @@ public sealed class ServerCollectionsGenerator : IIncrementalGenerator
 
         foreach (var serverType in ServerCollections.ServerTypes)
         {
-            foreach (var key in ProtocolVersionTypes.Keys)
+            foreach (var key in ProtocolVersionKeys.All)
             {
                 foreach (var serverPair in new[] { false, true })
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    if (serverType.ModLoader is { } modLoader)
+                    {
+                        sourceBuilder.AppendLine($"public sealed class {ServerCollections.ModdedFixtureName(serverType, key, serverPair)}() : {ServerCollections.FixturesNamespace}.ModdedServersFixture(global::Void.IntegrationTests.Infrastructure.Harness.ModLoader.{modLoader}, global::Void.Minecraft.Network.ProtocolVersion.MINECRAFT_{key}, serverCount: {(serverPair ? 2 : 1)});");
+                        sourceBuilder.AppendLine();
+                    }
 
                     sourceBuilder.AppendLine("[global::Xunit.CollectionDefinition]");
                     sourceBuilder.AppendLine($"public sealed class {ServerCollections.CollectionName(serverType, key, serverPair)} : global::Xunit.ICollectionFixture<{ServerCollections.FixtureTypeName(serverType, key, serverPair)}>;");

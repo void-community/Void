@@ -30,21 +30,21 @@ public abstract class ProxiedConnectionTestBase(ProtocolVersion protocolVersion,
         {
             Task playerDisconnectionTask;
 
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedConnectionTestBase), protocolVersion, serversFixture.Servers.Setup, [voidFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedConnectionTestBase), protocolVersion, serversFixture.Setup, [voidFixture.VoidProxy, serversFixture.Server1], Timeouts.SetupTimeoutToken))
             {
                 playerDisconnectionTask = voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
 
                 await game.JoinServerAsync(ProxyEndPoint, Timeouts.SetupTimeoutToken);
-                await serversFixture.Servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
+                await serversFixture.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
                 await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
                 await game.SendTextMessageAsync(expectedText, Timeouts.StepTimeoutToken);
-                await serversFixture.Servers.Server1.ExpectTextAsync(expectedText, lookupHistory: true, Timeouts.StepTimeoutToken);
+                await serversFixture.Server1.ExpectTextAsync(expectedText, lookupHistory: true, Timeouts.StepTimeoutToken);
             }
 
             await playerDisconnectionTask;
 
-            Assert.Contains(serversFixture.Servers.Server1.Logs, line => line.Contains(expectedText));
-        }, portableMinecraftClientFixture.Api, voidFixture.VoidProxy, serversFixture.Servers.Server1);
+            Assert.Contains(serversFixture.Server1.Logs, line => line.Contains(expectedText));
+        }, portableMinecraftClientFixture.Api, voidFixture.VoidProxy, serversFixture.Server1);
     }
 }

@@ -26,7 +26,7 @@ public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMi
 
         serversFixture.SkipIfUnavailable();
 
-        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion), clientFixture.Client1, clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Servers.Server1);
+        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion), clientFixture.Client1, clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Server1);
     }
 
     private async Task RunAttemptAsync(ProtocolVersion protocolVersion)
@@ -48,8 +48,8 @@ public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMi
 
     private async Task RunPlayersAsync(ProtocolVersion protocolVersion, CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
     {
-        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Servers.Setup, [clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken);
-        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Servers.Setup, [clientFixture.Client1, voidFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken);
+        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Setup, [clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Server1], Timeouts.SetupTimeoutToken);
+        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Setup, [clientFixture.Client1, voidFixture.VoidProxy, serversFixture.Server1], Timeouts.SetupTimeoutToken);
 
         disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
         disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));

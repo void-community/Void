@@ -10,14 +10,14 @@ public static class ServerCollections
     public const string FixturesNamespace = "global::Void.IntegrationTests.Infrastructure.Fixtures";
 
     /// <summary>
-    /// The servers every test family runs against: Paper for vanilla clients, and the mod loaders the proxy supports. Paper's servers play every
-    /// protocol version, while each mod loader runs servers of the collection's own version.
+    /// The servers every test family runs against: Paper for vanilla clients, whose shared servers play every protocol version, and the mod
+    /// loaders the proxy supports, which run servers of the collection's own version.
     /// </summary>
     public static IReadOnlyList<ServerType> ServerTypes { get; } =
     [
-        new(Name: "Paper", HasVersionedServers: false),
-        new(Name: "Forge", HasVersionedServers: true),
-        new(Name: "NeoForge", HasVersionedServers: true)
+        new(Name: "Paper", ModLoader: null),
+        new(Name: "Forge", ModLoader: "Forge"),
+        new(Name: "NeoForge", ModLoader: "NeoForge")
     ];
 
     public static string CollectionName(ServerType serverType, string key, bool serverPair)
@@ -30,11 +30,15 @@ public static class ServerCollections
         return $"global::{Namespace}.{CollectionName(serverType, key, serverPair)}";
     }
 
+    /// <summary>The fixture a mod loader's collection starts its servers with, which is generated next to the collection.</summary>
+    public static string ModdedFixtureName(ServerType serverType, string key, bool serverPair)
+    {
+        return $"{serverType.Name}{ServersName(serverPair)}Fixture_{key}";
+    }
+
     public static string FixtureTypeName(ServerType serverType, string key, bool serverPair)
     {
-        var fixtureTypeName = $"{FixturesNamespace}.{serverType.Name}{ServersName(serverPair)}Fixture";
-
-        return serverType.HasVersionedServers ? $"{fixtureTypeName}<{ProtocolVersionTypes.TypeName(key)}>" : fixtureTypeName;
+        return serverType.ModLoader is null ? $"{FixturesNamespace}.PaperServersFixture" : $"global::{Namespace}.{ModdedFixtureName(serverType, key, serverPair)}";
     }
 
     private static string ServersName(bool serverPair)
@@ -43,6 +47,6 @@ public static class ServerCollections
     }
 }
 
-/// <param name="Name">The server type's name, which prefixes its fixtures, collections and test classes.</param>
-/// <param name="HasVersionedServers">Whether the server type's fixtures are generic over the protocol version their servers run.</param>
-public sealed record ServerType(string Name, bool HasVersionedServers);
+/// <param name="Name">The server type's name, which prefixes its collections and test classes.</param>
+/// <param name="ModLoader">The mod loader the server type's servers run, by its name in the harness, or <see langword="null"/> for Paper's shared servers.</param>
+public sealed record ServerType(string Name, string? ModLoader);

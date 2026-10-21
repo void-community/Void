@@ -42,7 +42,7 @@ public abstract class ConnectionTestsGeneratorBase : IIncrementalGenerator
         {
             var methodName = string.Format(methodNameFormat, serverType.Name);
 
-            foreach (var key in ProtocolVersionTypes.Keys)
+            foreach (var key in ProtocolVersionKeys.All)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 

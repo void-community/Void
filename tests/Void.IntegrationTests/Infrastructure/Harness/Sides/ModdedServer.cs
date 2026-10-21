@@ -9,7 +9,6 @@ using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using DotNet.Testcontainers.Images;
 using Void.IntegrationTests.Infrastructure.Exceptions;
-using Void.IntegrationTests.Infrastructure.Modding;
 using Void.Minecraft;
 
 namespace Void.IntegrationTests.Infrastructure.Harness.Sides;
@@ -65,6 +64,6 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         foreach (var modPath in listing.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Order(StringComparer.Ordinal))
             mods.Add(new ModFile(Path.GetFileName(modPath), await Container.ReadFileAsync(modPath, cancellationToken)));
 
-        return new GameSetup(MinecraftRelease, new LoaderBuild(ModLoader, loaderVersion), mods);
+        return new GameSetup(ModLoader, loaderVersion, MinecraftRelease, mods);
     }
 }

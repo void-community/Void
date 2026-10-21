@@ -92,18 +92,21 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         return await RunGameAsync(testName, protocolVersion, setup: null, additionalLogSides, cancellationToken);
     }
 
-    /// <param name="setup">The game to start, or <see langword="null"/> to start vanilla Minecraft of the protocol version.</param>
+    /// <param name="setup">The modded game to start, or <see langword="null"/> to start vanilla Minecraft of the protocol version.</param>
     public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, GameSetup? setup, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
     {
-        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, setup ?? GameSetup.Vanilla(protocolVersion), cancellationToken);
+        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, setup, cancellationToken);
     }
 
-    public record Game(string TestName, IContainer Container, HttpClient HttpClient, IReadOnlyList<IIntegrationSide> LogSides, DateTime StartedAt, ProtocolVersion ProtocolVersion, GameSetup Setup, string Username) : IAsyncDisposable
+    /// <param name="Setup">The modded game the client plays, or <see langword="null"/> when it plays vanilla Minecraft of the protocol version.</param>
+    public record Game(string TestName, IContainer Container, HttpClient HttpClient, IReadOnlyList<IIntegrationSide> LogSides, DateTime StartedAt, ProtocolVersion ProtocolVersion, GameSetup? Setup, string Username) : IAsyncDisposable
     {
         private const string ModsDirectory = "/root/.minecraft/mods/";
-        private readonly string _workingDirectory = Setup.Loader is { } loader
-            ? Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, loader.ModLoader.ToString(), ProtocolVersion.ToString(), Username)
+        private readonly string _workingDirectory = Setup is { } setup
+            ? Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, setup.Loader.ToString(), ProtocolVersion.ToString(), Username)
             : Path.Combine(Directory.GetCurrentDirectory(), "steps", TestName, ProtocolVersion.ToString(), Username);
+
+        private string GameName => Setup?.ToString() ?? $"Minecraft {ProtocolVersion.FirstRelease}";
         private ApiProblemDetails? _lastPlayersProblem;
         private Guid? _sessionId;
         private int _step;
@@ -138,7 +141,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             GC.SuppressFinalize(this);
         }
 
-        public static async Task<Game> RunAsync(string testName, IContainer container, HttpClient httpClient, IReadOnlyList<IIntegrationSide> logSides, ProtocolVersion protocolVersion, GameSetup setup, CancellationToken cancellationToken = default)
+        public static async Task<Game> RunAsync(string testName, IContainer container, HttpClient httpClient, IReadOnlyList<IIntegrationSide> logSides, ProtocolVersion protocolVersion, GameSetup? setup, CancellationToken cancellationToken = default)
         {
             var username = Convert.ToHexString(BitConverter.GetBytes(Random.Shared.Next()));
             var startedAt = DateTime.UtcNow;
@@ -151,10 +154,10 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
             try
             {
-                await game.LogAsync($"Starting {setup}", cancellationToken);
+                await game.LogAsync($"Starting {game.GameName}", cancellationToken);
 
-                if (setup.Loader is not null)
-                    await game.InstallModsAsync(cancellationToken);
+                if (setup is not null)
+                    await game.InstallModsAsync(setup, cancellationToken);
 
                 await game.StartAsync(cancellationToken);
             }
@@ -281,8 +284,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             var newerRelease = ProtocolVersion >= ProtocolVersion.MINECRAFT_26_1;
 
             // Mod loaders and their mods need more memory than the game alone.
-            var memoryMb = Setup.Loader is null ? newerRelease ? 2048 : 1024 : newerRelease ? 3072 : 2048;
-            var version = Setup.MinecraftRelease.ToString();
+            var memoryMb = Setup is null ? newerRelease ? 2048 : 1024 : newerRelease ? 3072 : 2048;
+            var version = Setup?.MinecraftRelease.ToString() ?? ProtocolVersion.FirstRelease.ToString();
             var arguments = new[]
             {
                 "--fetch-exclude-all",
@@ -292,36 +295,36 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             };
 
             // The client starts a loader build as the servers report it, with its Minecraft version.
-            using var response = Setup.Loader switch
+            using var response = Setup switch
             {
                 null => await HttpClient.PostAsJsonAsync("/api/game/start/vanilla", new { version, memoryMb, arguments }, cancellationToken),
-                { } loader => await HttpClient.PostAsJsonAsync($"/api/game/start/{loader.ModLoader.ToString().ToLowerInvariant()}", new { version, loaderVersion = loader.Version, memoryMb, arguments }, cancellationToken)
+                { } setup => await HttpClient.PostAsJsonAsync($"/api/game/start/{setup.Loader.ToString().ToLowerInvariant()}", new { version, loaderVersion = setup.LoaderVersion, memoryMb, arguments }, cancellationToken)
             };
-            await EnsureSuccessAsync(response, $"Starting {Setup}", cancellationToken);
-            var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting {Setup} launch", cancellationToken);
+            await EnsureSuccessAsync(response, $"Starting {GameName}", cancellationToken);
+            var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting {GameName} launch", cancellationToken);
 
             _sessionId = acceptedStatus.SessionId;
             await WaitForClientReadyAsync(acceptedStatus.OperationId, cancellationToken);
         }
 
         /// <summary>Installs the setup's mods into the client, replacing those of an earlier game, since the client keeps mods it didn't add.</summary>
-        private async Task InstallModsAsync(CancellationToken cancellationToken = default)
+        private async Task InstallModsAsync(GameSetup setup, CancellationToken cancellationToken = default)
         {
             await Container.RunCommandAsync(["sh", "-c", $"rm -rf {ModsDirectory} && mkdir -p {ModsDirectory}"], cancellationToken);
 
-            foreach (var mod in Setup.Mods)
+            foreach (var mod in setup.Mods)
                 await Container.CopyAsync(mod.Content, $"{ModsDirectory}{mod.FileName}", ct: cancellationToken);
 
             Directory.CreateDirectory(_workingDirectory);
             var setupJson = JsonSerializer.Serialize(new
             {
-                minecraftRelease = Setup.MinecraftRelease.ToString(),
-                loader = Setup.Loader?.ModLoader.ToString(),
-                loaderVersion = Setup.Loader?.Version,
-                mods = Setup.Mods.Select(mod => mod.FileName)
+                minecraftRelease = setup.MinecraftRelease.ToString(),
+                loader = setup.Loader.ToString(),
+                loaderVersion = setup.LoaderVersion,
+                mods = setup.Mods.Select(mod => mod.FileName)
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
             await File.WriteAllTextAsync(Path.Combine(_workingDirectory, "game-setup.json"), setupJson, cancellationToken);
-            await LogAsync($"Installed mods {string.Join(", ", Setup.Mods.Select(mod => mod.FileName))}", cancellationToken);
+            await LogAsync($"Installed mods {string.Join(", ", setup.Mods.Select(mod => mod.FileName))}", cancellationToken);
         }
 
         public async Task JoinServerAsync(EndPoint endPoint, CancellationToken cancellationToken = default)

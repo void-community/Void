@@ -1,13 +1,15 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
-using Void.IntegrationTests.Infrastructure.Modding;
 using Void.Minecraft;
+using Void.Minecraft.Network;
 using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Fixtures;
@@ -17,7 +19,7 @@ namespace Void.IntegrationTests.Infrastructure.Fixtures;
 /// picks the loader build and the content mod's build for the newest release of the version it can, and clients copy what it installed. A
 /// version the loader or mods haven't released for starts nothing, and its tests skip.
 /// </summary>
-public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, int serverCount) : IMinecraftServersFixture, IAsyncLifetime where TProtocolVersion : IProtocolVersionType
+public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion protocolVersion, int serverCount) : IMinecraftServersFixture, IAsyncLifetime
 {
     /// <summary>
     /// Mods that add blocks and items and must be installed on both sides, tried in order. Together they have a build for every Forge and
@@ -28,25 +30,28 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
     // Loaders and mods catch up with a Minecraft release within months, so one older than this that they have no build for was passed over.
     private static readonly TimeSpan CatchUpPeriod = TimeSpan.FromDays(183);
 
+    private static readonly ConcurrentDictionary<string, bool> AnnotatedSkipReasons = new();
+
     // The image rejects a release its loader has no build for, or a mod has no build for, before the server starts.
     private const string ModMissingMessage = "Invalid parameter provided for 'modrinth' command";
     private readonly string _loaderMissingMessage = $"Invalid parameter provided for 'install-{loader.ToString().ToLowerInvariant()}' command";
 
     private (string Reason, bool Warn)? _skip;
-    private MinecraftServers? _servers;
+    private MinecraftServer[]? _servers;
+    private GameSetup? _setup;
 
     public bool IsAvailable => _servers is not null;
-    public MinecraftServers Servers => _servers ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
+    public IReadOnlyList<MinecraftServer> Servers => _servers ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
+    public GameSetup? Setup => _setup ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
 
     public void SkipIfUnavailable()
     {
         if (_skip is { } skip)
-            SkippedTestWarnings.Skip(skip.Reason, skip.Warn);
+            Skip(skip.Reason, skip.Warn);
     }
 
     public async ValueTask InitializeAsync()
     {
-        var protocolVersion = TProtocolVersion.ProtocolVersion;
         var releases = protocolVersion.Releases.OrderDescending().ToArray();
         var failures = new List<IntegrationTestException>();
         var loaderReleased = false;
@@ -81,9 +86,25 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
     public async ValueTask DisposeAsync()
     {
         if (_servers is { } servers)
-            await Task.WhenAll(servers.Servers.Select(server => server.DisposeAsync().AsTask()));
+            await Task.WhenAll(servers.Select(server => server.DisposeAsync().AsTask()));
 
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Skips a test whose game isn't released yet with a warning, and one whose game will never exist without one.</summary>
+    [DoesNotReturn]
+    private static void Skip(string reason, bool warn)
+    {
+        if (warn)
+        {
+            TestContext.Current.AddWarning(reason);
+
+            // GitHub Actions shows each distinct reason once on the run, rather than only in the test output.
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") is "true" && AnnotatedSkipReasons.TryAdd(reason, true))
+                Console.WriteLine($"::warning title=Integration tests skipped::{reason.Replace("%", "%25").Replace("\r", "%0D").Replace("\n", "%0A")}");
+        }
+
+        Assert.Skip(reason);
     }
 
     private async Task<StartOutcome> TryStartAsync(ReleaseVersion release, List<IntegrationTestException> failures)
@@ -92,7 +113,7 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
         {
             try
             {
-                _servers = await StartServersAsync(release, contentModProject, Timeouts.SetupTimeoutToken);
+                (_servers, _setup) = await StartServersAsync(release, contentModProject, Timeouts.SetupTimeoutToken);
                 return StartOutcome.Started;
             }
             catch (IntegrationTestException exception) when (exception.Message.Contains(_loaderMissingMessage, StringComparison.Ordinal))
@@ -114,7 +135,7 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
         return StartOutcome.ContentModsMissing;
     }
 
-    private async Task<MinecraftServers> StartServersAsync(ReleaseVersion release, string contentModProject, CancellationToken cancellationToken)
+    private async Task<(MinecraftServer[] Servers, GameSetup Setup)> StartServersAsync(ReleaseVersion release, string contentModProject, CancellationToken cancellationToken)
     {
         var serverTasks = Enumerable.Range(start: 1, serverCount).Select(index => ModdedServer.CreateAsync(loader, release, contentModProject, $"server-{index}.log", cancellationToken)).ToArray();
 
@@ -126,10 +147,10 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
             var setups = await Task.WhenAll(servers.Select(server => server.ReadSetupAsync(cancellationToken)));
 
             // Each server picks its game when it starts, while clients play one game on all of them.
-            if (setups.Any(setup => setup.Loader != setups[0].Loader || !setup.Mods.Select(mod => mod.FileName).SequenceEqual(setups[0].Mods.Select(mod => mod.FileName))))
+            if (setups.Any(setup => setup.LoaderVersion != setups[0].LoaderVersion || !setup.Mods.Select(mod => mod.FileName).SequenceEqual(setups[0].Mods.Select(mod => mod.FileName))))
                 throw new IntegrationTestException($"{loader} servers for Minecraft {release} with {contentModProject} installed different games: {string.Join("; ", setups.Select(setup => $"{setup} with {string.Join(", ", setup.Mods.Select(mod => mod.FileName))}"))}");
 
-            return new MinecraftServers(servers, setups[0]);
+            return ([.. servers], setups[0]);
         }
         catch
         {
