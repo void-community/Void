@@ -181,6 +181,16 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
 
     private async ValueTask<ConnectionResult> ConnectCoreAsync(IPlayer player, IServer server, bool anonymous = false, CancellationToken cancellationToken = default)
     {
+        try
+        {
+            return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+        }
+        catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+        {
+            // A server can drop a joining player and accept them on the next try, as Forge servers before 1.13 do when their login races
+            logger.LogInformation("Server {Server} closed the connection while player {Player} was joining it, trying again", server, player);
+        }
+
         return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
     }
 
