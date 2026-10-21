@@ -89,12 +89,13 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
     public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
     {
-        return await RunGameAsync(testName, protocolVersion, GameSetup.Vanilla(protocolVersion), additionalLogSides, cancellationToken);
+        return await RunGameAsync(testName, protocolVersion, setup: null, additionalLogSides, cancellationToken);
     }
 
-    public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, GameSetup setup, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
+    /// <param name="setup">The game to start, or <see langword="null"/> to start vanilla Minecraft of the protocol version.</param>
+    public async Task<Game> RunGameAsync(string testName, ProtocolVersion protocolVersion, GameSetup? setup, IEnumerable<IIntegrationSide> additionalLogSides, CancellationToken cancellationToken = default)
     {
-        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, setup, cancellationToken);
+        return await Game.RunAsync(testName, Container, HttpClient, [this, .. additionalLogSides], protocolVersion, setup ?? GameSetup.Vanilla(protocolVersion), cancellationToken);
     }
 
     public record Game(string TestName, IContainer Container, HttpClient HttpClient, IReadOnlyList<IIntegrationSide> LogSides, DateTime StartedAt, ProtocolVersion ProtocolVersion, GameSetup Setup, string Username) : IAsyncDisposable

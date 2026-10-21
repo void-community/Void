@@ -12,6 +12,7 @@ public sealed class ProxiedPlayerTestsGenerator : ConnectionTestsGeneratorBase
             baseClassName: "global::Void.IntegrationTests.Connections.ProxiedPlayerTestBase",
             clientFixture: ("PortableMinecraftClientPairFixture", "clientFixture"),
             serverPair: false,
+            proxied: true,
             methodNameFormat: "PortableMinecraftClientsExposeReciprocalCoordinates",
             cancellationToken
         ));

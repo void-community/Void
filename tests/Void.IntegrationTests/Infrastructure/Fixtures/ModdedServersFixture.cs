@@ -7,6 +7,7 @@ using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
 using Void.IntegrationTests.Infrastructure.Modding;
+using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Fixtures;
 
@@ -14,18 +15,21 @@ namespace Void.IntegrationTests.Infrastructure.Fixtures;
 /// Runs servers of a mod loader for one protocol version, since modded clients only join servers of their own version and mods. A protocol
 /// version the loader or mods haven't released for starts nothing, and its tests skip.
 /// </summary>
-public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, int serverCount) : MinecraftServersFixture<TProtocolVersion> where TProtocolVersion : IProtocolVersionType
+public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, int serverCount) : IMinecraftServersFixture, IAsyncLifetime where TProtocolVersion : IProtocolVersionType
 {
     private ModdedGameResolution? _unavailable;
-    private MinecraftServer[] _servers = [];
+    private MinecraftServers? _servers;
 
-    public override void SkipIfUnavailable()
+    public bool IsAvailable => _servers is not null;
+    public MinecraftServers Servers => _servers ?? throw new InvalidOperationException($"{nameof(Servers)} are not started.");
+
+    public void SkipIfUnavailable()
     {
         if (_unavailable is { } resolution)
             SkippedTestWarnings.Skip(resolution.SkipReason, resolution.WarnOnSkip);
     }
 
-    protected override async Task<MinecraftServers?> StartServersAsync()
+    public async ValueTask InitializeAsync()
     {
         var protocolVersion = TProtocolVersion.ProtocolVersion;
         var resolution = await ModdedGameResolver.ResolveAsync(loader, protocolVersion, Timeouts.SetupTimeoutToken);
@@ -33,7 +37,7 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
         if (resolution.Candidates.Count is 0)
         {
             _unavailable = resolution;
-            return null;
+            return;
         }
 
         var failures = new List<IntegrationTestException>();
@@ -42,9 +46,8 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
         {
             try
             {
-                _servers = await StartSetupAsync(setup, Timeouts.SetupTimeoutToken);
-
-                return new MinecraftServers(_servers, setup);
+                _servers = new MinecraftServers(await StartSetupAsync(setup, Timeouts.SetupTimeoutToken), setup);
+                return;
             }
             catch (IntegrationTestException exception)
             {
@@ -57,9 +60,12 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
         throw new IntegrationTestException($"No {loader} server for Minecraft {protocolVersion} started with any of its mods. First failure: {failures[0].Message}", new AggregateException(failures));
     }
 
-    protected override async Task StopServersAsync()
+    public async ValueTask DisposeAsync()
     {
-        await Task.WhenAll(_servers.Select(server => server.DisposeAsync().AsTask()));
+        if (_servers is { } servers)
+            await Task.WhenAll(servers.Servers.Select(server => server.DisposeAsync().AsTask()));
+
+        GC.SuppressFinalize(this);
     }
 
     private async Task<MinecraftServer[]> StartSetupAsync(GameSetup setup, CancellationToken cancellationToken)

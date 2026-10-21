@@ -14,21 +14,19 @@ using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedPlayerTestBase(IMinecraftServersFixture serversFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientPairFixture>
+public abstract class ProxiedPlayerTestBase(ProtocolVersion protocolVersion, IMinecraftServersFixture serversFixture, IVoidFixture voidFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientPairFixture>
 {
     private const double CoordinateTolerance = 1.0 / 32.0;
-    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, serversFixture.VoidProxy.Port);
+    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, voidFixture.VoidProxy.Port);
 
     protected async Task RunAsync()
     {
-        var protocolVersion = serversFixture.ProtocolVersion;
-
         if (!clientFixture.Client1.SupportedVersions.Contains(protocolVersion) || !clientFixture.Client2.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the clients, skipping test.");
 
         serversFixture.SkipIfUnavailable();
 
-        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion), clientFixture.Client1, clientFixture.Client2, serversFixture.VoidProxy, serversFixture.Servers.Server1);
+        await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion), clientFixture.Client1, clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Servers.Server1);
     }
 
     private async Task RunAttemptAsync(ProtocolVersion protocolVersion)
@@ -50,11 +48,11 @@ public abstract class ProxiedPlayerTestBase(IMinecraftServersFixture serversFixt
 
     private async Task RunPlayersAsync(ProtocolVersion protocolVersion, CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
     {
-        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Servers.Setup, [clientFixture.Client2, serversFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken);
-        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Servers.Setup, [clientFixture.Client1, serversFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken);
+        await using var firstGame = await clientFixture.Client1.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Servers.Setup, [clientFixture.Client2, voidFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken);
+        await using var secondGame = await clientFixture.Client2.RunGameAsync(nameof(ProxiedPlayerTestBase), protocolVersion, serversFixture.Servers.Setup, [clientFixture.Client1, voidFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken);
 
-        disconnectionTasks.Add(serversFixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
-        disconnectionTasks.Add(serversFixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
+        disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
+        disconnectionTasks.Add(voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
 
         await ConnectPlayerAsync(firstGame);
         await ConnectPlayerAsync(secondGame);

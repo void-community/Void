@@ -6,20 +6,19 @@ using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Extensions;
 using Void.IntegrationTests.Infrastructure.Fixtures;
 using Void.IntegrationTests.Infrastructure.Harness;
+using Void.Minecraft.Network;
 using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedConnectionTestBase(IMinecraftServersFixture serversFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
+public abstract class ProxiedConnectionTestBase(ProtocolVersion protocolVersion, IMinecraftServersFixture serversFixture, IVoidFixture voidFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
 {
     private const string ExpectedText = "hello proxied void!";
 
-    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, serversFixture.VoidProxy.Port);
+    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, voidFixture.VoidProxy.Port);
 
     protected async Task RunAsync()
     {
-        var protocolVersion = serversFixture.ProtocolVersion;
-
         if (!portableMinecraftClientFixture.Api.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the client, skipping test.");
 
@@ -31,9 +30,9 @@ public abstract class ProxiedConnectionTestBase(IMinecraftServersFixture servers
         {
             Task playerDisconnectionTask;
 
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedConnectionTestBase), protocolVersion, serversFixture.Servers.Setup, [serversFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedConnectionTestBase), protocolVersion, serversFixture.Servers.Setup, [voidFixture.VoidProxy, serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken))
             {
-                playerDisconnectionTask = serversFixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
+                playerDisconnectionTask = voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
 
                 await game.JoinServerAsync(ProxyEndPoint, Timeouts.SetupTimeoutToken);
                 await serversFixture.Servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
@@ -46,6 +45,6 @@ public abstract class ProxiedConnectionTestBase(IMinecraftServersFixture servers
             await playerDisconnectionTask;
 
             Assert.Contains(serversFixture.Servers.Server1.Logs, line => line.Contains(expectedText));
-        }, portableMinecraftClientFixture.Api, serversFixture.VoidProxy, serversFixture.Servers.Server1);
+        }, portableMinecraftClientFixture.Api, voidFixture.VoidProxy, serversFixture.Servers.Server1);
     }
 }

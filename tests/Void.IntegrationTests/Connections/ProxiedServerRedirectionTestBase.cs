@@ -6,18 +6,17 @@ using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Extensions;
 using Void.IntegrationTests.Infrastructure.Fixtures;
 using Void.IntegrationTests.Infrastructure.Harness;
+using Void.Minecraft.Network;
 using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedServerRedirectionTestBase(IMinecraftServersFixture serversFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
+public abstract class ProxiedServerRedirectionTestBase(ProtocolVersion protocolVersion, IMinecraftServersFixture serversFixture, IVoidFixture voidFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
 {
-    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, serversFixture.VoidProxy.Port);
+    private EndPoint ProxyEndPoint => new IPEndPoint(IPAddress.Loopback, voidFixture.VoidProxy.Port);
 
     protected async Task RunAsync()
     {
-        var protocolVersion = serversFixture.ProtocolVersion;
-
         if (!portableMinecraftClientFixture.Api.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the client, skipping test.");
 
@@ -31,9 +30,9 @@ public abstract class ProxiedServerRedirectionTestBase(IMinecraftServersFixture 
         {
             Task playerDisconnectionTask;
 
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedServerRedirectionTestBase), protocolVersion, serversFixture.Servers.Setup, [serversFixture.VoidProxy, serversFixture.Servers.Server1, serversFixture.Servers.Server2], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(ProxiedServerRedirectionTestBase), protocolVersion, serversFixture.Servers.Setup, [voidFixture.VoidProxy, serversFixture.Servers.Server1, serversFixture.Servers.Server2], Timeouts.SetupTimeoutToken))
             {
-                playerDisconnectionTask = serversFixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
+                playerDisconnectionTask = voidFixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
 
                 await game.JoinServerAsync(ProxyEndPoint, Timeouts.SetupTimeoutToken);
                 await serversFixture.Servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
@@ -42,14 +41,14 @@ public abstract class ProxiedServerRedirectionTestBase(IMinecraftServersFixture 
                 await game.SendTextMessageAsync(firstMessage, Timeouts.StepTimeoutToken);
                 await serversFixture.Servers.Server1.ExpectTextAsync(firstMessage, lookupHistory: true, Timeouts.StepTimeoutToken);
 
-                var secondServerReadyTask = serversFixture.VoidProxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-2", Timeouts.StepTimeoutToken);
+                var secondServerReadyTask = voidFixture.VoidProxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-2", Timeouts.StepTimeoutToken);
                 await game.SendTextMessageAsync("/server args-server-2", Timeouts.StepTimeoutToken);
                 await secondServerReadyTask;
 
                 await game.SendTextMessageAsync(secondMessage, Timeouts.StepTimeoutToken);
                 await serversFixture.Servers.Server2.ExpectTextAsync(secondMessage, lookupHistory: true, Timeouts.StepTimeoutToken);
 
-                var firstServerReadyTask = serversFixture.VoidProxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-1", Timeouts.StepTimeoutToken);
+                var firstServerReadyTask = voidFixture.VoidProxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-1", Timeouts.StepTimeoutToken);
                 await game.SendTextMessageAsync("/server args-server-1", Timeouts.StepTimeoutToken);
                 await firstServerReadyTask;
 
@@ -63,8 +62,8 @@ public abstract class ProxiedServerRedirectionTestBase(IMinecraftServersFixture 
             Assert.Contains(serversFixture.Servers.Server2.Logs, line => line.Contains(secondMessage));
             Assert.Contains(serversFixture.Servers.Server1.Logs, line => line.Contains(thirdMessage));
 
-            Assert.Contains(serversFixture.VoidProxy.Logs, line => line.Contains("connected to args-server-2"));
-            Assert.True(serversFixture.VoidProxy.Logs.Count(line => line.Contains("connected to args-server-1")) is >= 2); // TODO: sometimes, proxy prints multiple times "connected to" message
-        }, portableMinecraftClientFixture.Api, serversFixture.VoidProxy, serversFixture.Servers.Server1, serversFixture.Servers.Server2);
+            Assert.Contains(voidFixture.VoidProxy.Logs, line => line.Contains("connected to args-server-2"));
+            Assert.True(voidFixture.VoidProxy.Logs.Count(line => line.Contains("connected to args-server-1")) is >= 2); // TODO: sometimes, proxy prints multiple times "connected to" message
+        }, portableMinecraftClientFixture.Api, voidFixture.VoidProxy, serversFixture.Servers.Server1, serversFixture.Servers.Server2);
     }
 }

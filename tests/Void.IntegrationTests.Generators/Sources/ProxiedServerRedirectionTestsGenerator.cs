@@ -12,6 +12,7 @@ public sealed class ProxiedServerRedirectionTestsGenerator : ConnectionTestsGene
             baseClassName: "ProxiedServerRedirectionTestBase",
             clientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
             serverPair: true,
+            proxied: true,
             methodNameFormat: "PortableMinecraftClientMovesBetween{0}ServersThroughProxy",
             cancellationToken
         ));

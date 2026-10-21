@@ -12,6 +12,7 @@ public sealed class DirectConnectionTestsGenerator : ConnectionTestsGeneratorBas
             baseClassName: "DirectConnectionTestBase",
             clientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
             serverPair: false,
+            proxied: false,
             methodNameFormat: "PortableMinecraftClientConnectsTo{0}Server",
             cancellationToken
         ));

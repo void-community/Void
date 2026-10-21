@@ -12,6 +12,7 @@ public sealed class ProxiedConnectionTestsGenerator : ConnectionTestsGeneratorBa
             baseClassName: "ProxiedConnectionTestBase",
             clientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
             serverPair: false,
+            proxied: true,
             methodNameFormat: "PortableMinecraftClientConnectsTo{0}ServerThroughProxy",
             cancellationToken
         ));
