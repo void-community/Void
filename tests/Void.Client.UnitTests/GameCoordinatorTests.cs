@@ -588,6 +588,124 @@ public sealed class GameCoordinatorTests
     }
 
     [Fact]
+    public async Task ConnectedGameDisconnectsOnRequestAndConnectsAgain()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+
+        var status = await coordinator.DisconnectAsync(CancellationToken.None);
+
+        Assert.Equal(1, runtime.DisconnectCount);
+        Assert.Equal(GameState.Ready, status.State);
+        Assert.Null(status.Server);
+        Assert.Equal(OperationState.Succeeded, status.OperationState);
+        Assert.Equal("client.disconnect.requested", status.Disconnect?.Code);
+        Assert.Equal("Disconnected from server:25565", status.Message);
+        var chat = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.SendChatAsync(new("hello"), CancellationToken.None));
+        Assert.Equal(409, chat.StatusCode);
+
+        var reconnect = await coordinator.ConnectAsync(new("other-server", 25565), CancellationToken.None);
+
+        Assert.Equal("other-server", reconnect.Server.Host);
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+        Assert.Null(coordinator.Status.Disconnect);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task DisconnectRequiresAConnectedGame()
+    {
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        var withoutGame = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.DisconnectAsync(CancellationToken.None));
+        Assert.Equal(409, withoutGame.StatusCode);
+
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        var withoutServer = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.DisconnectAsync(CancellationToken.None));
+        Assert.Equal(409, withoutServer.StatusCode);
+        Assert.Equal(0, runtime.DisconnectCount);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task RequestedDisconnectIsNotReportedAsALostConnection()
+    {
+        var runtime = new FakeGameRuntime { BlockDisconnect = true };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+
+        var disconnect = coordinator.DisconnectAsync(CancellationToken.None);
+        await WaitForOperationAsync(coordinator, "disconnect");
+
+        // The game reports the closed connection while it leaves, which the connection monitor no longer reads.
+        runtime.DisconnectReason = "Disconnected";
+        int disconnectReads = runtime.DisconnectReads;
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(disconnectReads, runtime.DisconnectReads);
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+        var operation = await Assert.ThrowsAsync<GameCommandException>(() => coordinator.DisconnectAsync(CancellationToken.None));
+        Assert.Equal(409, operation.StatusCode);
+
+        runtime.CompleteDisconnect();
+        var status = await disconnect;
+
+        Assert.Equal(GameState.Ready, status.State);
+        Assert.Equal("client.disconnect.requested", status.Disconnect?.Code);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task FailedDisconnectLeavesTheGameConnectedAndWatched()
+    {
+        var runtime = new FakeGameRuntime { BlockDisconnect = true };
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+        await coordinator.StartVanillaAsync(new("1.21.11", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+        await coordinator.ConnectAsync(new("server", 25565), CancellationToken.None);
+
+        var disconnect = coordinator.DisconnectAsync(CancellationToken.None);
+        await WaitForOperationAsync(coordinator, "disconnect");
+        runtime.FailDisconnect(new GameClientException("client.disconnect.failed", "disconnect", "disconnect.failed", "The connection to the server could not be closed"));
+        var failure = await Assert.ThrowsAsync<GameClientException>(() => disconnect);
+
+        Assert.Equal("client.disconnect.failed", failure.Failure.Code);
+        Assert.Equal(GameState.Connected, coordinator.Status.State);
+        Assert.Equal(OperationState.Failed, coordinator.Status.OperationState);
+
+        // The game is watched again, so it still returns to ready once it leaves the server.
+        runtime.DisconnectReason = "Timed out";
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        Assert.Equal("client.connection.lost", coordinator.Status.Disconnect?.Code);
+
+        await coordinator.StopGameAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task GameIsLoadingUntilItShowsAMenu()
     {
         // Issue #1608: the game was ready as soon as a window existed, such as NeoForge's loading window, minutes before its menu.
@@ -973,6 +1091,7 @@ public sealed class GameCoordinatorTests
         private TaskCompletionSource<RunningGame> _launch = CreateLaunchCompletion();
         private TaskCompletionSource<StopMode>? _stop;
         private TaskCompletionSource? _connect;
+        private TaskCompletionSource? _disconnect;
         private FakeManagedProcess? _process;
         private int _disconnectReads;
 
@@ -987,10 +1106,12 @@ public sealed class GameCoordinatorTests
         public int DisconnectReads => Volatile.Read(ref _disconnectReads);
         public bool BlockStop { get; init; }
         public bool BlockConnect { get; init; }
+        public bool BlockDisconnect { get; init; }
         public bool FailScreenshot { get; init; }
         public int LaunchCount { get; private set; }
         public int StopCount { get; private set; }
         public int ConnectCount { get; private set; }
+        public int DisconnectCount { get; private set; }
         public bool ConnectCancellationRequested { get; private set; }
         public int? LastMemoryMb { get; private set; }
         public string? LastVanillaVersion { get; private set; }
@@ -1025,6 +1146,16 @@ public sealed class GameCoordinatorTests
         public void FailConnect(Exception exception)
         {
             _connect?.SetException(exception);
+        }
+
+        public void CompleteDisconnect()
+        {
+            _disconnect?.SetResult();
+        }
+
+        public void FailDisconnect(Exception exception)
+        {
+            _disconnect?.SetException(exception);
         }
 
         public void ExitGame(int exitCode, bool wasOutOfMemoryKilled, string? crashCause = null)
@@ -1092,6 +1223,18 @@ public sealed class GameCoordinatorTests
                 _connect.TrySetCanceled(cancellationToken);
             });
             return _connect.Task;
+        }
+
+        public Task DisconnectAsync(RunningGame game, CancellationToken cancellationToken)
+        {
+            DisconnectCount++;
+
+            if (!BlockDisconnect)
+                return Task.CompletedTask;
+
+            _disconnect = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => _disconnect.TrySetCanceled(cancellationToken));
+            return _disconnect.Task;
         }
 
         public Task SendChatAsync(RunningGame game, string message, CancellationToken cancellationToken) => Task.CompletedTask;

@@ -34,6 +34,26 @@ public final class ConnectionOutcomeTest {
     }
 
     @Test
+    public void disconnectClosesTheChannelOfTheJoinedServer() {
+        Network joined = new Network(true);
+        JoinedConnection.joined(joined);
+
+        Assert.assertEquals("{\"status\":\"ok\",\"stage\":\"disconnect.requested\"}", GameAutomationController.disconnectJson());
+        Assert.assertFalse(joined.open);
+
+        // Once closed, the game has left, so disconnecting again reports why instead.
+        Assert.assertEquals(
+            "{\"status\":\"disconnected\",\"stage\":\"connection.closed\",\"message\":\"The connection to the server closed\"}",
+            GameAutomationController.disconnectJson()
+        );
+    }
+
+    @Test
+    public void disconnectNeedsAJoinedServer() {
+        Assert.assertTrue(GameAutomationController.disconnectJson().contains("\"connection.unknown\""));
+    }
+
+    @Test
     public void disconnectReasonUsesTheTextOfMinecraftComponents() {
         Object component = new com.mojang.brigadier.Message() {
             @Override
@@ -177,6 +197,11 @@ public final class ConnectionOutcomeTest {
             Network.class.getClassLoader(), new Class<?>[] { io.netty.channel.Channel.class }, new InvocationHandler() {
                 @Override
                 public Object invoke(Object proxy, Method method, Object[] arguments) {
+                    if ("close".equals(method.getName())) {
+                        open = false;
+                        return null;
+                    }
+
                     if (!"isOpen".equals(method.getName()))
                         throw new UnsupportedOperationException(method.getName());
                     return Boolean.valueOf(open);

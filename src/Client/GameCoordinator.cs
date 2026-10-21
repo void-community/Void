@@ -76,6 +76,11 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
         return await EnqueueAsync<ConnectGameResponse>(completion => new ConnectMessage(request, completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
+    public async Task<GameStatus> DisconnectAsync(CancellationToken cancellationToken)
+    {
+        return await EnqueueAsync<GameStatus>(completion => new DisconnectMessage(completion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
     public override void Dispose()
     {
         _activeCancellation?.Dispose();
@@ -387,6 +392,12 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
 
                     break;
                 }
+            case DisconnectMessage disconnect:
+                {
+                    await HandleDisconnectAsync(disconnect).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
             case SendChatMessage chat:
                 {
                     await HandleSendChatAsync(chat).ConfigureAwait(continueOnCapturedContext: false);
@@ -426,6 +437,12 @@ internal sealed partial class GameCoordinator(IGameRuntime runtime, ILogger<Game
             case ConnectCompleted completed:
                 {
                     await HandleConnectCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
+
+                    break;
+                }
+            case DisconnectCompleted completed:
+                {
+                    await HandleDisconnectCompletedAsync(completed).ConfigureAwait(continueOnCapturedContext: false);
 
                     break;
                 }

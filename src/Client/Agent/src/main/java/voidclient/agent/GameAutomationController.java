@@ -390,6 +390,20 @@ public final class GameAutomationController {
             : disconnected("connection.closed", closedReason);
     }
 
+    static String disconnectJson() {
+        if (!JoinedConnection.hasJoined())
+            return error("connection.unknown", "The game has not joined a server");
+
+        String closedReason = JoinedConnection.closedReason();
+
+        if (closedReason != null)
+            return disconnected("connection.closed", closedReason);
+
+        return JoinedConnection.close()
+            ? "{\"status\":\"ok\",\"stage\":\"disconnect.requested\"}"
+            : error("disconnect.failed", "The connection to the server could not be closed");
+    }
+
     public static synchronized void connectionListenerCreated(Object listener, Object connection) {
         if (pending == null || !pending.submitted || pending.connection != null)
             return;

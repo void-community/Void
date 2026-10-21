@@ -40,6 +40,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const int DefaultCurseForgeParallelDownloads = 4;
     private const string DefaultDisplay = ":99";
     private const string DefaultMinecraftDirectory = "/root/.minecraft";
+    private const int DisconnectCheckIntervalMilliseconds = 250;
+    private const int DisconnectTimeoutMilliseconds = 10000;
     private const int DisplayProbeTimeoutMilliseconds = 1000;
     private const string DisplayScreenHeight = "480";
     private const string DisplayScreenResolution = $"{DisplayScreenWidth}x{DisplayScreenHeight}";
@@ -110,6 +112,11 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     public Task ConnectAsync(RunningGame game, string host, int port, CancellationToken cancellationToken)
     {
         return ConnectThroughAgentAsync(game, $"{host}:{port}", cancellationToken);
+    }
+
+    public Task DisconnectAsync(RunningGame game, CancellationToken cancellationToken)
+    {
+        return DisconnectThroughAgentAsync(game, cancellationToken);
     }
 
     public string GetGameDirectory()

@@ -178,6 +178,19 @@ internal static class ClientApiEndpoints
             .WithName(endpointName: "ConnectGame")
             .WithSummary(summary: "Connects to a server and visually confirms an interactive game screen.");
 
+        var disconnectEndpoint = api.MapPost(
+            pattern: "/game/disconnect",
+            async Task<IResult> (GameCoordinator coordinator, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
+            await ExecuteAsync(
+                operation: "disconnect",
+                async () => Results.Ok(await coordinator.DisconnectAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false)),
+                loggerFactory,
+                cancellationToken
+            ).ConfigureAwait(continueOnCapturedContext: false)
+        )
+            .WithName(endpointName: "DisconnectGame")
+            .WithSummary(summary: "Leaves the server the game is connected to, keeping the game running and ready to connect again.");
+
         var chatEndpoint = api.MapPost(
             pattern: "/game/send-chat",
             async Task<IResult> (SendChatRequest request, GameCoordinator coordinator, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>

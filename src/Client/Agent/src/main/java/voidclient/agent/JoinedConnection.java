@@ -110,6 +110,42 @@ final class JoinedConnection {
      * @return the channel state, or {@code null} when the connection has no channel yet or it cannot be read
      */
     static Boolean isOpen(Object value) {
+        try {
+            Object open = callChannel(value, "isOpen");
+            return open instanceof Boolean ? (Boolean) open : null;
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Closes the connection of the joined server, which is all the game's own Disconnect button does on the network. The game then
+     * leaves the server as it does when the server closes the connection.
+     *
+     * @return whether an open connection was closed
+     */
+    static boolean close() {
+        Object value = connection.get();
+
+        if (!Boolean.TRUE.equals(isOpen(value)))
+            return false;
+
+        try {
+            callChannel(value, "close");
+            return true;
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    /**
+     * Calls a method of the netty channel of a Minecraft connection, through the channel's interface, because its implementation can be
+     * any of netty's transports. Netty 4.0, which Minecraft 1.7 bundles, declares {@code close} on an interface that isn't public, so
+     * the method is made accessible first.
+     *
+     * @return the method's result, or {@code null} when the connection has no channel yet
+     */
+    private static Object callChannel(Object value, String methodName) throws Exception {
         if (value == null)
             return null;
 
@@ -118,13 +154,15 @@ final class JoinedConnection {
                 if (Modifier.isStatic(field.getModifiers()) || !ChannelName.equals(field.getType().getName()))
                     continue;
 
-                try {
-                    field.setAccessible(true);
-                    Object channel = field.get(value);
-                    return channel == null ? null : (Boolean) field.getType().getMethod("isOpen").invoke(channel);
-                } catch (Exception exception) {
+                field.setAccessible(true);
+                Object channel = field.get(value);
+
+                if (channel == null)
                     return null;
-                }
+
+                Method method = field.getType().getMethod(methodName);
+                method.setAccessible(true);
+                return method.invoke(channel);
             }
 
         return null;

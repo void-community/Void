@@ -20,6 +20,7 @@ The examples publish the port as `8080`.
 | `POST` | `/api/game/start/legacyfabric` | `202` | Start LegacyFabric. |
 | `POST` | `/api/game/start/curseforge` | `202` | Start a CurseForge modpack. |
 | `POST` | `/api/game/connect` | `200` | Connect the game to a server. |
+| `POST` | `/api/game/disconnect` | `200` | Leave the server, keeping the game running. |
 | `POST` | `/api/game/send-chat` | `204` | Send a chat message or a command. |
 | `GET` | `/api/game/players` | `200` | Read the local player and the players around it. |
 | `GET` | `/api/game/screenshot` | `200` | Capture the game window as `image/png`. |
@@ -64,7 +65,7 @@ Returns `200 OK` with the text `ok` once the API accepts requests, and `503 Serv
 | `state` | The game's state, described below. |
 | `operationId` | Identifier of the latest operation. It increases with every accepted operation. |
 | `sessionId` | [Diagnostic session](#diagnostics) of the latest launch, or `null` before the first one. |
-| `operation` | The latest operation: `start-vanilla`, `start-neoforge`, `start-forge`, `start-fabric`, `start-quilt`, `start-legacyfabric`, `start-curseforge`, `connect`, `send-chat`, `screenshot`, `options`, or `stop`. |
+| `operation` | The latest operation: `start-vanilla`, `start-neoforge`, `start-forge`, `start-fabric`, `start-quilt`, `start-legacyfabric`, `start-curseforge`, `connect`, `disconnect`, `send-chat`, `screenshot`, `options`, or `stop`. |
 | `operationState` | `none`, `running`, `succeeded`, `failed`, or `canceled`. |
 | `processId` | Process identifier while the game runs. |
 | `exitCode` | Exit code once the game has exited. It can be `0` even after a crash, so use `state` and `failure` instead. |
@@ -295,6 +296,20 @@ If the game leaves the server, for example after a kick or a timeout, `state` re
 
 A failed connection has the `code`, `stage`, and `message` of its [failure](#failures). Unlike `failure`, `disconnect` stays through later operations, such as a screenshot, until the game connects, stops, or exits.
 
+### Disconnecting
+
+The game must be `connected`. It leaves the server as with the Disconnect button of its menu, and keeps running:
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  http://localhost:8080/api/game/disconnect
+```
+
+The response is the [status](#status) once the game has left: `state` is `ready`, `server` is `null`, and `disconnect` has the code `client.disconnect.requested`. The game can then connect to any server again, without restarting.
+
+Returns `409 Conflict` when the game isn't connected or another operation is running, and `504 Gateway Timeout` when the game is still connected 10 seconds after leaving. A game that fails to leave stays `connected`.
+
 ## Sending Chat
 
 The game must be `connected`. Messages that start with `/` are sent as commands.
@@ -445,6 +460,8 @@ Errors use the [Problem Details](https://www.rfc-editor.org/rfc/rfc9457) format.
 | `client.connect.rejected` | The server disconnected the game while it was joining. |
 | `client.connect.failed` | The game couldn't connect for another reason. |
 | `client.connection.lost` | The game left a server it had joined. Only in [`disconnect`](#after-a-connection-ends). |
+| `client.disconnect.requested` | The game left the server because it was [asked to](#disconnecting). Only in [`disconnect`](#after-a-connection-ends). |
+| `client.disconnect.failed` | The game couldn't leave the server. |
 | `client.chat.failed` | The chat message couldn't be sent. |
 | `client.players.unavailable` | The players couldn't be read. |
 | `client.operation.timeout` | The operation timed out. |

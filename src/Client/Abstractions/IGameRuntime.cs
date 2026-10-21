@@ -9,6 +9,9 @@ internal interface IGameRuntime
 
     Task ConnectAsync(RunningGame game, string host, int port, CancellationToken cancellationToken);
 
+    /// <summary>Makes the game leave the server it joined, and waits until it has.</summary>
+    Task DisconnectAsync(RunningGame game, CancellationToken cancellationToken);
+
     /// <summary>Gets the directory every game but a CurseForge modpack runs in, which also holds the versions, libraries and assets of every game.</summary>
     string GetGameDirectory();
 
