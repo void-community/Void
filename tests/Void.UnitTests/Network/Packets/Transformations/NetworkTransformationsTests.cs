@@ -15,6 +15,7 @@ using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Network.Streams.Recyclable;
 using Void.Proxy.Api.Plugins;
 using Void.Proxy.Plugins.Common.Network.Channels;
+using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Network.Packets.Serverbound;
 using Void.Proxy.Plugins.Common.Network.Packets.Transformations;
 using Void.Proxy.Plugins.Common.Network.Streams.Packet;
@@ -139,6 +140,38 @@ public class NetworkTransformationsTests
         var packet = Assert.IsType<KeepAliveResponsePacket>(playerPacketStream.DecodePacket(stream));
 
         Assert.Equal(keepAliveId, packet.Id);
+    }
+
+    [Theory]
+    // Servers before 1.12 write a component with nothing but text as a JSON string
+    [InlineData(5, "\"Welcome to the server!\"")]
+    [InlineData(5, "{\"text\":\"Welcome to the server!\"}")]
+    [InlineData(316, "\"Welcome to the server!\"")]
+    public void DecodePacket_LegacyChatMessage_ReadsTextComponentsWrittenAsJsonStrings(int protocol, string json)
+    {
+        var protocolVersion = ProtocolVersion.Range().First(version => version.Value == protocol);
+        var packetStream = new MinecraftPacketMessageStream();
+        using var channel = new SimpleMinecraftChannel(packetStream);
+
+        packetStream.Registries.PacketIdSystem.ProtocolVersion = protocolVersion;
+        packetStream.Registries.PacketIdSystem.ReplacePackets(Operation.Read, new Dictionary<MinecraftPacketIdMapping[], Type>
+        {
+            { PacketIdDefinitions.ClientboundChatMessage, typeof(ChatMessagePacket) }
+        });
+
+        RegisterMappings<ChatMessagePacket>(channel, protocolVersion, NetworkTransformations.ChatMessage.SelectMany(transformation => transformation.Mappings));
+
+        using var stream = RecyclableStream.RecyclableMemoryStreamManager.GetStream();
+        var buffer = new MinecraftBuffer(stream);
+        buffer.WriteVarInt(PacketIdDefinitions.ClientboundChatMessage.Last(mapping => mapping.ProtocolVersion <= protocolVersion).Id);
+        buffer.WriteString(json);
+
+        if (protocolVersion >= ProtocolVersion.MINECRAFT_1_8)
+            buffer.WriteUnsignedByte(0);
+
+        var packet = Assert.IsType<ChatMessagePacket>(packetStream.DecodePacket(stream));
+
+        Assert.Equal("Welcome to the server!", packet.Message.AsText);
     }
 
     private static void RegisterTransformations(MinecraftPacketMessageStream packetStream, SimpleMinecraftChannel channel, IPlugin plugin, ProtocolVersion protocolVersion, IEnumerable<MinecraftPacketTransformationMapping> mappings)

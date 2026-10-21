@@ -115,7 +115,7 @@ public static class ComponentJsonTransformers
         if (TryParse(property.AsPrimitive, out var node))
         {
             node = Downgrade_v1_16_to_v1_15_2(node);
-            property = StringProperty.FromPrimitive(node.ToString());
+            property = StringProperty.FromPrimitive(node.ToJsonString());
         }
 
         wrapper.Write(property);
@@ -130,7 +130,7 @@ public static class ComponentJsonTransformers
         if (TryParse(property.AsPrimitive, out var node))
         {
             node = Downgrade_v1_12_to_v1_11_1(node);
-            property = StringProperty.FromPrimitive(node.ToString());
+            property = StringProperty.FromPrimitive(node.ToJsonString());
         }
 
         wrapper.Write(property);
@@ -145,7 +145,7 @@ public static class ComponentJsonTransformers
         if (TryParse(property.AsPrimitive, out var node))
         {
             node = Downgrade_v1_9_to_v1_8(node);
-            property = StringProperty.FromPrimitive(node.ToString());
+            property = StringProperty.FromPrimitive(node.ToJsonString());
         }
 
         wrapper.Write(property);
@@ -162,7 +162,7 @@ public static class ComponentJsonTransformers
         if (TryParse(property.AsPrimitive, out var node))
         {
             node = Upgrade_v1_15_2_to_v1_16(node);
-            property = StringProperty.FromPrimitive(node.ToString());
+            property = StringProperty.FromPrimitive(node.ToJsonString());
         }
 
         wrapper.Write(property);
@@ -177,7 +177,7 @@ public static class ComponentJsonTransformers
         if (TryParse(property.AsPrimitive, out var node))
         {
             node = Upgrade_v1_11_1_to_v1_12(node);
-            property = StringProperty.FromPrimitive(node.ToString());
+            property = StringProperty.FromPrimitive(node.ToJsonString());
         }
 
         wrapper.Write(property);
@@ -192,7 +192,7 @@ public static class ComponentJsonTransformers
         if (TryParse(property.AsPrimitive, out var node))
         {
             node = Upgrade_v1_8_to_v1_9(node);
-            property = StringProperty.FromPrimitive(node.ToString());
+            property = StringProperty.FromPrimitive(node.ToJsonString());
         }
 
         wrapper.Write(property);
