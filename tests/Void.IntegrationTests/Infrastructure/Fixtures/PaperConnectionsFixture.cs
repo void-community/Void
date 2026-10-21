@@ -18,10 +18,9 @@ public abstract class PaperConnectionsFixture(PaperFixture paperFixture, Protoco
 
     public override GameSetup? Setup => null;
 
-    protected override Task StartServersAsync()
+    protected override async Task StartServersAsync()
     {
-        _servers = [paperFixture.Server1, paperFixture.Server2];
-        return Task.CompletedTask;
+        _servers = [.. await paperFixture.GetServersAsync()];
     }
 
     // Every Paper collection plays on the same servers, which the assembly fixture stops.
