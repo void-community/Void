@@ -14,6 +14,8 @@ public abstract class DirectConnectionTestBase(IMinecraftServersFixture serversF
 {
     private const string ExpectedText = "hello void!";
 
+    private EndPoint ServerEndPoint => new IPEndPoint(IPAddress.Loopback, serversFixture.Servers.Server1.Port);
+
     protected async Task RunAsync()
     {
         var protocolVersion = serversFixture.ProtocolVersion;
@@ -23,23 +25,21 @@ public abstract class DirectConnectionTestBase(IMinecraftServersFixture serversF
 
         serversFixture.SkipIfUnavailable();
 
-        var servers = serversFixture.Servers;
-        var serverEndPoint = new IPEndPoint(IPAddress.Loopback, servers.Server1.Port);
         var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
 
         await LoggedExecutorAsync(async () =>
         {
-            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(DirectConnectionTestBase), protocolVersion, servers.Setup, [servers.Server1], Timeouts.SetupTimeoutToken))
+            await using (var game = await portableMinecraftClientFixture.Api.RunGameAsync(nameof(DirectConnectionTestBase), protocolVersion, serversFixture.Servers.Setup, [serversFixture.Servers.Server1], Timeouts.SetupTimeoutToken))
             {
-                await game.JoinServerAsync(serverEndPoint, Timeouts.SetupTimeoutToken);
-                await servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
+                await game.JoinServerAsync(ServerEndPoint, Timeouts.SetupTimeoutToken);
+                await serversFixture.Servers.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
                 await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
                 await game.SendTextMessageAsync(expectedText, Timeouts.StepTimeoutToken);
-                await servers.Server1.ExpectTextAsync(expectedText, lookupHistory: true, Timeouts.StepTimeoutToken);
+                await serversFixture.Servers.Server1.ExpectTextAsync(expectedText, lookupHistory: true, Timeouts.StepTimeoutToken);
             }
 
-            Assert.Contains(servers.Server1.Logs, line => line.Contains(expectedText));
-        }, portableMinecraftClientFixture.Api, servers.Server1);
+            Assert.Contains(serversFixture.Servers.Server1.Logs, line => line.Contains(expectedText));
+        }, portableMinecraftClientFixture.Api, serversFixture.Servers.Server1);
     }
 }
