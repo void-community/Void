@@ -92,7 +92,7 @@ public class ArgumentParserDefinitions
         #endregion
         #region Typed with non-empty serializers
 
-        ArgumentParserDefinition.From<RegistryKeyArgumentType>(RegistryKeyArgumentSerializer.Instance,
+        ArgumentParserDefinition.From<ResourceOrTagArgumentType>(ResourceOrTagArgumentType.Serializer.Instance,
             new ArgumentSerializerMapping("minecraft:resource_or_tag",
             new()
             {

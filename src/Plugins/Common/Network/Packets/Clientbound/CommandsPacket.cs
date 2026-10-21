@@ -1,14 +1,16 @@
 ﻿using Void.Minecraft.Buffers;
+using Void.Minecraft.Buffers.Exceptions;
 using Void.Minecraft.Buffers.Extensions;
 using Void.Minecraft.Commands.Brigadier;
+using Void.Minecraft.Commands.Brigadier.ArgumentTypes;
 using Void.Minecraft.Commands.Brigadier.Builder;
+using Void.Minecraft.Commands.Brigadier.Context;
 using Void.Minecraft.Commands.Brigadier.Registry;
 using Void.Minecraft.Commands.Brigadier.Suggestion;
 using Void.Minecraft.Commands.Brigadier.Tree;
 using Void.Minecraft.Commands.Brigadier.Tree.Nodes;
 using Void.Minecraft.Network;
 using Void.Minecraft.Network.Messages.Packets;
-using Void.Proxy.Plugins.Common.Extensions;
 
 namespace Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 
@@ -39,7 +41,10 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
 
     private static readonly CommandExecutor ExecuteNothing = (context, cancellationToken) => ValueTask.FromResult(0);
     private static readonly CommandRequirement RequireNothing = (context, cancellationToken) => ValueTask.FromResult(true);
-    private static readonly Dictionary<string, SuggestionProvider> SuggestionProvidersNames = [];
+
+    // Trees of large modpacks pass hundreds of kilobytes, while no packet may exceed the protocol's 8 MiB.
+    private const int InitialNodesBufferSize = 128 * 1024;
+    private const int MaximumNodesBufferSize = 8 * 1024 * 1024;
 
     public RootCommandNode? RootNode { get; set; }
     public Memory<byte> FallbackNode { get; set; }
@@ -47,38 +52,18 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
 
     public void Encode(ref MinecraftBuffer buffer, ProtocolVersion protocolVersion)
     {
-        if (RootNode is not null)
-        {
-            var queue = new Queue<CommandNode>([RootNode]);
-            var indices = new Dictionary<CommandNode, int>(ReferenceEqualityComparer.Instance);
-
-            while (queue.Count > 0)
-            {
-                var commandNode = queue.Dequeue();
-
-                if (!indices.TryAdd(commandNode, indices.Count))
-                    continue;
-
-                foreach (var childCommandNode in commandNode.Children)
-                    queue.Enqueue(childCommandNode);
-
-                if (commandNode.RedirectTarget is not null)
-                    queue.Enqueue(commandNode.RedirectTarget);
-            }
-
-            buffer.WriteVarInt(indices.Count);
-
-            var span = new BufferSpan(stackalloc byte[128 * 1024]);
-            foreach (var node in indices.Keys)
-                SerializeNode(node, ref span, indices, protocolVersion);
-
-            buffer.Write(span.Access(0, span.Position));
-            buffer.WriteVarInt(indices[RootNode]);
-        }
-        else
+        if (RootNode is null)
         {
             buffer.Write(FallbackNode.Span);
+            return;
         }
+
+        var indices = new Dictionary<CommandNode, int>(ReferenceEqualityComparer.Instance);
+        NumberBreadthFirst([RootNode], indices);
+
+        buffer.WriteVarInt(indices.Count);
+        buffer.Write(SerializeNodes(indices.Keys, indices, protocolVersion));
+        buffer.WriteVarInt(indices[RootNode]);
     }
 
     public static CommandsPacket Decode(ref MinecraftBuffer buffer, ProtocolVersion protocolVersion)
@@ -94,37 +79,175 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
             for (int i = 0; i < commands; i++)
                 nodes[i] = DeserializeNode(ref span, i, protocolVersion);
 
-            var queue = new Queue<ProtocolCommandNode>(nodes);
-            while (queue.Count > 0)
-            {
-                var builtAnyNode = false;
-                var unbuiltProtocolCommandNodes = new List<ProtocolCommandNode>(queue.Count);
-
-                while (queue.TryDequeue(out var protocolCommandNode))
-                {
-                    if (protocolCommandNode.TryBuild(nodes))
-                    {
-                        builtAnyNode = true;
-                        continue;
-                    }
-
-                    unbuiltProtocolCommandNodes.Add(protocolCommandNode);
-                }
-
-                if (!builtAnyNode)
-                    throw new InvalidOperationException($"Broken command node graph detected; unable to build any more nodes, {queue.Count(protocolCommandNode => protocolCommandNode.Built is null)} is left unbuilt.");
-
-                foreach (var node in unbuiltProtocolCommandNodes)
-                    queue.Enqueue(node);
-            }
-            
             var rootIndex = span.ReadVarInt();
-            return new CommandsPacket { RootNode = nodes[rootIndex].Built as RootCommandNode ?? throw new InvalidDataException("Root node is not a instance of root command node!"), };
+            return new CommandsPacket { RootNode = Build(nodes, rootIndex) };
         }
         catch (Exception exception)
         {
-            return new CommandsPacket { FallbackNode = buffer.DumpBytes()[(int)start..].ToArray(), FallbackReason = exception };
+            return DecodeWithUnknownArguments(buffer.DumpBytes()[(int)start..].ToArray(), protocolVersion, exception);
         }
+    }
+
+    /// <summary>
+    /// Adds commands to a command tree the proxy couldn't read by rewriting only its root. Servers number the root first and write it with no
+    /// name or argument type, so every other node stays byte for byte as the server wrote it, and the added commands are numbered after them.
+    /// </summary>
+    /// <param name="tree">The command tree as the server wrote it, from its node count to its root index.</param>
+    /// <param name="commands">The root whose commands are added; a redirect to it leads to the tree's root.</param>
+    /// <param name="protocolVersion">The protocol version the tree was written for.</param>
+    /// <returns>The tree with the commands added, or <see langword="null"/> when the tree doesn't start with its root.</returns>
+    public static byte[]? Splice(ReadOnlySpan<byte> tree, RootCommandNode commands, ProtocolVersion protocolVersion)
+    {
+        var copy = tree.ToArray();
+        int count, serverNodesStart;
+        byte rootFlags;
+        ReadOnlyMemory<int> rootChildren;
+
+        try
+        {
+            var reader = new BufferSpan(copy);
+            count = reader.ReadVarInt();
+            rootFlags = reader.ReadUnsignedByte();
+            rootChildren = reader.ReadVarIntArray();
+            serverNodesStart = reader.Position;
+
+            // The tree's last byte is its root index, which is 0 only when the root is the first node.
+            if ((rootFlags & (byte)ProtocolCommandNodeFlags.NodeType) != (byte)ProtocolCommandNodeType.Root || (rootFlags & (byte)ProtocolCommandNodeFlags.HasRedirect) != 0 || copy[^1] != 0)
+                return null;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return null;
+        }
+
+        var indices = new Dictionary<CommandNode, int>(ReferenceEqualityComparer.Instance) { [commands] = 0 };
+        NumberBreadthFirst(commands.Children, indices, firstIndex: count);
+
+        var addedNodes = SerializeNodes(indices.Keys.Where(node => node != commands), indices, protocolVersion);
+        var output = new byte[copy.Length + addedNodes.Length + 32 + 5 * commands.Children.Count()];
+        var writer = new BufferSpan(output);
+
+        writer.WriteVarInt(count + indices.Count - 1);
+        writer.WriteUnsignedByte(rootFlags);
+        writer.WriteVarInt(rootChildren.Length + commands.Children.Count());
+
+        foreach (var child in rootChildren.Span)
+            writer.WriteVarInt(child);
+
+        foreach (var child in commands.Children)
+            writer.WriteVarInt(indices[child]);
+
+        writer.Write(copy.AsSpan(serverNodesStart, copy.Length - serverNodesStart - 1));
+        writer.Write(addedNodes);
+        writer.WriteVarInt(0);
+
+        return output[..writer.Position];
+    }
+
+    /// <summary>
+    /// Reads a tree whose arguments include types the proxy doesn't know, such as ones mods register, keeping their properties as the server
+    /// wrote them, or keeps the tree as the server wrote it when no layout of its nodes fits.
+    /// </summary>
+    private static CommandsPacket DecodeWithUnknownArguments(byte[] tree, ProtocolVersion protocolVersion, Exception failure)
+    {
+        try
+        {
+            if (CommandTreeLayout.Find(tree, protocolVersion) is { } layout)
+            {
+                var span = new BufferSpan(tree);
+                var nodes = new ProtocolCommandNode[layout.Length];
+
+                for (var i = 0; i < layout.Length; i++)
+                {
+                    span.Position = layout[i].Start;
+                    nodes[i] = DeserializeNode(ref span, i, protocolVersion, layout[i].HasUnknownArgument ? layout[i].PropertiesLength : null);
+                }
+
+                return new CommandsPacket { RootNode = Build(nodes, rootIndex: 0) };
+            }
+
+            failure = new InvalidDataException("No layout of the command tree's nodes fits its argument types the proxy doesn't know.", failure);
+        }
+        catch (Exception exception)
+        {
+            failure = new AggregateException(failure, exception);
+        }
+
+        return new CommandsPacket { FallbackNode = tree, FallbackReason = failure };
+    }
+
+    private static RootCommandNode Build(ProtocolCommandNode[] nodes, int rootIndex)
+    {
+        var queue = new Queue<ProtocolCommandNode>(nodes);
+
+        while (queue.Count > 0)
+        {
+            var builtAnyNode = false;
+            var unbuiltProtocolCommandNodes = new List<ProtocolCommandNode>(queue.Count);
+
+            while (queue.TryDequeue(out var protocolCommandNode))
+            {
+                if (protocolCommandNode.TryBuild(nodes))
+                {
+                    builtAnyNode = true;
+                    continue;
+                }
+
+                unbuiltProtocolCommandNodes.Add(protocolCommandNode);
+            }
+
+            if (!builtAnyNode)
+                throw new InvalidOperationException($"Broken command node graph detected; unable to build any more nodes, {unbuiltProtocolCommandNodes.Count} is left unbuilt.");
+
+            foreach (var node in unbuiltProtocolCommandNodes)
+                queue.Enqueue(node);
+        }
+
+        return nodes[rootIndex].Built as RootCommandNode ?? throw new InvalidDataException("Root node is not a instance of root command node!");
+    }
+
+    /// <summary>Numbers nodes in the order a breadth-first walk first meets them, children first and then the redirect, as servers do.</summary>
+    private static void NumberBreadthFirst(IEnumerable<CommandNode> firstNodes, Dictionary<CommandNode, int> indices, int firstIndex = 0)
+    {
+        var queue = new Queue<CommandNode>(firstNodes);
+        var nextIndex = firstIndex;
+
+        while (queue.TryDequeue(out var commandNode))
+        {
+            if (!indices.TryAdd(commandNode, nextIndex))
+                continue;
+
+            nextIndex++;
+
+            foreach (var childCommandNode in commandNode.Children)
+                queue.Enqueue(childCommandNode);
+
+            if (commandNode.RedirectTarget is not null)
+                queue.Enqueue(commandNode.RedirectTarget);
+        }
+    }
+
+    private static byte[] SerializeNodes(IEnumerable<CommandNode> nodes, Dictionary<CommandNode, int> indices, ProtocolVersion protocolVersion)
+    {
+        for (var size = InitialNodesBufferSize; size <= MaximumNodesBufferSize; size *= 2)
+        {
+            var output = new byte[size];
+            var span = new BufferSpan(output);
+
+            try
+            {
+                foreach (var node in nodes)
+                    SerializeNode(node, ref span, indices, protocolVersion);
+
+                return output[..span.Position];
+            }
+            catch (EndOfBufferException)
+            {
+                // The nodes need a bigger buffer.
+            }
+        }
+
+        throw new InvalidOperationException($"Command tree nodes don't fit in {MaximumNodesBufferSize} bytes.");
     }
 
     /// <summary>
@@ -248,17 +371,15 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
             if (argumentCommandNode.CustomSuggestions is null)
                 return;
 
-            var provider = argumentCommandNode.CustomSuggestions;
-            var name = "minecraft:ask_server";
-
-            if (SuggestionProvidersNames.TryGetKey(provider, out var foundName))
-                name = foundName;
+            // Suggestions the server named are named again, and any other suggestions are asked of the server, which the proxy answers.
+            var name = argumentCommandNode.CustomSuggestions.Target is NamedSuggestions namedSuggestions ? namedSuggestions.Name : "minecraft:ask_server";
 
             buffer.WriteString(name);
         }
     }
 
-    private static ProtocolCommandNode DeserializeNode(ref BufferSpan buffer, int index, ProtocolVersion protocolVersion)
+    /// <param name="unknownPropertiesLength">For an argument of a type the proxy doesn't know, how long its properties are.</param>
+    private static ProtocolCommandNode DeserializeNode(ref BufferSpan buffer, int index, ProtocolVersion protocolVersion, int? unknownPropertiesLength = null)
     {
         var flags = (ProtocolCommandNodeFlags)buffer.ReadUnsignedByte();
         var childrenIndices = buffer.ReadVarIntArray();
@@ -288,7 +409,7 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
         ProtocolCommandNode DeserializeArgumentNode(ref BufferSpan buffer)
         {
             var name = buffer.ReadString();
-            var argumentType = ArgumentSerializerRegistry.Deserialize(ref buffer, protocolVersion);
+            var argumentType = unknownPropertiesLength is { } length ? DeserializeUnknownArgument(ref buffer, length) : ArgumentSerializerRegistry.Deserialize(ref buffer, protocolVersion);
             var argumentBuilder = RequiredArgumentBuilder.Create(name, argumentType);
 
             if (!flags.HasFlag(ProtocolCommandNodeFlags.HasSuggestionsType))
@@ -297,13 +418,27 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
             if (argumentBuilder is null)
                 throw new InvalidDataException($"Argument node has suggestions type but deserialized builder is not a {nameof(RequiredArgumentBuilder)}.");
 
-            var providerName = buffer.ReadString();
-            var provider = new SuggestionProvider((context, builder, cancellationToken) => builder.BuildAsync(cancellationToken));
-
-            _ = SuggestionProvidersNames.TryAdd(providerName, provider);
-            argumentBuilder.Suggests(provider);
+            argumentBuilder.Suggests(new NamedSuggestions(buffer.ReadString()).SuggestAsync);
 
             return new ProtocolCommandNode(index, nodeType, flags, childrenIndices, redirectToIndex, argumentBuilder);
+        }
+
+        UnknownArgumentType DeserializeUnknownArgument(ref BufferSpan buffer, int length)
+        {
+            ArgumentSerializerRegistry.TryDecodeParserMapping(ref buffer, protocolVersion, out var mapping);
+            return new UnknownArgumentType(mapping, buffer.Read(length).ToArray());
+        }
+    }
+
+    /// <summary>
+    /// Suggestions a server named for an argument, such as minecraft:available_sounds, which clients list themselves. Each node gets its own
+    /// provider, so its name goes back to the client unchanged.
+    /// </summary>
+    private sealed record NamedSuggestions(string Name)
+    {
+        public ValueTask<Suggestions> SuggestAsync(CommandContext context, SuggestionsBuilder builder, CancellationToken cancellationToken)
+        {
+            return builder.BuildAsync(cancellationToken);
         }
     }
 

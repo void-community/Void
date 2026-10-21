@@ -50,7 +50,7 @@ public class CrossStitchArgumentTests
         var unregisteredArgument = ArgumentSerializerRegistry.Deserialize(ref reader, ProtocolVersion.MINECRAFT_1_21);
         var root = new RootCommandNode();
         root.AddChild(LiteralArgumentBuilder.Create("colony").Then(RequiredArgumentBuilder.Create("buildings", unregisteredArgument)).Build());
-        root.AddChild(LiteralArgumentBuilder.Create("broken").Then(RequiredArgumentBuilder.Create("value", new UnknownArgumentType())).Build());
+        root.AddChild(LiteralArgumentBuilder.Create("broken").Then(RequiredArgumentBuilder.Create("value", new UnencodableArgumentType())).Build());
 
         var removed = CommandsPacket.RemoveUnserializableArguments(root, ProtocolVersion.MINECRAFT_1_21);
 
@@ -70,7 +70,7 @@ public class CrossStitchArgumentTests
         return bytes[..writer.Position];
     }
 
-    private sealed class UnknownArgumentType : IArgumentType
+    private sealed class UnencodableArgumentType : IArgumentType
     {
         public IEnumerable<string> Examples => Enumerable.Empty<string>();
 

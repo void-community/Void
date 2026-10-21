@@ -22,6 +22,10 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <None Include="Commands\Fixtures\*.bin" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<ItemGroup>
 	  <ProjectReference Include="..\..\src\Plugins\Common\Void.Proxy.Plugins.Common.csproj" />
 	  <ProjectReference Include="..\..\src\Plugins\ModsSupport\CrossStitch\Void.Proxy.Plugins.ModsSupport.CrossStitch.csproj" />
 	  <ProjectReference Include="..\..\src\Plugins\ModsSupport\SlowJoin\Void.Proxy.Plugins.ModsSupport.SlowJoin.csproj" />

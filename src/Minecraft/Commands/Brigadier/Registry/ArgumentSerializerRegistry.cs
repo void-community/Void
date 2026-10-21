@@ -76,6 +76,18 @@ public class ArgumentSerializerRegistry
     /// <exception cref="ArgumentException">The runtime argument type is unregistered or has no parser ID for the target version.</exception>
     public static void Serialize(ref BufferSpan buffer, IArgumentType argumentType, ProtocolVersion protocolVersion)
     {
+        if (argumentType is UnknownArgumentType unknownArgumentType)
+        {
+            // The type goes back as the server wrote it, even -1, which servers write for a type they never registered.
+            if (protocolVersion >= ProtocolVersion.MINECRAFT_1_19)
+                buffer.WriteVarInt(unknownArgumentType.Mapping.VersionParserIdMapping[protocolVersion]);
+            else
+                buffer.WriteString(unknownArgumentType.Mapping.Identifier);
+
+            buffer.Write(unknownArgumentType.Properties.Span);
+            return;
+        }
+
         if (argumentType is PassthroughArgumentType passthroughArgumentType)
         {
             WriteParserIdentifier(ref buffer, passthroughArgumentType.Mappings, protocolVersion);
@@ -119,29 +131,52 @@ public class ArgumentSerializerRegistry
     /// <exception cref="ArgumentException">The identifier is unknown for the protocol version.</exception>
     public static ArgumentSerializerMapping DecodeParserMapping(ref BufferSpan buffer, ProtocolVersion protocolVersion)
     {
+        if (TryDecodeParserMapping(ref buffer, protocolVersion, out var mapping))
+            return mapping;
+
+        throw mapping.TryGetParserId(protocolVersion, out var parserId)
+            ? new ArgumentException($"Argument type ID {parserId} unknown for protocol version {protocolVersion}.")
+            : new ArgumentException($"Argument type mapping identifier {mapping.Identifier} unknown.");
+    }
+
+    /// <summary>Reads a numeric or string parser identifier and resolves it to a registered mapping when there is one.</summary>
+    /// <param name="buffer">The source buffer.</param>
+    /// <param name="protocolVersion">The source protocol version.</param>
+    /// <param name="mapping">The registered mapping, or a mapping that names the unregistered argument type as the buffer did.</param>
+    /// <returns><see langword="true"/> when the identifier is registered.</returns>
+    public static bool TryDecodeParserMapping(ref BufferSpan buffer, ProtocolVersion protocolVersion, out ArgumentSerializerMapping mapping)
+    {
         if (protocolVersion >= ProtocolVersion.MINECRAFT_1_19)
         {
             var protocolSpecificId = buffer.ReadVarInt();
 
-            foreach (var mapping in MappingToSerializer.Keys)
+            foreach (var registeredMapping in MappingToSerializer.Keys)
             {
-                if (!mapping.TryGetParserId(protocolVersion, out var parserId) || parserId != protocolSpecificId)
+                if (!registeredMapping.TryGetParserId(protocolVersion, out var parserId) || parserId != protocolSpecificId)
                     continue;
 
-                return mapping;
+                mapping = registeredMapping;
+                return true;
             }
 
-            throw new ArgumentException($"Argument type ID {protocolSpecificId} unknown for protocol version {protocolVersion}.");
+            mapping = new ArgumentSerializerMapping($"unknown:{protocolSpecificId}", protocolVersion, protocolSpecificId);
+            return false;
         }
         else
         {
             var identifier = buffer.ReadString();
 
-            foreach (var mapping in MappingToSerializer.Keys)
-                if (mapping.Identifier == identifier)
-                    return mapping;
+            foreach (var registeredMapping in MappingToSerializer.Keys)
+            {
+                if (registeredMapping.Identifier != identifier)
+                    continue;
 
-            throw new ArgumentException($"Argument type mapping identifier {identifier} unknown.");
+                mapping = registeredMapping;
+                return true;
+            }
+
+            mapping = new ArgumentSerializerMapping(identifier);
+            return false;
         }
     }
 }

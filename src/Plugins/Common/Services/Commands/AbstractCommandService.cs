@@ -34,20 +34,31 @@ public abstract class AbstractCommandService(ILogger logger, IEventService event
             case CommandsPacket packet:
                 if (packet.RootNode is null)
                 {
-                    logger.LogWarning(packet.FallbackReason, "Player {Player} will have no commands suggestions due to inability to parse the command tree", @event.Player);
-                    
-                    var unavailableCommandsEvent = new UnavailableCommandsEvent(@event.Link, @event.Player, packet.FallbackReason);
-                    await events.ThrowAsync(unavailableCommandsEvent, cancellationToken);
-                    
-                    if (unavailableCommandsEvent.CustomCommandNode is not null)
-                        packet.RootNode = unavailableCommandsEvent.CustomCommandNode;
+                    // The tree can't be read, so the proxy's commands are added beside the server's without plugins seeing it.
+                    var proxyCommands = new RootCommandNode();
+                    await commands.CopyToAsync(proxyCommands, @event.Player, cancellationToken);
+
+                    if (CommandsPacket.Splice(packet.FallbackNode.Span, proxyCommands, @event.Player.ProtocolVersion) is { } splicedTree)
+                    {
+                        packet.FallbackNode = splicedTree;
+                        logger.LogWarning(packet.FallbackReason, "Player {Player} will see the proxy's commands beside the server's, but plugins can't change them because the command tree can't be read", @event.Player);
+                    }
+                    else
+                    {
+                        logger.LogWarning(packet.FallbackReason, "Player {Player} will not see the proxy's commands because the command tree can't be read", @event.Player);
+                    }
                 }
                 else
                 {
                     foreach (var (node, reason) in CommandsPacket.RemoveUnserializableArguments(packet.RootNode, @event.Player.ProtocolVersion))
                         logger.LogWarning(reason, "Player {Player} will not see command argument {Argument} because it can't be encoded for their protocol version", @event.Player, node.Name);
 
-                    await events.ThrowAsync(new AvailableCommandsEvent(@event.Link, @event.Player, packet.RootNode), cancellationToken);
+                    var availableCommandsEvent = new AvailableCommandsEvent(@event.Link, @event.Player, packet.RootNode);
+
+                    if (availableCommandsEvent.CommandsWithUnknownArguments is { Count: > 0 } commandsWithUnknownArguments)
+                        logger.LogDebug("Player {Player} commands {Commands} have arguments of types the proxy doesn't know, which reach the player as the server sent them", @event.Player, string.Join(", ", commandsWithUnknownArguments.Select(command => command.Name)));
+
+                    await events.ThrowAsync(availableCommandsEvent, cancellationToken);
                 }
 
                 break;
