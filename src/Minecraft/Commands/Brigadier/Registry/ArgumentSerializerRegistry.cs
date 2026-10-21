@@ -4,15 +4,19 @@ using Void.Minecraft.Buffers;
 using Void.Minecraft.Buffers.Extensions;
 using Void.Minecraft.Commands.Brigadier.ArgumentTypes;
 using Void.Minecraft.Commands.Brigadier.Serializers;
-using Void.Minecraft.Commands.Brigadier.Serializers.Passthrough;
 using Void.Minecraft.Network;
 using Void.Minecraft.Network.Definitions;
 
 namespace Void.Minecraft.Commands.Brigadier.Registry;
 
-/// <summary>Registers command argument serializers and resolves their protocol identifiers.</summary>
+/// <summary>Resolves the serializers and protocol identifiers of the command argument types Minecraft defines.</summary>
+/// <remarks>
+/// It holds only the protocol's own definitions, which never change, so every proxy in a process reads them at once. An argument of any other
+/// type is read as an <see cref="UnknownArgumentType"/>, which plugins can inspect and replace in the command tree.
+/// </remarks>
 public class ArgumentSerializerRegistry
 {
+    // Filled once below and only read afterwards, which concurrent readers can do safely.
     private static readonly Dictionary<ArgumentSerializerMapping, IArgumentSerializer> MappingToSerializer = [];
     private static readonly Dictionary<Type, IArgumentSerializer> ArgumentTypeToSerializer = [];
     private static readonly Dictionary<Type, ArgumentSerializerMapping> ArgumentTypeToMapping = [];
@@ -26,19 +30,7 @@ public class ArgumentSerializerRegistry
             Register(definition.Mapping, definition.ArgumentType, definition.Serializer);
     }
 
-    /// <summary>Registers a passthrough mapping without associating a normal runtime argument type.</summary>
-    /// <param name="mapping">The protocol identifier mapping.</param>
-    /// <param name="serializer">The payload serializer, or the empty serializer when <see langword="null"/>.</param>
-    public static void Register(ArgumentSerializerMapping mapping, IArgumentSerializer? serializer = null)
-    {
-        Register(mapping, argumentType: null, serializer ?? EmptyArgumentPassthroughSerializer.Instance);
-    }
-
-    /// <summary>Registers or replaces mapping and optional runtime-type associations.</summary>
-    /// <param name="mapping">The protocol identifier mapping.</param>
-    /// <param name="argumentType">The normal argument runtime type, or <see langword="null"/> for passthrough-only use.</param>
-    /// <param name="serializer">The property serializer.</param>
-    public static void Register(ArgumentSerializerMapping mapping, Type? argumentType, IArgumentSerializer serializer)
+    private static void Register(ArgumentSerializerMapping mapping, Type? argumentType, IArgumentSerializer serializer)
     {
         MappingToSerializer[mapping] = serializer;
 

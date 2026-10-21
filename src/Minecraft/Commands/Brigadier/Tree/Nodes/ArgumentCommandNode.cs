@@ -28,8 +28,8 @@ public class ArgumentCommandNode(string name, IArgumentType type, CommandExecuto
     private const string UsageArgumentOpen = "<";
     private const string UsageArgumentClose = ">";
 
-    /// <summary>Gets the parser and default completion behavior.</summary>
-    public IArgumentType Type { get; } = type;
+    /// <summary>Gets or sets the parser and default completion behavior.</summary>
+    public IArgumentType Type { get; set; } = type;
     /// <inheritdoc/>
     public override string Name => name;
     /// <inheritdoc/>
