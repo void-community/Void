@@ -15,7 +15,7 @@ public class LoginWrapperMessageTests
     [Fact]
     public void ReadsMessagesNeoForgeRepeatsTheRequestHeaderBefore()
     {
-        Assert.Equal(new LoginWrapperMessage("fml:handshake", 5), LoginWrapperMessage.Read(Convert.FromHexString(NeoForgeModData)));
+        Assert.Equal(new LoginWrapperMessage("fml:handshake", 5, Index: 0), LoginWrapperMessage.Read(Convert.FromHexString(NeoForgeModData)));
     }
 
     [Fact]
@@ -24,7 +24,7 @@ public class LoginWrapperMessageTests
         // The same message as Forge sends it, without the repeated header.
         var payload = Convert.FromHexString(NeoForgeModData)[18..];
 
-        Assert.Equal(new LoginWrapperMessage("fml:handshake", 5), LoginWrapperMessage.Read(payload));
+        Assert.Equal(new LoginWrapperMessage("fml:handshake", 5, Index: null), LoginWrapperMessage.Read(payload));
     }
 
     [Theory]
@@ -32,7 +32,25 @@ public class LoginWrapperMessageTests
     [InlineData("forge:tier_sorting", 2, 0)]
     public void ReadsTheChannelAndIdOfAnyMessage(string channel, int id, int length)
     {
-        Assert.Equal(new LoginWrapperMessage(channel, id), LoginWrapperMessage.Read(Wrap(channel, id, new byte[length])));
+        Assert.Equal(new LoginWrapperMessage(channel, id, Index: null), LoginWrapperMessage.Read(Wrap(channel, id, new byte[length])));
+    }
+
+    [Theory]
+    [InlineData(7)]
+    [InlineData(300)]
+    public void GivesNeoForgePayloadsTheIndexOfAnotherRequest(int index)
+    {
+        var payload = LoginWrapperMessage.WithIndex(Convert.FromHexString(NeoForgeModData), index);
+
+        Assert.Equal(new LoginWrapperMessage("fml:handshake", 5, index), LoginWrapperMessage.Read(payload));
+    }
+
+    [Fact]
+    public void KeepsPayloadsWithoutARepeatedIndex()
+    {
+        var payload = Convert.FromHexString(NeoForgeModData)[18..];
+
+        Assert.Same(payload, LoginWrapperMessage.WithIndex(payload, 7));
     }
 
     [Fact]

@@ -85,7 +85,7 @@ public class HandshakeService(IPlayerContext context) : IEventListener
 
         if (@event is { Channel: LoginWrapperMessage.WrapperChannel })
         {
-            var (channel, id) = LoginWrapperMessage.Read(@event.Data);
+            var (channel, id, index) = LoginWrapperMessage.Read(@event.Data);
 
             // Forge and NeoForge register their mod data message without a response, so clients never answer it
             var ignored = channel is handshakeChannel && id is 5;
@@ -98,7 +98,8 @@ public class HandshakeService(IPlayerContext context) : IEventListener
                 if (!mods.FmlHandshakeResponses.TryGetValue(id, out var response))
                     throw new InvalidOperationException($"No cached FML handshake response found for player {@event.Player} with request id {id}.");
 
-                @event.Response = response;
+                // The cached answer repeats the index of the request it answered, while NeoForge matches it to this request by its own
+                @event.Response = index is { } requestIndex ? LoginWrapperMessage.WithIndex(response, requestIndex) : response;
                 @event.Successful = true;
                 @event.Result = true;
                 return;
