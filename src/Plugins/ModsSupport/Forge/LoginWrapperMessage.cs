@@ -1,3 +1,4 @@
+using System.Text;
 using Void.Minecraft.Buffers;
 using Void.Minecraft.Buffers.Extensions;
 
@@ -9,6 +10,9 @@ namespace Void.Proxy.Plugins.ModsSupport.Forge;
 public record LoginWrapperMessage(string Channel, int Id)
 {
     public const string WrapperChannel = "fml:loginwrapper";
+
+    // The channel as a payload writes it, after its length.
+    private static readonly byte[] EncodedWrapperChannel = [(byte)WrapperChannel.Length, .. Encoding.UTF8.GetBytes(WrapperChannel)];
 
     /// <summary>Reads the message a login wrapper payload carries.</summary>
     /// <exception cref="InvalidDataException">The payload holds more than one message.</exception>
@@ -30,24 +34,16 @@ public record LoginWrapperMessage(string Channel, int Id)
 
     /// <summary>
     /// Skips the request's index and channel that NeoForge for Minecraft 1.20.2 writes again at the start of its payloads. Any other payload
-    /// starts with a channel name, which can't hold the length byte that follows its own first byte, so only a repeated header reads as the
+    /// starts with a channel name, which can't hold the length byte that follows its own first byte, so only a repeated header has the
     /// wrapper's channel there.
     /// </summary>
     private static void SkipRepeatedHeader(ref BufferSpan buffer)
     {
         var start = buffer.Position;
+        buffer.ReadVarInt();
 
-        try
-        {
-            buffer.ReadVarInt();
-
-            if (buffer.ReadString() == WrapperChannel)
-                return;
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
-        {
-            // Not a repeated header, which can end the payload early.
-        }
+        if (buffer.Remaining >= EncodedWrapperChannel.Length && buffer.Read(EncodedWrapperChannel.Length).SequenceEqual(EncodedWrapperChannel))
+            return;
 
         buffer.Position = start;
     }

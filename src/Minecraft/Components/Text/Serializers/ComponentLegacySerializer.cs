@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
-using System.Text.Json.Nodes;
 using Void.Minecraft.Components.Text.Formats;
 using Void.Minecraft.Components.Text.Properties;
 using Void.Minecraft.Components.Text.Properties.Content;
@@ -50,7 +49,6 @@ public static class ComponentLegacySerializer
                 TranslatableContent content => content.Translate, // skipped child component
                 ScoreContent content => string.Concat(content.Name, ":", content.Objective),
                 NbtContent content => string.Join(':', [content.Source, content.Path, content.Interpret, content.Block, content.Entity, content.Storage]),  // skipped child component
-                LiteralContent { Value: var value } => value.AsJsonNode() is JsonValue jsonValue ? jsonValue.ToString() : value.ToString(),
                 var content => content.ToString()
             };
 

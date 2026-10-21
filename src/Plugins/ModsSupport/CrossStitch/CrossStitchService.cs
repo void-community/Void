@@ -16,7 +16,7 @@ namespace Void.Proxy.Plugins.ModsSupport.CrossStitch;
 /// Unwraps the arguments CrossStitch servers wrap for proxies, so players get each one with the server's own argument type and properties, as
 /// on a direct connection.
 /// </summary>
-public class CrossStitchService(ILogger<CrossStitchService> logger) : IEventListener
+public class CrossStitchService : IEventListener
 {
     public static readonly ArgumentSerializerMapping ModArgumentMapping = new("crossstitch:mod_argument", ProtocolVersion.MINECRAFT_1_19, parserId: -256);
 
@@ -27,41 +27,27 @@ public class CrossStitchService(ILogger<CrossStitchService> logger) : IEventList
         if (!@event.Player.IsMinecraft)
             return;
 
-        var unwrapped = Unwrap(@event.Node, @event.Player.ProtocolVersion);
-
-        if (unwrapped > 0)
-            logger.LogTrace("Unwrapped {Count} CrossStitch arguments in player {Player} commands", unwrapped, @event.Player);
+        Unwrap(@event.Node, @event.Player.ProtocolVersion);
     }
 
     /// <summary>Replaces each argument CrossStitch wrapped in <paramref name="root"/> with the argument it wraps.</summary>
     /// <param name="root">The command tree as the server sent it.</param>
     /// <param name="protocolVersion">The protocol version the tree was written for.</param>
-    /// <returns>The number of arguments unwrapped.</returns>
-    public static int Unwrap(RootCommandNode root, ProtocolVersion protocolVersion)
+    public static void Unwrap(RootCommandNode root, ProtocolVersion protocolVersion)
     {
-        var unwrapped = 0;
-        var visited = new HashSet<CommandNode>(ReferenceEqualityComparer.Instance);
-        var pending = new Stack<CommandNode>([root]);
+        Unwrap(root, protocolVersion, new HashSet<CommandNode>(ReferenceEqualityComparer.Instance));
+    }
 
-        while (pending.TryPop(out var node))
-        {
-            if (!visited.Add(node))
-                continue;
+    private static void Unwrap(CommandNode node, ProtocolVersion protocolVersion, HashSet<CommandNode> visited)
+    {
+        if (!visited.Add(node))
+            return;
 
-            if (node is ArgumentCommandNode { Type: UnknownArgumentType argumentType } argument && TryUnwrap(argumentType, protocolVersion) is { } wrappedArgumentType)
-            {
-                argument.Type = wrappedArgumentType;
-                unwrapped++;
-            }
+        if (node is ArgumentCommandNode { Type: UnknownArgumentType argumentType } argument && TryUnwrap(argumentType, protocolVersion) is { } wrappedArgumentType)
+            argument.Type = wrappedArgumentType;
 
-            foreach (var child in node.Children)
-                pending.Push(child);
-
-            if (node.RedirectTarget is { } redirectTarget)
-                pending.Push(redirectTarget);
-        }
-
-        return unwrapped;
+        foreach (var child in node.Children)
+            Unwrap(child, protocolVersion, visited);
     }
 
     private static UnknownArgumentType? TryUnwrap(UnknownArgumentType argumentType, ProtocolVersion protocolVersion)

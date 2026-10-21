@@ -93,16 +93,15 @@ public class AuthenticationService(ILogger<AuthenticationService> logger, IEvent
     {
         // Forge handshakes with Plugin Message packets after Login Success, and sends Join Game only once the player has answered them
         using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var serverPlaying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var relay = RelayPlayerPluginMessagesAsync(link, serverPlaying.Task, relayCancellation.Token, serverCancellation, cancellationToken);
+        var relay = RelayPlayerPluginMessagesAsync(link, serverPlaying.Task, relayCancellation, cancellationToken);
 
         IMinecraftClientboundPacket? packet;
 
         try
         {
             // Packets the proxy handles itself, such as Keep Alives it answers, are canceled
-            while ((packet = await link.ReceiveCancellablePacketAsync<IMinecraftClientboundPacket>(serverCancellation.Token)) is not (JoinGamePacket or DisconnectPacket))
+            while ((packet = await link.ReceiveCancellablePacketAsync<IMinecraftClientboundPacket>(relayCancellation.Token)) is not (JoinGamePacket or DisconnectPacket))
             {
                 // The server reads the player's packets as play ones only from its first packet after Login Success
                 serverPlaying.TrySetResult();
@@ -153,7 +152,7 @@ public class AuthenticationService(ILogger<AuthenticationService> logger, IEvent
         return true;
     }
 
-    private async Task RelayPlayerPluginMessagesAsync(ILink link, Task serverPlaying, CancellationToken waitCancellationToken, CancellationTokenSource serverCancellation, CancellationToken cancellationToken)
+    private async Task RelayPlayerPluginMessagesAsync(ILink link, Task serverPlaying, CancellationTokenSource relayCancellation, CancellationToken cancellationToken)
     {
         var pluginMessageId = PacketIdDefinitions.ServerboundPlayPluginMessage.Last(mapping => mapping.ProtocolVersion <= link.Player.ProtocolVersion).Id;
 
@@ -178,20 +177,19 @@ public class AuthenticationService(ILogger<AuthenticationService> logger, IEvent
                 }
             }
         }
-        catch
+        finally
         {
-            // Without the player's answers the server never sends Join Game
-            await serverCancellation.CancelAsync();
-            throw;
+            // Without the player's answers the server never sends Join Game, so a relay that failed stops waiting for it
+            await relayCancellation.CancelAsync();
         }
 
         async ValueTask<INetworkMessage?> ReadPlayerMessageAsync()
         {
             try
             {
-                return await link.PlayerChannel.ReadMessageAsync(waitCancellationToken, cancellationToken);
+                return await link.PlayerChannel.ReadMessageAsync(relayCancellation.Token, cancellationToken);
             }
-            catch (OperationCanceledException) when (waitCancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (relayCancellation.IsCancellationRequested)
             {
                 return null;
             }

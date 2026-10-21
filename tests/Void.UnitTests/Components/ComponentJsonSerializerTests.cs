@@ -5,6 +5,7 @@ using Void.Minecraft.Buffers;
 using Void.Minecraft.Components.Text;
 using Void.Minecraft.Components.Text.Properties.Content;
 using Void.Minecraft.Components.Text.Serializers;
+using Void.Minecraft.Nbt.Tags;
 using Void.Minecraft.Network;
 using Void.Minecraft.Profiles;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
@@ -23,7 +24,10 @@ public class ComponentJsonSerializerTests
         var component = ComponentJsonSerializer.Deserialize(PlayerChat);
 
         var content = Assert.IsType<TranslatableContent>(component.Content);
-        Assert.Equal(["Player", "hello"], content.With!.Select(argument => argument.AsText));
+        var arguments = content.With!.ToArray();
+
+        Assert.Equal("Player", Assert.IsType<TextContent>(arguments[0].Content).Value);
+        Assert.Equal("hello", Assert.IsType<NbtString>(Assert.IsType<LiteralContent>(arguments[1].Content).Value).Value);
     }
 
     [Theory]

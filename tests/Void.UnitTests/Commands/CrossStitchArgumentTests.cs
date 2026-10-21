@@ -28,7 +28,7 @@ public class CrossStitchArgumentTests
         var protocolVersion = ProtocolVersion.MINECRAFT_1_21;
         var packet = Decode(Encode(Tree(new UnknownArgumentType(CrossStitchService.ModArgumentMapping, WrappedProperties(parserId, properties))), protocolVersion), protocolVersion);
 
-        Assert.Equal(1, CrossStitchService.Unwrap(packet.RootNode!, protocolVersion));
+        CrossStitchService.Unwrap(packet.RootNode!, protocolVersion);
 
         // The player gets exactly what the server would send on a direct connection: its parser ID and properties.
         var direct = Tree(new UnknownArgumentType(new ArgumentSerializerMapping($"unknown:{parserId}", protocolVersion, parserId), properties));
@@ -42,7 +42,7 @@ public class CrossStitchArgumentTests
         var wrapped = new UnknownArgumentType(CrossStitchService.ModArgumentMapping, WrappedProperties("examplemod:building", [1, 2, 3]));
         var packet = Decode(Encode(Tree(wrapped), protocolVersion), protocolVersion);
 
-        Assert.Equal(1, CrossStitchService.Unwrap(packet.RootNode!, protocolVersion));
+        CrossStitchService.Unwrap(packet.RootNode!, protocolVersion);
 
         var direct = Tree(new UnknownArgumentType(new ArgumentSerializerMapping("examplemod:building"), new byte[] { 1, 2, 3 }));
         Assert.Equal(Encode(direct, protocolVersion), Encode(packet, protocolVersion));
@@ -60,7 +60,7 @@ public class CrossStitchArgumentTests
             var tree = Encode(Tree(argumentType), protocolVersion);
             var packet = Decode(tree, protocolVersion);
 
-            Assert.Equal(0, CrossStitchService.Unwrap(packet.RootNode!, protocolVersion));
+            CrossStitchService.Unwrap(packet.RootNode!, protocolVersion);
             Assert.Equal(tree, Encode(packet, protocolVersion));
         }
     }
