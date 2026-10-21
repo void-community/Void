@@ -181,9 +181,12 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
 
     private async ValueTask<ConnectionResult> ConnectCoreAsync(IPlayer player, IServer server, bool anonymous = false, CancellationToken cancellationToken = default)
     {
+        // A failed attempt stops the player's link to their previous server, which a retry would then take for their first.
+        var firstConnection = player.Server is null;
+
         try
         {
-            return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+            return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection, anonymous, cancellationToken);
         }
         catch (StreamClosedException) when (player.Context.Channel is { IsAlive: true })
         {
@@ -192,7 +195,7 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
             logger.LogInformation("Server {Server} closed the connection while player {Player} was joining it, trying again", server, player);
         }
 
-        return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+        return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection, anonymous, cancellationToken);
     }
 
     // Either side can time out, as a player that never finishes its part of joining does.
