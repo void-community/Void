@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Nito.AsyncEx;
 using Void.Minecraft;
 
 namespace Void.IntegrationTests.Infrastructure.Modding;
@@ -15,17 +16,17 @@ internal static class MojangJavaVersionCatalog
     // Releases from before Mojang listed a Java version ran on Java 8.
     private const int DefaultJavaMajorVersion = 8;
     private static readonly Uri ManifestUri = new("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json");
-    private static readonly CachedLookup<IReadOnlyDictionary<string, Uri>> VersionUris = new(LoadVersionUrisAsync);
-    private static readonly ConcurrentDictionary<ReleaseVersion, CachedLookup<int>> JavaVersionLookups = new();
+    private static readonly AsyncLazy<IReadOnlyDictionary<string, Uri>> VersionUris = new(LoadVersionUrisAsync, AsyncLazyFlags.RetryOnFailure);
+    private static readonly ConcurrentDictionary<ReleaseVersion, AsyncLazy<int>> JavaVersionLookups = new();
 
     public static Task<int> FindJavaMajorVersionAsync(ReleaseVersion release, CancellationToken cancellationToken)
     {
-        return JavaVersionLookups.GetOrAdd(release, _ => new CachedLookup<int>(() => LoadJavaMajorVersionAsync(release))).GetAsync(cancellationToken);
+        return JavaVersionLookups.GetOrAdd(release, _ => new AsyncLazy<int>(() => LoadJavaMajorVersionAsync(release), AsyncLazyFlags.RetryOnFailure)).Task.WaitAsync(cancellationToken);
     }
 
     private static async Task<int> LoadJavaMajorVersionAsync(ReleaseVersion release)
     {
-        var versionUris = await VersionUris.GetAsync(CancellationToken.None);
+        var versionUris = await VersionUris;
 
         if (!versionUris.TryGetValue(release.ToString(), out var versionUri))
             throw new InvalidOperationException($"Mojang's version manifest has no Minecraft {release}");

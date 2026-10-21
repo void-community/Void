@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using Nito.AsyncEx;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.Minecraft;
 
@@ -17,11 +18,11 @@ internal static class NeoForgeBuildCatalog
     private static readonly ReleaseVersion LegacyRelease = new(Major: 1, Minor: 20, Patch: 1);
     private static readonly Uri MavenMetadataUri = new("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml");
     private static readonly Uri LegacyMavenMetadataUri = new("https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml");
-    private static readonly CachedLookup<IReadOnlyList<string>> Versions = new(LoadVersionsAsync);
+    private static readonly AsyncLazy<IReadOnlyList<string>> Versions = new(LoadVersionsAsync, AsyncLazyFlags.RetryOnFailure);
 
     public static async Task<IReadOnlyList<LoaderBuild>> FindBuildsAsync(ReleaseVersion release, CancellationToken cancellationToken)
     {
-        var builds = (await Versions.GetAsync(cancellationToken)).Where(version => FindRelease(version) == release).ToArray();
+        var builds = (await Versions.Task.WaitAsync(cancellationToken)).Where(version => FindRelease(version) == release).ToArray();
         var build = builds.Where(IsStable).MaxBy(BuildNumber) ?? builds.MaxBy(BuildNumber);
 
         // Servers install NeoForge for 1.20.1 by its build alone, such as 47.1.106.
@@ -30,7 +31,7 @@ internal static class NeoForgeBuildCatalog
 
     public static async Task<ReleaseVersion?> FindNewestReleaseAsync(CancellationToken cancellationToken)
     {
-        return (await Versions.GetAsync(cancellationToken)).Select(FindRelease).OfType<ReleaseVersion>().Max();
+        return (await Versions.Task.WaitAsync(cancellationToken)).Select(FindRelease).OfType<ReleaseVersion>().Max();
     }
 
     /// <summary>Returns the Minecraft release a build is for: 21.1.x is for 1.21.1, 21.0.x for 1.21, and 26.3.0.x for 26.3.</summary>

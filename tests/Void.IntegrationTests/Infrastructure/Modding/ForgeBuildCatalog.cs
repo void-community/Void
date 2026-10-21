@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using Nito.AsyncEx;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.Minecraft;
 
@@ -16,11 +17,11 @@ internal static class ForgeBuildCatalog
     private const string MavenBaseUri = "https://maven.minecraftforge.net/net/minecraftforge/forge";
     private static readonly Uri PromotionsUri = new("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json");
     private static readonly Uri MavenMetadataUri = new($"{MavenBaseUri}/maven-metadata.xml");
-    private static readonly CachedLookup<ForgeBuilds> Builds = new(LoadBuildsAsync);
+    private static readonly AsyncLazy<ForgeBuilds> Builds = new(LoadBuildsAsync, AsyncLazyFlags.RetryOnFailure);
 
     public static async Task<IReadOnlyList<LoaderBuild>> FindBuildsAsync(ReleaseVersion release, CancellationToken cancellationToken)
     {
-        var builds = await Builds.GetAsync(cancellationToken);
+        var builds = await Builds.Task.WaitAsync(cancellationToken);
         var promotedBuilds = new[] { $"{release}-latest", $"{release}-recommended" }
             .Select(promotion => builds.Promotions.GetValueOrDefault(promotion))
             .OfType<string>()
@@ -31,7 +32,7 @@ internal static class ForgeBuildCatalog
 
     public static async Task<ReleaseVersion?> FindNewestReleaseAsync(CancellationToken cancellationToken)
     {
-        var builds = await Builds.GetAsync(cancellationToken);
+        var builds = await Builds.Task.WaitAsync(cancellationToken);
 
         return builds.Promotions.Keys
             .Select(promotion => ReleaseVersion.TryParse(promotion[..promotion.LastIndexOf('-')], out var release) ? release : null)

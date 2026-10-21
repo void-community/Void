@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Nito.AsyncEx;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.Minecraft;
 
@@ -28,7 +29,7 @@ internal static class ModrinthCatalog
     private static readonly IReadOnlySet<string> UnusableProjects = new HashSet<string> { "rZrAKGe1" };
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-    private static readonly ConcurrentDictionary<string, CachedLookup<ModrinthVersion[]>> VersionLookups = new();
+    private static readonly ConcurrentDictionary<string, AsyncLazy<ModrinthVersion[]>> VersionLookups = new();
 
     /// <returns>Builds of the content mods for the release, each with the mods it requires, in the order to try them.</returns>
     public static async Task<IReadOnlyList<ContentModBuild>> FindContentModsAsync(ModLoader loader, ReleaseVersion release, CancellationToken cancellationToken)
@@ -124,9 +125,9 @@ internal static class ModrinthCatalog
             query += $"&game_versions={Uri.EscapeDataString($"[\"{release}\"]")}";
 
         var uri = new Uri($"{ApiBaseUri}/project/{Uri.EscapeDataString(project)}/version?{query}");
-        var lookup = VersionLookups.GetOrAdd(uri.AbsoluteUri, _ => new CachedLookup<ModrinthVersion[]>(() => ReadAsync<ModrinthVersion[]>(uri)));
+        var lookup = VersionLookups.GetOrAdd(uri.AbsoluteUri, _ => new AsyncLazy<ModrinthVersion[]>(() => ReadAsync<ModrinthVersion[]>(uri), AsyncLazyFlags.RetryOnFailure));
 
-        return lookup.GetAsync(cancellationToken);
+        return lookup.Task.WaitAsync(cancellationToken);
     }
 
     private static async Task<ModrinthVersion?> GetVersionAsync(string versionId, CancellationToken cancellationToken)

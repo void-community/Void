@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using Nito.AsyncEx;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 
 namespace Void.IntegrationTests.Infrastructure.Modding;
@@ -12,11 +13,11 @@ namespace Void.IntegrationTests.Infrastructure.Modding;
 internal static class ModFileCache
 {
     private static readonly string CacheDirectory = Path.Combine(Path.GetTempPath(), "Void.IntegrationTests", "mods");
-    private static readonly ConcurrentDictionary<string, CachedLookup<ModFile>> Downloads = new();
+    private static readonly ConcurrentDictionary<string, AsyncLazy<ModFile>> Downloads = new();
 
     public static Task<ModFile> DownloadAsync(ModDownload download, CancellationToken cancellationToken)
     {
-        return Downloads.GetOrAdd(download.Sha512, _ => new CachedLookup<ModFile>(() => DownloadCoreAsync(download))).GetAsync(cancellationToken);
+        return Downloads.GetOrAdd(download.Sha512, _ => new AsyncLazy<ModFile>(() => DownloadCoreAsync(download), AsyncLazyFlags.RetryOnFailure)).Task.WaitAsync(cancellationToken);
     }
 
     private static async Task<ModFile> DownloadCoreAsync(ModDownload download)

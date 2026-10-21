@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Nito.AsyncEx;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.Minecraft;
 using Void.Minecraft.Network;
@@ -19,13 +20,13 @@ internal static class ModdedGameResolver
     // A mod or loader build can declare nothing wrong and still crash its server, so several are kept to try in turn.
     private const int MaximumCandidates = 8;
 
-    private static readonly ConcurrentDictionary<(ModLoader Loader, ProtocolVersion ProtocolVersion), CachedLookup<ModdedGameResolution>> Resolutions = new();
+    private static readonly ConcurrentDictionary<(ModLoader Loader, ProtocolVersion ProtocolVersion), AsyncLazy<ModdedGameResolution>> Resolutions = new();
 
     public static async Task<ModdedGameResolution> ResolveAsync(ModLoader loader, ProtocolVersion protocolVersion, CancellationToken cancellationToken)
     {
-        var lookup = Resolutions.GetOrAdd((loader, protocolVersion), key => new CachedLookup<ModdedGameResolution>(() => ResolveCoreAsync(key.Loader, key.ProtocolVersion)));
+        var lookup = Resolutions.GetOrAdd((loader, protocolVersion), key => new AsyncLazy<ModdedGameResolution>(() => ResolveCoreAsync(key.Loader, key.ProtocolVersion), AsyncLazyFlags.RetryOnFailure));
 
-        return await lookup.GetAsync(cancellationToken);
+        return await lookup.Task.WaitAsync(cancellationToken);
     }
 
     private static async Task<ModdedGameResolution> ResolveCoreAsync(ModLoader loader, ProtocolVersion protocolVersion)
