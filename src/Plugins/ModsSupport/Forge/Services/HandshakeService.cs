@@ -6,7 +6,6 @@ using Void.Minecraft.Events;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Network;
 using Void.Minecraft.Network.Definitions;
-using Void.Minecraft.Network.Messages.Binary;
 using Void.Minecraft.Network.Messages.Packets;
 using Void.Minecraft.Players.Extensions;
 using Void.Proxy.Api.Events;
@@ -15,15 +14,13 @@ using Void.Proxy.Api.Events.Player;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Contexts;
-using Void.Proxy.Api.Plugins;
-using Void.Proxy.Api.Plugins.Extensions;
 using Void.Proxy.Plugins.Common.Events;
 using Void.Proxy.Plugins.Common.Extensions;
 using Void.Proxy.Plugins.ModsSupport.Forge.Packets;
 
 namespace Void.Proxy.Plugins.ModsSupport.Forge.Services;
 
-public class HandshakeService(IPlayerContext context, IPluginService plugins, Plugin plugin) : IEventListener
+public class HandshakeService(IPlayerContext context) : IEventListener
 {
     private const string LegacyHandshakeChannel = "FML|HS";
     private const byte LegacyServerHelloDiscriminator = 0;
@@ -96,12 +93,10 @@ public class HandshakeService(IPlayerContext context, IPluginService plugins, Pl
             var channel = buffer.ReadString();
             var length = buffer.ReadVarInt();
             var id = buffer.ReadVarInt();
-            var data = buffer.Read(length - id.VarIntSize());
+            buffer.Read(length - id.VarIntSize());
 
             if (buffer.Remaining > 0)
                 throw new InvalidOperationException($"Extra data remaining after parsing {loginWrapperChannel} message.");
-
-            context.Logger.LogTrace("Received Login Wrapper request message: Channel={Channel}, Id={Id}, Data={Data}", channel, id, Convert.ToHexString(data));
 
             // Forge ignores first Plugin Message Request and does not respond to it. Why though? (tested on 1.20)
             var ignored = channel is handshakeChannel && id is 5;
@@ -142,7 +137,6 @@ public class HandshakeService(IPlayerContext context, IPluginService plugins, Pl
                 @event.Result = true;
 
                 mods.FmlHandshakeResponses[id] = moddedLoginPluginResponsePacket.Data;
-                context.Logger.LogTrace("Received Login Wrapper response message: Channel={Channel}, Id={Id}, Successful={Successful}, Response={Data}", channel, id, moddedLoginPluginResponsePacket.Successful, Convert.ToHexString(moddedLoginPluginResponsePacket.Data));
             }
         }
     }
@@ -155,39 +149,13 @@ public class HandshakeService(IPlayerContext context, IPluginService plugins, Pl
 
         switch (@event.Message)
         {
-            case ModdedHandshakePacket handshakePacket:
-                if (!handshakePacket.IsForge)
-                    break;
-
-                var markers = handshakePacket.Markers;
-
-                if (markers.Length > 1)
-                    context.Logger.LogDebug("Has extra handshake markers {Markers}", string.Join(", ", markers));
-
+            case ModdedHandshakePacket { IsForge: true } handshakePacket:
                 _playerMods[@event.Player] = new PlayerCachedMods { HandshakePacket = handshakePacket };
                 break;
 
-            case PluginMessagePacket pluginMessagePacket:
-                context.Logger.LogTrace("{Direction} Plugin Message {Channel} => {Data}", @event.Direction, pluginMessagePacket.Channel, Convert.ToHexString(pluginMessagePacket.Data.Span));
-                break;
-
-            case ModdedLoginPluginRequestPacket loginPluginRequestPacket:
-                context.Logger.LogTrace("{Direction} Login Plugin Request {MessageId} => {Data}", @event.Direction, loginPluginRequestPacket.MessageId, Convert.ToHexString(loginPluginRequestPacket.Data));
-                break;
-
             case ModdedLoginPluginResponsePacket loginPluginResponsePacket:
-                context.Logger.LogTrace("{Direction} Login Plugin Response {MessageId} => {Data}", @event.Direction, loginPluginResponsePacket.MessageId, Convert.ToHexString(loginPluginResponsePacket.Data));
-
                 if (_playerMods.TryGetValue(@event.Player, out var mods) && mods is { PendingLoginPluginResponse.Task.IsCompleted: false })
                     mods.PendingLoginPluginResponse.SetResult(loginPluginResponsePacket);
-                break;
-
-            case IMinecraftBinaryMessage minecraftBinaryMessage:
-                break;
-
-            default:
-                if (@event.Player.Phase is not Phase.Play && plugins.TryGetPluginFromType(@event.Message.GetType(), out var messagePlugin) && messagePlugin == plugin)
-                    context.Logger.LogDebug("{Direction} {MessageType}", @event.Direction, @event.Message.GetType().FullName);
                 break;
         }
     }
@@ -209,25 +177,10 @@ public class HandshakeService(IPlayerContext context, IPluginService plugins, Pl
                     PacketIdDefinitions.ServerboundHandshake);
                 break;
 
-            case { Phase: Phase.Login }:
-                @event.Player.RegisterPacket<ModdedLoginPluginResponsePacket>(
-                    @event.Channel,
-                    @event.Side switch
-                    {
-                        Side.Client => Operation.Read,
-                        Side.Server => Operation.Write,
-                        _ => throw new InvalidOperationException($"Invalid side changed phase: {@event.Side}")
-                    },
-                    PacketIdDefinitions.ServerboundLoginPluginResponse);
-                @event.Player.RegisterPacket<ModdedLoginPluginRequestPacket>(
-                    @event.Channel,
-                    @event.Side switch
-                    {
-                        Side.Client => Operation.Write,
-                        Side.Server => Operation.Read,
-                        _ => throw new InvalidOperationException($"Invalid side changed phase: {@event.Side}")
-                    },
-                    PacketIdDefinitions.ClientboundLoginPluginRequest);
+            // Requests from the server are relayed to the player, whose answers complete them; the server's side of both goes through authentication.
+            case { Phase: Phase.Login, Side: Side.Client }:
+                @event.Player.RegisterPacket<ModdedLoginPluginResponsePacket>(@event.Channel, Operation.Read, PacketIdDefinitions.ServerboundLoginPluginResponse);
+                @event.Player.RegisterPacket<ModdedLoginPluginRequestPacket>(@event.Channel, Operation.Write, PacketIdDefinitions.ClientboundLoginPluginRequest);
                 break;
             case { Phase: Phase.Play }:
                 @event.Player.RegisterPacket<PluginMessagePacket>(
