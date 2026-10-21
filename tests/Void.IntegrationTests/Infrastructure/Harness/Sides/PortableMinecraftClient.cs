@@ -291,12 +291,11 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 "--jvm-arg=-Djava.awt.headless=false"
             };
 
-            // A NeoForge build names its Minecraft version, while Forge starts take the Minecraft version and the build.
+            // The client starts a loader build as the servers report it, with its Minecraft version.
             using var response = Setup.Loader switch
             {
                 null => await HttpClient.PostAsJsonAsync("/api/game/start/vanilla", new { version, memoryMb, arguments }, cancellationToken),
-                { ModLoader: ModLoader.Forge } forge => await HttpClient.PostAsJsonAsync("/api/game/start/forge", new { version, loaderVersion = forge.ClientLoaderVersion, memoryMb, arguments }, cancellationToken),
-                { } neoForge => await HttpClient.PostAsJsonAsync("/api/game/start/neoforge", new { loaderVersion = neoForge.ClientLoaderVersion, memoryMb, arguments }, cancellationToken)
+                { } loader => await HttpClient.PostAsJsonAsync($"/api/game/start/{loader.ModLoader.ToString().ToLowerInvariant()}", new { version, loaderVersion = loader.Version, memoryMb, arguments }, cancellationToken)
             };
             await EnsureSuccessAsync(response, $"Starting {Setup}", cancellationToken);
             var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting {Setup} launch", cancellationToken);
@@ -311,15 +310,15 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             await Container.RunCommandAsync(["sh", "-c", $"rm -rf {ModsDirectory} && mkdir -p {ModsDirectory}"], cancellationToken);
 
             foreach (var mod in Setup.Mods)
-                await Container.CopyAsync(new FileInfo(mod.LocalPath), ModsDirectory, ct: cancellationToken);
+                await Container.CopyAsync(mod.Content, $"{ModsDirectory}{mod.FileName}", ct: cancellationToken);
 
             Directory.CreateDirectory(_workingDirectory);
             var setupJson = JsonSerializer.Serialize(new
             {
                 minecraftRelease = Setup.MinecraftRelease.ToString(),
                 loader = Setup.Loader?.ModLoader.ToString(),
-                loaderVersion = Setup.Loader?.ClientLoaderVersion,
-                mods = Setup.Mods.Select(mod => mod.Source)
+                loaderVersion = Setup.Loader?.Version,
+                mods = Setup.Mods.Select(mod => mod.FileName)
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
             await File.WriteAllTextAsync(Path.Combine(_workingDirectory, "game-setup.json"), setupJson, cancellationToken);
             await LogAsync($"Installed mods {string.Join(", ", Setup.Mods.Select(mod => mod.FileName))}", cancellationToken);

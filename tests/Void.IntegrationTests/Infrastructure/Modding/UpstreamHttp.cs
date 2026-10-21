@@ -6,12 +6,12 @@ using System.Threading.Tasks;
 
 namespace Void.IntegrationTests.Infrastructure.Modding;
 
-/// <summary>Reads the services that publish Minecraft, its mod loaders and mods, retrying failures that are likely to pass.</summary>
+/// <summary>Reads the services that publish Minecraft, retrying failures that are likely to pass.</summary>
 internal static class UpstreamHttp
 {
     private const int MaximumAttempts = 3;
 
-    // Modrinth asks every client to identify itself.
+    // Services ask their clients to identify themselves.
     private static readonly HttpClient HttpClient = new()
     {
         DefaultRequestHeaders = { { "User-Agent", "void-community/Void integration-tests" } },
