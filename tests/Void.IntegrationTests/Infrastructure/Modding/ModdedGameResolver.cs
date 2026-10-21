@@ -21,22 +21,11 @@ internal static class ModdedGameResolver
 
     private static readonly ConcurrentDictionary<(ModLoader Loader, ProtocolVersion ProtocolVersion), CachedLookup<ModdedGameResolution>> Resolutions = new();
 
-    // Setups whose servers started, so later tests of the protocol version don't try mods that crashed again.
-    private static readonly ConcurrentDictionary<(ModLoader Loader, ProtocolVersion ProtocolVersion), GameSetup> StartedSetups = new();
-
     public static async Task<ModdedGameResolution> ResolveAsync(ModLoader loader, ProtocolVersion protocolVersion, CancellationToken cancellationToken)
     {
-        if (StartedSetups.TryGetValue((loader, protocolVersion), out var startedSetup))
-            return ModdedGameResolution.Runnable([startedSetup]);
-
         var lookup = Resolutions.GetOrAdd((loader, protocolVersion), key => new CachedLookup<ModdedGameResolution>(() => ResolveCoreAsync(key.Loader, key.ProtocolVersion)));
 
         return await lookup.GetAsync(cancellationToken);
-    }
-
-    public static void RememberStarted(ModLoader loader, ProtocolVersion protocolVersion, GameSetup setup)
-    {
-        StartedSetups[(loader, protocolVersion)] = setup;
     }
 
     private static async Task<ModdedGameResolution> ResolveCoreAsync(ModLoader loader, ProtocolVersion protocolVersion)

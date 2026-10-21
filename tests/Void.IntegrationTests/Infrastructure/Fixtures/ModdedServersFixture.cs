@@ -43,7 +43,6 @@ public abstract class ModdedServersFixture<TProtocolVersion>(ModLoader loader, i
             try
             {
                 _servers = await StartSetupAsync(setup, Timeouts.SetupTimeoutToken);
-                ModdedGameResolver.RememberStarted(loader, protocolVersion, setup);
 
                 return new MinecraftServers(_servers, setup);
             }
