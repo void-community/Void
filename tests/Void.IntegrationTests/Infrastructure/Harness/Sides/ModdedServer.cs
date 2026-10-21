@@ -42,7 +42,9 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithEnvironment("SPAWN_ANIMALS", "FALSE")
             .WithEnvironment("SPAWN_MONSTERS", "FALSE")
             .WithEnvironment("SPAWN_NPCS", "FALSE")
-            .WithEnvironment("VIEW_DISTANCE", "2")
+            // New players spawn up to 10 blocks from the spawn point each way, and servers before 1.14 show players only within one chunk less
+            // than their view distance, so two players see each other wherever they spawn only from a view distance of 3.
+            .WithEnvironment("VIEW_DISTANCE", "3")
             .WithEnvironment("SIMULATION_DISTANCE", "2")
             .WithEnvironment("ONLINE_MODE", "FALSE")
             .WithWaitStrategy(Wait.ForUnixContainer()
