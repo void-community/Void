@@ -14,17 +14,21 @@ using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedPlayerTestBase(IMinecraftServersFixture serversFixture, VoidFixture voidFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<VoidFixture>, IClassFixture<PortableMinecraftClientPairFixture>
+public abstract class ProxiedPlayerTestBase(IMinecraftServersFixture serversFixture, PortableMinecraftClientPairFixture clientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientPairFixture>
 {
     private const double CoordinateTolerance = 1.0 / 32.0;
 
-    protected async Task RunAsync(ProtocolVersion protocolVersion)
+    protected async Task RunAsync()
     {
+        var protocolVersion = serversFixture.ProtocolVersion;
+
         if (!clientFixture.Client1.SupportedVersions.Contains(protocolVersion) || !clientFixture.Client2.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the clients, skipping test.");
 
-        var servers = await serversFixture.PrepareServersAsync(protocolVersion, serverCount: 1, Timeouts.SetupTimeoutToken);
-        var voidProxy = await voidFixture.StartProxyAsync(servers, Timeouts.SetupTimeoutToken);
+        serversFixture.SkipIfUnavailable();
+
+        var servers = serversFixture.Servers;
+        var voidProxy = serversFixture.VoidProxy;
 
         await LoggedExecutorAsync(() => RunAttemptAsync(protocolVersion, servers, voidProxy), clientFixture.Client1, clientFixture.Client2, voidProxy, servers.Server1);
     }

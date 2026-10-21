@@ -6,22 +6,25 @@ using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Extensions;
 using Void.IntegrationTests.Infrastructure.Fixtures;
 using Void.IntegrationTests.Infrastructure.Harness;
-using Void.Minecraft.Network;
 using Xunit;
 
 namespace Void.IntegrationTests.Connections;
 
-public abstract class ProxiedConnectionTestBase(IMinecraftServersFixture serversFixture, VoidFixture voidFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<VoidFixture>, IClassFixture<PortableMinecraftClientFixture>
+public abstract class ProxiedConnectionTestBase(IMinecraftServersFixture serversFixture, PortableMinecraftClientFixture portableMinecraftClientFixture) : IntegrationUnitBase, IClassFixture<PortableMinecraftClientFixture>
 {
     private const string ExpectedText = "hello proxied void!";
 
-    protected async Task RunAsync(ProtocolVersion protocolVersion)
+    protected async Task RunAsync()
     {
+        var protocolVersion = serversFixture.ProtocolVersion;
+
         if (!portableMinecraftClientFixture.Api.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the client, skipping test.");
 
-        var servers = await serversFixture.PrepareServersAsync(protocolVersion, serverCount: 1, Timeouts.SetupTimeoutToken);
-        var voidProxy = await voidFixture.StartProxyAsync(servers, Timeouts.SetupTimeoutToken);
+        serversFixture.SkipIfUnavailable();
+
+        var servers = serversFixture.Servers;
+        var voidProxy = serversFixture.VoidProxy;
         var proxyEndPoint = new IPEndPoint(IPAddress.Loopback, voidProxy.Port);
         var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
 

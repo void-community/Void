@@ -3,15 +3,16 @@
 namespace Void.IntegrationTests.Generators.Sources;
 
 [Generator(LanguageNames.CSharp)]
-public sealed class ProxiedConnectionReleaseGroupGenerator : ReleaseGroupGeneratorBase
+public sealed class DirectConnectionTestsGenerator : ConnectionTestsGeneratorBase
 {
     public override void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var generatedSourceProvider = context.CompilationProvider.Select(static (_, cancellationToken) => GenerateFamilySource(
-            familyName: "ProxiedConnectionTests",
-            baseClassName: "ProxiedConnectionTestBase",
-            otherFixtures: [("VoidFixture", "voidFixture"), ("PortableMinecraftClientFixture", "portableMinecraftClientFixture")],
-            methodNameFormat: "PortableMinecraftClientConnectsTo{0}ServerThroughProxy_WithProtocolVersion",
+            familyName: "DirectConnectionTests",
+            baseClassName: "DirectConnectionTestBase",
+            clientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
+            serverPair: false,
+            methodNameFormat: "PortableMinecraftClientConnectsTo{0}Server",
             cancellationToken
         ));
 
@@ -20,7 +21,7 @@ public sealed class ProxiedConnectionReleaseGroupGenerator : ReleaseGroupGenerat
             if (generatedSource.Length is 0)
                 return;
 
-            sourceProductionContext.AddSource("ProxiedConnectionTests.g.cs", generatedSource);
+            sourceProductionContext.AddSource("DirectConnectionTests.g.cs", generatedSource);
         });
     }
 }

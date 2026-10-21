@@ -3,15 +3,16 @@ using Microsoft.CodeAnalysis;
 namespace Void.IntegrationTests.Generators.Sources;
 
 [Generator(LanguageNames.CSharp)]
-public sealed class ProxiedPlayerReleaseGroupGenerator : ReleaseGroupGeneratorBase
+public sealed class ProxiedPlayerTestsGenerator : ConnectionTestsGeneratorBase
 {
     public override void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var generatedSourceProvider = context.CompilationProvider.Select(static (_, cancellationToken) => GenerateFamilySource(
             familyName: "ProxiedPlayerTests",
             baseClassName: "global::Void.IntegrationTests.Connections.ProxiedPlayerTestBase",
-            otherFixtures: [("VoidFixture", "voidFixture"), ("PortableMinecraftClientPairFixture", "clientFixture")],
-            methodNameFormat: "PortableMinecraftClientsExposeReciprocalCoordinates_WithProtocolVersion",
+            clientFixture: ("PortableMinecraftClientPairFixture", "clientFixture"),
+            serverPair: false,
+            methodNameFormat: "PortableMinecraftClientsExposeReciprocalCoordinates",
             cancellationToken
         ));
 

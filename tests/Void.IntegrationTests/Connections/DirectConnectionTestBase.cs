@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Extensions;
 using Void.IntegrationTests.Infrastructure.Fixtures;
 using Void.IntegrationTests.Infrastructure.Harness;
-using Void.Minecraft.Network;
 using Xunit;
 
 namespace Void.IntegrationTests.Connections;
@@ -15,12 +14,16 @@ public abstract class DirectConnectionTestBase(IMinecraftServersFixture serversF
 {
     private const string ExpectedText = "hello void!";
 
-    protected async Task RunAsync(ProtocolVersion protocolVersion)
+    protected async Task RunAsync()
     {
+        var protocolVersion = serversFixture.ProtocolVersion;
+
         if (!portableMinecraftClientFixture.Api.SupportedVersions.Contains(protocolVersion))
             Assert.Skip($"Protocol version {protocolVersion} is not supported by the client, skipping test.");
 
-        var servers = await serversFixture.PrepareServersAsync(protocolVersion, serverCount: 1, Timeouts.SetupTimeoutToken);
+        serversFixture.SkipIfUnavailable();
+
+        var servers = serversFixture.Servers;
         var serverEndPoint = new IPEndPoint(IPAddress.Loopback, servers.Server1.Port);
         var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
 

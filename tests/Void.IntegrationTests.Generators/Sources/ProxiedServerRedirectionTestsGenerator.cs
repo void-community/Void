@@ -3,15 +3,16 @@
 namespace Void.IntegrationTests.Generators.Sources;
 
 [Generator(LanguageNames.CSharp)]
-public sealed class DirectConnectionReleaseGroupGenerator : ReleaseGroupGeneratorBase
+public sealed class ProxiedServerRedirectionTestsGenerator : ConnectionTestsGeneratorBase
 {
     public override void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var generatedSourceProvider = context.CompilationProvider.Select(static (_, cancellationToken) => GenerateFamilySource(
-            familyName: "DirectConnectionTests",
-            baseClassName: "DirectConnectionTestBase",
-            otherFixtures: [("PortableMinecraftClientFixture", "portableMinecraftClientFixture")],
-            methodNameFormat: "PortableMinecraftClientConnectsTo{0}Server_WithProtocolVersion",
+            familyName: "ProxiedServerRedirectionTests",
+            baseClassName: "ProxiedServerRedirectionTestBase",
+            clientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
+            serverPair: true,
+            methodNameFormat: "PortableMinecraftClientMovesBetween{0}ServersThroughProxy",
             cancellationToken
         ));
 
@@ -20,7 +21,7 @@ public sealed class DirectConnectionReleaseGroupGenerator : ReleaseGroupGenerato
             if (generatedSource.Length is 0)
                 return;
 
-            sourceProductionContext.AddSource("DirectConnectionTests.g.cs", generatedSource);
+            sourceProductionContext.AddSource("ProxiedServerRedirectionTests.g.cs", generatedSource);
         });
     }
 }

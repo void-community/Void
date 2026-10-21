@@ -3,15 +3,16 @@
 namespace Void.IntegrationTests.Generators.Sources;
 
 [Generator(LanguageNames.CSharp)]
-public sealed class ProxiedServerRedirectionReleaseGroupGenerator : ReleaseGroupGeneratorBase
+public sealed class ProxiedConnectionTestsGenerator : ConnectionTestsGeneratorBase
 {
     public override void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var generatedSourceProvider = context.CompilationProvider.Select(static (_, cancellationToken) => GenerateFamilySource(
-            familyName: "ProxiedServerRedirectionTests",
-            baseClassName: "ProxiedServerRedirectionTestBase",
-            otherFixtures: [("VoidFixture", "voidFixture"), ("PortableMinecraftClientFixture", "portableMinecraftClientFixture")],
-            methodNameFormat: "PortableMinecraftClientMovesBetween{0}ServersThroughProxy_WithProtocolVersion",
+            familyName: "ProxiedConnectionTests",
+            baseClassName: "ProxiedConnectionTestBase",
+            clientFixture: ("PortableMinecraftClientFixture", "portableMinecraftClientFixture"),
+            serverPair: false,
+            methodNameFormat: "PortableMinecraftClientConnectsTo{0}ServerThroughProxy",
             cancellationToken
         ));
 
@@ -20,7 +21,7 @@ public sealed class ProxiedServerRedirectionReleaseGroupGenerator : ReleaseGroup
             if (generatedSource.Length is 0)
                 return;
 
-            sourceProductionContext.AddSource("ProxiedServerRedirectionTests.g.cs", generatedSource);
+            sourceProductionContext.AddSource("ProxiedConnectionTests.g.cs", generatedSource);
         });
     }
 }
