@@ -1,7 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
-using Void.Minecraft.Buffers;
-using Void.Minecraft.Buffers.Extensions;
 using Void.Minecraft.Events;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Network;
@@ -80,25 +78,16 @@ public class HandshakeService(IPlayerContext context) : IEventListener
     [Subscribe]
     public async ValueTask OnLoginPluginMessageEvent(LoginPluginMessageEvent @event, CancellationToken cancellationToken)
     {
-        const string loginWrapperChannel = "fml:loginwrapper";
         const string handshakeChannel = "fml:handshake";
 
         if (!_playerMods.TryGetValue(@event.Player, out var mods))
             return;
 
-        if (@event is { Channel: loginWrapperChannel })
+        if (@event is { Channel: LoginWrapperMessage.WrapperChannel })
         {
-            var buffer = new BufferSpan(@event.Data);
+            var (channel, id) = LoginWrapperMessage.Read(@event.Data);
 
-            var channel = buffer.ReadString();
-            var length = buffer.ReadVarInt();
-            var id = buffer.ReadVarInt();
-            buffer.Read(length - id.VarIntSize());
-
-            if (buffer.Remaining > 0)
-                throw new InvalidOperationException($"Extra data remaining after parsing {loginWrapperChannel} message.");
-
-            // Forge ignores first Plugin Message Request and does not respond to it. Why though? (tested on 1.20)
+            // Forge and NeoForge register their mod data message without a response, so clients never answer it
             var ignored = channel is handshakeChannel && id is 5;
 
             if (@event.Player.Phase is Phase.Play)
