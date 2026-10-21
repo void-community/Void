@@ -147,17 +147,79 @@ jobs:
             exit 1
           fi
 
-          for (( current_shard = 0; current_shard < total; current_shard++ )); do
-            : > "$assignment_dir/shard-$current_shard.txt"
-          done
+          # A collection starts its servers, proxy and games once for all of its tests, so its tests share a shard. A connection test
+          # class such as ForgeProxiedPlayerTests_1_12_2 belongs to its server type and protocol version's collection, and any other
+          # class is a collection of its own. Weights are a collection's expected minutes times ten; NeoForge has no build before
+          # Minecraft 1.20.1, so its older collections only skip.
+          paper_weight=30
+          forge_weight=35
+          neoforge_weight=40
+          neoforge_skipped_weight=5
+          other_weight=10
+
+          collections_file="$assignment_dir/collections.tsv"
+          groups_file="$assignment_dir/groups.tsv"
+          declare -a shard_loads shard_collections
+          declare -A collection_shards
 
           while IFS= read -r test_name; do
-            checksum=$(printf '%s' "$test_name" | cksum | awk '{ print $1 }')
-            assigned_shard=$(( checksum % total ))
+            test_class=${test_name%.*}
+            test_class=${test_class##*.}
+
+            if [[ $test_class =~ ^(Paper|NeoForge|Forge)[A-Za-z]+Tests_([0-9]+(_[0-9]+)*)$ ]]; then
+              server_type=${BASH_REMATCH[1]}
+              version=${BASH_REMATCH[2]}
+              collection="${server_type}_${version}"
+              IFS=_ read -r major minor _ <<< "$version"
+
+              case "$server_type" in
+                Paper) weight=$paper_weight ;;
+                Forge) weight=$forge_weight ;;
+                NeoForge)
+                  if [ "$major" -eq 1 ] && [ "${minor:-0}" -lt 20 ]; then
+                    weight=$neoforge_skipped_weight
+                  else
+                    weight=$neoforge_weight
+                  fi
+                  ;;
+              esac
+            else
+              collection=$test_class
+              weight=$other_weight
+            fi
+
+            printf '%s\t%s\t%s\n' "$weight" "$collection" "$test_name" >> "$collections_file"
+          done < "$tests_file"
+
+          # Each collection, heaviest first, goes to the least loaded shard, so every job computes the same assignment.
+          cut -f1,2 "$collections_file" | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2 -u > "$groups_file"
+
+          for (( current_shard = 0; current_shard < total; current_shard++ )); do
+            : > "$assignment_dir/shard-$current_shard.txt"
+            shard_loads[current_shard]=0
+            shard_collections[current_shard]=""
+          done
+
+          while IFS=$'\t' read -r weight collection; do
+            least_loaded_shard=0
+
+            for (( current_shard = 1; current_shard < total; current_shard++ )); do
+              if [ "${shard_loads[current_shard]}" -lt "${shard_loads[least_loaded_shard]}" ]; then
+                least_loaded_shard=$current_shard
+              fi
+            done
+
+            collection_shards[$collection]=$least_loaded_shard
+            shard_loads[least_loaded_shard]=$(( shard_loads[least_loaded_shard] + weight ))
+            shard_collections[least_loaded_shard]="${shard_collections[least_loaded_shard]} $collection"
+          done < "$groups_file"
+
+          while IFS=$'\t' read -r _ collection test_name; do
+            assigned_shard=${collection_shards[$collection]}
 
             printf '%s\t%s\n' "$assigned_shard" "$test_name" >> "$assignments_file"
             printf '%s\n' "$test_name" >> "$assignment_dir/shard-$assigned_shard.txt"
-          done < "$tests_file"
+          done < "$collections_file"
 
           assigned_tests=$(wc -l < "$assignments_file" | tr -d ' ')
           unique_assigned_tests=$(cut -f2- "$assignments_file" | LC_ALL=C sort -u | wc -l | tr -d ' ')
@@ -176,7 +238,7 @@ jobs:
 
           for (( current_shard = 0; current_shard < total; current_shard++ )); do
             shard_tests=$(wc -l < "$assignment_dir/shard-$current_shard.txt" | tr -d ' ')
-            echo "Shard $current_shard/$total: $shard_tests tests"
+            echo "Shard $current_shard/$total: $shard_tests tests, load ${shard_loads[current_shard]}:${shard_collections[current_shard]}"
           done
 
           current_shard_file="$assignment_dir/shard-$shard.txt"
@@ -195,6 +257,9 @@ jobs:
 
       - name: Run integration shard
         if: ${{ matrix.test-kind == 'integration' && env.HAS_INTEGRATION_TESTS == 'true' }}
+        env:
+          # Clients play the image pulled above, instead of pulling it again for every client.
+          VOID_CLIENT_IMAGE: ghcr.io/void-community/portable-minecraft-client:offline
         run: dotnet test tests/Void.IntegrationTests --configuration Release --filter "$TEST_FILTER" --output Detailed
 
       - name: Skip empty integration shard
