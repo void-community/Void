@@ -70,6 +70,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private const string PortableMinecraftLegacyJvmExecutablePath = "/usr/lib/jvm/zulu-8/bin/java";
     private const string PortableMinecraftLegacyJvmPath = "/usr/local/bin/java-arm64-lwjgl2";
     private const string PortableMinecraftOptionsPath = "/opt/portableminecraftclient/options.txt";
+    private const string PortableMinecraftPath = "/usr/local/bin/portablemc";
     // An image built on the client puts scripts here to prepare games other than modpacks for their exact Minecraft version.
     private const string PortableMinecraftPreparationDirectory = "/etc/portableminecraftclient/prepare.d";
     private const int ProcessStopTimeoutMilliseconds = 10000;
@@ -170,7 +171,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         return await LaunchGameAsync(minecraftDirectory, modpackDirectory, $"mojang:{installation.Version}", armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public Task<RunningGame> LaunchModLoaderAsync(
+    public async Task<RunningGame> LaunchModLoaderAsync(
         string loader,
         string version,
         string? loaderVersion,
@@ -179,7 +180,12 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         CancellationToken cancellationToken
     )
     {
-        return LaunchPortableAsync(CreatePortableMinecraftVersion(loader, version, loaderVersion), version, arguments, memoryMb, cancellationToken);
+        // A Forge build named as servers name it is found among the names PortableMC installs Forge builds as.
+        string portableMinecraftVersion = loader is "forge" && !string.IsNullOrEmpty(loaderVersion)
+            ? $"forge::{await PrepareMinecraftAsync(() => ResolvePortableMinecraftLoaderVersionAsync(loader, version, loaderVersion, cancellationToken), cancellationToken).ConfigureAwait(continueOnCapturedContext: false)}"
+            : CreatePortableMinecraftVersion(loader, version, loaderVersion);
+
+        return await LaunchPortableAsync(portableMinecraftVersion, version, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     public async Task<RunningGame> LaunchNeoForgeAsync(
@@ -191,6 +197,17 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         CancellationToken cancellationToken
     )
     {
+        // With its Minecraft version, a build is named as servers name it, such as 47.1.106 for NeoForge 1.20.1-47.1.106.
+        if (!string.IsNullOrWhiteSpace(loaderVersion) && !string.IsNullOrWhiteSpace(version))
+        {
+            string neoForgeVersion = await PrepareMinecraftAsync(
+                () => ResolvePortableMinecraftLoaderVersionAsync(loader: "neoforge", version, loaderVersion, cancellationToken),
+                cancellationToken
+            ).ConfigureAwait(continueOnCapturedContext: false);
+
+            return await LaunchPortableAsync($"neoforge::{neoForgeVersion}", minecraftVersion: null, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        }
+
         if (!string.IsNullOrWhiteSpace(loaderVersion))
             return await LaunchPortableAsync($"neoforge::{loaderVersion}", minecraftVersion: null, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
 

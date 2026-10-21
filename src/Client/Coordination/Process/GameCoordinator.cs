@@ -14,13 +14,13 @@ internal sealed partial class GameCoordinator
         var curseForgeRequest = message.CurseForgeRequest;
         bool neoForgeVersionGiven = !string.IsNullOrWhiteSpace(neoForgeRequest?.Version);
         bool maximumMinecraftVersionGiven = !string.IsNullOrWhiteSpace(neoForgeRequest?.MaximumMinecraftVersion);
-        bool neoForgeBuildConflicts = !string.IsNullOrWhiteSpace(neoForgeRequest?.LoaderVersion) && (neoForgeVersionGiven || maximumMinecraftVersionGiven);
+        bool neoForgeBuildConflicts = !string.IsNullOrWhiteSpace(neoForgeRequest?.LoaderVersion) && maximumMinecraftVersionGiven;
         bool modpackMissing = string.IsNullOrWhiteSpace(curseForgeRequest?.Slug) || curseForgeRequest?.FileId <= 0;
         bool versionMissing = string.IsNullOrWhiteSpace(message.Request?.Version ?? message.ModLoaderRequest?.Version);
 
-        // A NeoForge build already names its Minecraft version.
+        // A NeoForge build belongs to one Minecraft version, so there is no newest version to limit.
         string? neoForgeProblem = neoForgeBuildConflicts
-            ? "loaderVersion can't be combined with version or maximumMinecraftVersion"
+            ? "loaderVersion can't be combined with maximumMinecraftVersion"
             : neoForgeVersionGiven && maximumMinecraftVersionGiven
             ? "maximumMinecraftVersion can only be used when version is omitted"
             : null;

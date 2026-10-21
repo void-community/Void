@@ -20,6 +20,35 @@ public sealed class PortableMinecraftVersionTests
         Assert.Equal(expectedVersion, GameRuntime.CreatePortableMinecraftVersion(loader, minecraftVersion, loaderVersion));
     }
 
+    [Theory]
+    [InlineData("1.7.10", "10.13.4.1614", "1.7.10-10.13.4.1614-1.7.10")]
+    [InlineData("1.7.2", "10.12.2.1161", "1.7.2-10.12.2.1161-mc172")]
+    [InlineData("1.12.2", "14.23.5.2859", "1.12.2-14.23.5.2859")]
+    [InlineData("1.12.2", "1.12.2-14.23.5.2859", "1.12.2-14.23.5.2859")]
+    [InlineData("1.20.1", "47.1.106", "1.20.1-47.1.106")]
+    [InlineData("1.21.1", "21.1.264", "21.1.264")]
+    [InlineData("26.3", "26.3.0.95", "26.3.0.95")]
+    [InlineData("1.12.2", "14.23.5.285", null)]
+    [InlineData("1.12.1", "14.23.5.2859", null)]
+    public void FindsALoaderBuildAsServersNameIt(string minecraftVersion, string loaderVersion, string? expectedVersion)
+    {
+        // PortableMC searches by part of the name, so builds whose names only start alike are listed too.
+        string[][] output =
+        [
+            ["row", "version", "game_version", "channel"],
+            ["sep"],
+            ["row", "1.7.10-10.13.4.1614-1.7.10", "1.7.10", "stable"],
+            ["row", "1.7.2-10.12.2.1161-mc172", "1.7.2", "stable"],
+            ["row", "1.12.2-14.23.5.2859", "1.12.2", "stable"],
+            ["row", "1.12.2-14.23.5.2855", "1.12.2", "stable"],
+            ["row", "1.20.1-47.1.106", "1.20.1", "stable"],
+            ["row", "21.1.264", "1.21.1", "stable"],
+            ["row", "26.3.0.95", "26.3", "stable"]
+        ];
+
+        Assert.Equal(expectedVersion, GameRuntime.FindPortableMinecraftLoaderVersion(output, minecraftVersion, loaderVersion));
+    }
+
     [Fact]
     public void ReadsTheInstalledVersionFromTheLastLoadedHierarchy()
     {

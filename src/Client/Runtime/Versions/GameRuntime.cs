@@ -63,6 +63,22 @@ internal sealed partial class GameRuntime
         return latestVersion;
     }
 
+    /// <summary>
+    /// Finds a loader build in PortableMC's search output by its Minecraft version and the build as servers name it. Forge and NeoForge for
+    /// Minecraft 1.20.1 add the Minecraft version in front, and old Forge builds add it again after, such as 1.7.10-10.13.4.1614-1.7.10.
+    /// </summary>
+    internal static string? FindPortableMinecraftLoaderVersion(IEnumerable<string[]> searchOutputFields, string minecraftVersion, string loaderVersion)
+    {
+        return searchOutputFields
+            .Where(fields => fields is ["row", _, var gameVersion, ..] && gameVersion == minecraftVersion)
+            .Select(static fields => fields[1])
+            .FirstOrDefault(
+                version => version == loaderVersion
+                                       || version == $"{minecraftVersion}-{loaderVersion}"
+                                       || version.StartsWith($"{minecraftVersion}-{loaderVersion}-", StringComparison.Ordinal)
+            );
+    }
+
     internal static bool IsStableNeoForgeVersion(string neoForgeVersion)
     {
         return !neoForgeVersion.EndsWith(value: "-beta", StringComparison.Ordinal) && !neoForgeVersion.Contains(value: "-alpha", StringComparison.Ordinal);
@@ -291,6 +307,40 @@ internal sealed partial class GameRuntime
         ).ConfigureAwait(continueOnCapturedContext: false);
 
         return selection;
+    }
+
+    /// <summary>Finds the name PortableMC installs a loader build as, from its Minecraft version and the build as servers name it.</summary>
+    private async Task<string> ResolvePortableMinecraftLoaderVersionAsync(string loader, string minecraftVersion, string loaderVersion, CancellationToken cancellationToken)
+    {
+        var searchResult = await SearchAsync().ConfigureAwait(continueOnCapturedContext: false);
+
+        // The search reads the loader's repository, which fails now and then.
+        for (int attempt = 2; attempt <= UpstreamRequestAttempts && searchResult.ExitCode is not 0; attempt++)
+            searchResult = await SearchAsync().ConfigureAwait(continueOnCapturedContext: false);
+
+        if (searchResult.ExitCode is not 0)
+        {
+            throw MinecraftPreparationFailure(
+                $"{loader} {loaderVersion} could not be searched for (exit code {searchResult.ExitCode}): {searchResult.StandardError.Trim()}",
+                unavailable: true
+            );
+        }
+
+        IEnumerable<string[]> outputFields = searchResult.StandardOutput
+            .Split(separator: '\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(static line => line.TrimEnd(trimChar: '\r').Split(separator: '\t'));
+
+        return FindPortableMinecraftLoaderVersion(outputFields, minecraftVersion, loaderVersion)
+               ?? throw MinecraftPreparationFailure($"{loader} has no build {loaderVersion} for Minecraft {minecraftVersion}");
+
+        Task<ProcessTextResult> SearchAsync()
+        {
+            return RunProcessTextAsync(
+                CreateProcessStartInformation(PortableMinecraftPath, ["--output", "machine", "search", "--kind", loader, loaderVersion]),
+                TimeSpan.FromMinutes(minutes: 1),
+                cancellationToken
+            );
+        }
     }
 
     internal sealed record MojangVersion(string Id, string Type, Uri MetadataUri);

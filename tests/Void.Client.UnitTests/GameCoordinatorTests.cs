@@ -283,18 +283,32 @@ public sealed class GameCoordinatorTests
         await coordinator.StopAsync(CancellationToken.None);
     }
 
-    [Theory]
-    [InlineData("1.21.1", null)]
-    [InlineData(null, "1.21.1")]
-    public async Task NeoForgeBuildCannotBeCombinedWithAVersion(string? version, string? maximumMinecraftVersion)
+    [Fact]
+    public async Task NeoForgeLaunchForwardsABuildWithItsMinecraftVersion()
     {
-        // A NeoForge build already names its Minecraft version.
+        // Servers name a NeoForge build for Minecraft 1.20.1 without the Minecraft version in front.
+        var runtime = new FakeGameRuntime();
+        using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        await coordinator.StartNeoForgeAsync(new("1.20.1", [], LoaderVersion: "47.1.106"), CancellationToken.None);
+
+        Assert.Equal("1.20.1", runtime.LastNeoForgeVersion);
+        Assert.Equal("47.1.106", runtime.LastNeoForgeLoaderVersion);
+
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task NeoForgeBuildCannotBeCombinedWithAMaximumMinecraftVersion()
+    {
+        // A NeoForge build belongs to one Minecraft version, so there is no newest version to limit.
         var runtime = new FakeGameRuntime();
         using var coordinator = new GameCoordinator(runtime, NullLogger<GameCoordinator>.Instance);
         await coordinator.StartAsync(CancellationToken.None);
 
         var exception = await Assert.ThrowsAsync<GameCommandException>(
-            () => coordinator.StartNeoForgeAsync(new(version, [], MaximumMinecraftVersion: maximumMinecraftVersion, LoaderVersion: "21.1.264"), CancellationToken.None)
+            () => coordinator.StartNeoForgeAsync(new(Version: null, [], MaximumMinecraftVersion: "1.21.1", LoaderVersion: "21.1.264"), CancellationToken.None)
         );
 
         Assert.Equal(400, exception.StatusCode);

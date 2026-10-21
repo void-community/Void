@@ -168,7 +168,7 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
-To start an exact NeoForge build, for example the one your server runs, set `loaderVersion` to the build as NeoForge's Maven names it, such as `21.1.264`, or `1.20.1-47.1.106` for Minecraft 1.20.1. The build names its Minecraft version, so it can't be combined with `version` or `maximumMinecraftVersion`.
+To start an exact NeoForge build, for example the one your server runs, set `loaderVersion` to the build as NeoForge's Maven names it, such as `21.1.264`, or `1.20.1-47.1.106` for Minecraft 1.20.1. It can't be combined with `maximumMinecraftVersion`.
 
 ```bash
 curl --fail-with-body \
@@ -178,10 +178,19 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/neoforge
 ```
 
+With `version`, `loaderVersion` can also be the build as servers report it, such as `47.1.106` for Minecraft 1.20.1. When that Minecraft version has no such build, the start fails with `client.install.failed`.
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"version":"1.20.1","loaderVersion":"47.1.106","arguments":["--username","TestPlayer"]}' \
+  http://localhost:8080/api/game/start/neoforge
+```
+
 ### Forge, Fabric, Quilt, and LegacyFabric
 
 `version` is required and is a Mojang release identifier. `loaderVersion` is an optional loader build. Without it, the client starts the loader's newest stable build for that version, or its newest build when none is stable yet.
-
 ```bash
 curl --fail-with-body \
   --request POST \
@@ -198,7 +207,7 @@ curl --fail-with-body \
   http://localhost:8080/api/game/start/fabric
 ```
 
-Forge builds are named as on Forge's downloads, such as `47.4.0` for 1.20.1, or `10.13.4.1614-1.7.10` for 1.7.10. A version or build that doesn't exist fails the start with `client.install.failed`.
+Forge builds are named as on Forge's downloads, such as `47.4.0` for 1.20.1, or `10.13.4.1614-1.7.10` for 1.7.10, or as servers report them, such as `10.13.4.1614` for 1.7.10. A version or build that doesn't exist fails the start with `client.install.failed`.
 
 Starts other than CurseForge load only the mods in the game directory's `mods` folder. An image built on the client can add files for the exact Minecraft version with [**preparation scripts**](/docs/client/images/#preparing-games).
 
