@@ -82,10 +82,10 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
                     if (player.Context.Channel is not { IsAlive: true })
                         return result;
                 }
-                catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+                catch (StreamException exception) when (player.Context.Channel is { IsAlive: true })
                 {
                     // Try next server, unless the player is the one who left
-                    logger.LogWarning("Server {Server} closed the connection while player {Player} was joining it", server, player);
+                    LogJoinFailure(exception, player, server);
                 }
             }
 
@@ -170,10 +170,10 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
             {
                 return await ConnectCoreAsync(player, server, anonymous, cancellationToken);
             }
-            catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+            catch (StreamException exception) when (player.Context.Channel is { IsAlive: true })
             {
                 // Otherwise the player would be left without any server
-                logger.LogWarning("Server {Server} closed the connection while player {Player} was joining it", server, player);
+                LogJoinFailure(exception, player, server);
                 return ConnectionResult.NotConnected;
             }
         }
@@ -185,13 +185,23 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
         {
             return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
         }
-        catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+        catch (StreamClosedException) when (player.Context.Channel is { IsAlive: true })
         {
-            // A server can drop a joining player on a transient failure of its own and accept them on the next try
+            // A server can drop a joining player on a transient failure of its own and accept them on the next try, while a join that timed
+            // out would only time out again.
             logger.LogInformation("Server {Server} closed the connection while player {Player} was joining it, trying again", server, player);
         }
 
         return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+    }
+
+    // Either side can time out, as a player that never finishes its part of joining does.
+    private void LogJoinFailure(StreamException exception, IPlayer player, IServer server)
+    {
+        if (exception is StreamTimeoutException)
+            logger.LogWarning("Player {Player} timed out joining server {Server}", player, server);
+        else
+            logger.LogWarning("Server {Server} closed the connection while player {Player} was joining it", server, player);
     }
 
     private async ValueTask<ConnectionResult> ConnectCoreAsync(INetworkChannel playerChannel, IPlayer player, IServer server, bool firstConnection, bool anonymous, CancellationToken cancellationToken = default)
