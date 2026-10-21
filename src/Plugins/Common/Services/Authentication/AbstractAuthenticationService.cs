@@ -228,6 +228,10 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         if (await IsPlayerAuthenticatedAsync(link.Player, cancellationToken))
             return AuthenticationResult.AlreadyAuthenticated;
 
+        // A player whose server failed before Login Success has logged in to the proxy already, and won't send Login Start again.
+        if (link.Player.Profile is not null)
+            return AuthenticationResult.Authenticated;
+
         if (!await StartPlayerLoginAsync(link, cancellationToken))
             return AuthenticationResult.NotAuthenticatedPlayer with { Message = "You are already online on this proxy." };
 

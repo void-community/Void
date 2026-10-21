@@ -85,6 +85,7 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
                 catch (StreamException) when (player.Context.Channel is { IsAlive: true })
                 {
                     // Try next server, unless the player is the one who left
+                    logger.LogWarning("Server {Server} closed the connection while player {Player} was joining it", server, player);
                 }
             }
 
