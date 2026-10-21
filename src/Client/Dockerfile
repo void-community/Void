@@ -15,7 +15,7 @@ WORKDIR /native-packages
 RUN apt-get update && apt-get download liblwjgl-java-jni libjinput-jni
 
 # Runtime stage
-FROM debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 AS runtime
+FROM debian:13@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS runtime
 
 ARG TARGETARCH
 
@@ -187,7 +187,7 @@ RUN portablemc-dry-run-with-retries "mojang:$MINECRAFT_VERSION"
 
 # Publish the API once during the image build. Runtime startup never restores or compiles source code.
 # The API and agent are platform independent, so they build once on the build machine instead of under emulation per platform.
-FROM --platform=$BUILDPLATFORM debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 AS dotnet-builder
+FROM --platform=$BUILDPLATFORM debian:13@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS dotnet-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl default-jdk-headless libicu-dev maven \
  && rm -rf /var/lib/apt/lists/* \
