@@ -19,8 +19,8 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
     private const string ModsDirectory = "/data/mods/";
     private static readonly ReleaseVersion LargerMemoryRelease = new(Major: 1, Minor: 17, Patch: 0);
 
-    /// <param name="contentModProject">The Modrinth project of a mod that must be installed on both sides, which the image installs with the mods it requires.</param>
-    public static async Task<ModdedServer> CreateAsync(ModLoader loader, ReleaseVersion release, string contentModProject, string logFileName, CancellationToken cancellationToken = default)
+    /// <param name="contentMod">A mod that must be installed on both sides, as the image takes Modrinth projects, such as storagedrawers, or refined-storage:alpha for its newest build of any kind. The image installs it with the mods it requires.</param>
+    public static async Task<ModdedServer> CreateAsync(ModLoader loader, ReleaseVersion release, string contentMod, string logFileName, CancellationToken cancellationToken = default)
     {
         // The image has no Java 16 variant, and Java 17 runs those releases too.
         var javaMajorVersion = await MojangVersionCatalog.FindJavaMajorVersionAsync(release, cancellationToken);
@@ -32,7 +32,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithEnvironment("EULA", "TRUE")
             .WithEnvironment("TYPE", loader is ModLoader.Forge ? "FORGE" : "NEOFORGE")
             .WithEnvironment("VERSION", release.ToString())
-            .WithEnvironment("MODRINTH_PROJECTS", contentModProject)
+            .WithEnvironment("MODRINTH_PROJECTS", contentMod)
             .WithEnvironment("MODRINTH_DOWNLOAD_DEPENDENCIES", "required")
             .WithEnvironment("MEMORY", release.CompareTo(LargerMemoryRelease) < 0 ? "1536M" : "2G")
             .WithEnvironment("DIFFICULTY", "peaceful")
@@ -47,7 +47,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
 
-        return new ModdedServer(await StartContainerAsync(builder, $"{loader} server for Minecraft {release} with {contentModProject}", cancellationToken), logFileName, loader, release);
+        return new ModdedServer(await StartContainerAsync(builder, $"{loader} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
     }
 
     /// <summary>Reads the loader build and mods the image installed, which clients start to play on the server.</summary>

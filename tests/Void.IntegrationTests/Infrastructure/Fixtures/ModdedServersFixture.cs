@@ -27,6 +27,9 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
     /// </summary>
     private static readonly string[] ContentModProjects = ["storagedrawers", "refined-storage", "blood-magic", "comforts", "waddles", "trash-cans", "tool-kit"];
 
+    // The image picks a mod's newest release, so the newest beta or alpha of each is tried only after every mod's release, as for Minecraft 1.9.
+    private static readonly string[] ContentMods = [.. ContentModProjects, .. ContentModProjects.Select(project => $"{project}:alpha")];
+
     // Loaders and mods catch up with a Minecraft release within months, so one older than this that they have no build for was passed over.
     private static readonly TimeSpan CatchUpPeriod = TimeSpan.FromDays(183);
 
@@ -109,11 +112,11 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
 
     private async Task<StartOutcome> TryStartAsync(ReleaseVersion release, List<IntegrationTestException> failures)
     {
-        foreach (var contentModProject in ContentModProjects)
+        foreach (var contentMod in ContentMods)
         {
             try
             {
-                (_servers, _setup) = await StartServersAsync(release, contentModProject, Timeouts.SetupTimeoutToken);
+                (_servers, _setup) = await StartServersAsync(release, contentMod, Timeouts.SetupTimeoutToken);
                 return StartOutcome.Started;
             }
             catch (IntegrationTestException exception) when (exception.Message.Contains(_loaderMissingMessage, StringComparison.Ordinal))
@@ -122,22 +125,22 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
             }
             catch (IntegrationTestException exception) when (exception.Message.Contains(ModMissingMessage, StringComparison.Ordinal))
             {
-                Console.WriteLine($"[Void.IntegrationTests] {contentModProject} has no {loader} build for Minecraft {release}");
+                Console.WriteLine($"[Void.IntegrationTests] {contentMod} has no {loader} build for Minecraft {release}");
             }
             catch (IntegrationTestException exception)
             {
                 // A mod can declare nothing wrong and still crash its server, such as one built against another loader build.
                 failures.Add(exception);
-                Console.WriteLine($"[Void.IntegrationTests] {loader} servers for Minecraft {release} with {contentModProject} didn't start");
+                Console.WriteLine($"[Void.IntegrationTests] {loader} servers for Minecraft {release} with {contentMod} didn't start");
             }
         }
 
         return StartOutcome.ContentModsMissing;
     }
 
-    private async Task<(MinecraftServer[] Servers, GameSetup Setup)> StartServersAsync(ReleaseVersion release, string contentModProject, CancellationToken cancellationToken)
+    private async Task<(MinecraftServer[] Servers, GameSetup Setup)> StartServersAsync(ReleaseVersion release, string contentMod, CancellationToken cancellationToken)
     {
-        var serverTasks = Enumerable.Range(start: 1, serverCount).Select(index => ModdedServer.CreateAsync(loader, release, contentModProject, $"server-{index}.log", cancellationToken)).ToArray();
+        var serverTasks = Enumerable.Range(start: 1, serverCount).Select(index => ModdedServer.CreateAsync(loader, release, contentMod, $"server-{index}.log", cancellationToken)).ToArray();
 
         try
         {
@@ -148,7 +151,7 @@ public abstract class ModdedServersFixture(ModLoader loader, ProtocolVersion pro
 
             // Each server picks its game when it starts, while clients play one game on all of them.
             if (setups.Any(setup => setup.LoaderVersion != setups[0].LoaderVersion || !setup.Mods.Select(mod => mod.FileName).SequenceEqual(setups[0].Mods.Select(mod => mod.FileName))))
-                throw new IntegrationTestException($"{loader} servers for Minecraft {release} with {contentModProject} installed different games: {string.Join("; ", setups.Select(setup => $"{setup} with {string.Join(", ", setup.Mods.Select(mod => mod.FileName))}"))}");
+                throw new IntegrationTestException($"{loader} servers for Minecraft {release} with {contentMod} installed different games: {string.Join("; ", setups.Select(setup => $"{setup} with {string.Join(", ", setup.Mods.Select(mod => mod.FileName))}"))}");
 
             return ([.. servers], setups[0]);
         }
