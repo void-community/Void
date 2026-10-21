@@ -90,7 +90,7 @@ public class HandshakeService(IPlayerContext context) : IEventListener
             // Forge and NeoForge register their mod data message without a response, so clients never answer it
             var ignored = channel is handshakeChannel && id is 5;
 
-            if (@event.Player.Phase is Phase.Play)
+            if (@event.Player.Phase is not Phase.Login)
             {
                 if (ignored)
                     return;
