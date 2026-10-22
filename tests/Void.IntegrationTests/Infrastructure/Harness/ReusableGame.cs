@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
 using Void.Minecraft.Network;
 
@@ -52,7 +53,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
 
         try
         {
-            _game ??= await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
+            _game ??= await LaunchGameAsync(_client, cancellationToken);
         }
         catch
         {
@@ -62,6 +63,23 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         }
 
         return _session = new GameSession(this, _game, testName, [this, .. logSides]);
+    }
+
+    // A Forge game can corrupt its own config on its first launch and hang, so a game that failed to launch gets one more try in a new client.
+    private async Task<PortableMinecraftClient.Game> LaunchGameAsync(PortableMinecraftClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
+        }
+        catch (IntegrationTestException exception)
+        {
+            await PortableMinecraftClient.Game.LogAsync($"Launching the game again in a new client: {exception.Message}", CancellationToken.None);
+            await ReleaseAsync();
+
+            _client = await PortableMinecraftClient.CreateAsync(cancellationToken);
+            return await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
+        }
     }
 
     /// <summary>Stops the game and its client, which a collection no longer needs.</summary>

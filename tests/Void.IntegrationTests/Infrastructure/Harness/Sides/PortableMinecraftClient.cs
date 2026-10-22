@@ -97,6 +97,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
     public record Game(PortableMinecraftClient Client, ProtocolVersion ProtocolVersion, GameSetup? Setup, string Username, DateTime LaunchedAt)
     {
         private const string ModsDirectory = "/root/.minecraft/mods/";
+        private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(5);
 
         private ApiProblemDetails? _lastPlayersProblem;
         private Guid? _sessionId;
@@ -338,7 +339,19 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             var acceptedStatus = await ReadApiStatusAsync(response, $"Accepting {GameName} launch", cancellationToken);
 
             _sessionId = acceptedStatus.SessionId;
-            await WaitForClientReadyAsync(acceptedStatus.OperationId, cancellationToken);
+
+            // A game that hasn't reached its menu by then won't, which leaves the setup timeout room to launch it again.
+            using var readyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readyTimeout.CancelAfter(ReadyTimeout);
+
+            try
+            {
+                await WaitForClientReadyAsync(acceptedStatus.OperationId, readyTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new IntegrationTestException($"{GameName} did not reach its menu within {ReadyTimeout.TotalMinutes} minutes");
+            }
         }
 
         /// <summary>Installs the setup's mods into the client, replacing those of an earlier game, since the client keeps mods it didn't add.</summary>
