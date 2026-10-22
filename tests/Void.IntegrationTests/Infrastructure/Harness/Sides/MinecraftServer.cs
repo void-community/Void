@@ -46,6 +46,15 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         return await Container.ReadLogsAsync(since, cancellationToken);
     }
 
+    /// <summary>
+    /// Waits until a player has logged in since a time. Every server logs the address the player came from right after its name then, while old
+    /// Bukkit-based servers never log that it joined the game.
+    /// </summary>
+    public async Task ExpectLoginAsync(string username, DateTime since, CancellationToken cancellationToken = default)
+    {
+        await Container.ExpectTextAsync($"{username}[/", since, cancellationToken);
+    }
+
     public async Task ExpectTextAsync(string text, bool lookupHistory = false, CancellationToken cancellationToken = default)
     {
         if (lookupHistory)

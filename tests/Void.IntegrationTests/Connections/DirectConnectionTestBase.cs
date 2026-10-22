@@ -26,7 +26,7 @@ public abstract class DirectConnectionTestBase(ConnectionsFixture fixture) : Int
             await using (var game = await fixture.Game1.BeginSessionAsync(nameof(DirectConnectionTestBase), [fixture.Server1], Timeouts.SetupTimeoutToken))
             {
                 await game.JoinServerAsync(ServerEndPoint, Timeouts.SetupTimeoutToken);
-                await fixture.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
+                await fixture.Server1.ExpectLoginAsync(game.Username, game.StartedAt, Timeouts.SetupTimeoutToken);
                 await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
                 await game.SendTextMessageAsync(expectedText, Timeouts.StepTimeoutToken);

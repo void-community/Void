@@ -29,7 +29,7 @@ public abstract class ProxiedConnectionTestBase(ConnectionsFixture fixture) : In
                 playerDisconnectionTask = fixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
 
                 await game.JoinServerAsync(ProxyEndPoint, Timeouts.SetupTimeoutToken);
-                await fixture.Server1.Container.ExpectTextAsync($"{game.Username} joined the game", game.StartedAt, Timeouts.SetupTimeoutToken);
+                await fixture.Server1.ExpectLoginAsync(game.Username, game.StartedAt, Timeouts.SetupTimeoutToken);
                 await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
                 await game.SendTextMessageAsync(expectedText, Timeouts.StepTimeoutToken);

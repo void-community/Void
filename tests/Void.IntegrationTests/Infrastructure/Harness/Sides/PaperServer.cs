@@ -48,7 +48,9 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
         // Paper's own settings: a longer keep-alive, and no throttle on players that reconnect at once, which vanilla servers don't have.
         if (!vanilla)
         {
+            // Paper before Minecraft 1.14 reads commands from a console the container doesn't attach, and spins on its empty input otherwise.
             builder = builder
+                .WithEnvironment("CONSOLE", "FALSE")
                 // Paper for Minecraft 1.17 refuses any Java but 16, which the image has no variant for, while it runs on Java 17 too.
                 .WithEnvironment("JVM_OPTS", "-Dpaper.playerconnection.keepalive=120 -DPaper.IgnoreJavaVersion=true")
                 .WithEnvironment("PATCH_DEFINITIONS", "patches")
