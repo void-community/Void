@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +18,39 @@ namespace Void.IntegrationTests.Infrastructure.Harness.Sides;
 public record ModdedServer(IContainer Container, string LogFileName, ModLoader ModLoader, ReleaseVersion MinecraftRelease) : MinecraftServer(Container, LogFileName)
 {
     private const string ModsDirectory = "/data/mods/";
+    private const string DebugLogPath = "/data/logs/debug.log";
+    private const string DebugLoggingPath = "/opt/void/log4j2-debug.xml";
+
+    // Forge's console keeps its usual lines and the steps of its login handshake, which show where a failed login stopped, while its debug log
+    // gets everything Forge and Minecraft log at debug level, every packet included. It uses only the parts of log4j every Forge ships.
+    private const string DebugLogging = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <Configuration status="warn">
+            <Appenders>
+                <Console name="Console" target="SYSTEM_OUT">
+                    <Filters>
+                        <MarkerFilter marker="FMLHANDSHAKE" onMatch="ACCEPT" onMismatch="NEUTRAL"/>
+                        <ThresholdFilter level="info" onMatch="ACCEPT" onMismatch="DENY"/>
+                    </Filters>
+                    <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level] [%logger{1}]: %msg%n%xEx"/>
+                </Console>
+                <RollingRandomAccessFile name="DebugFile" fileName="logs/debug.log" filePattern="logs/debug-%i.log.gz">
+                    <PatternLayout pattern="[%d{HH:mm:ss.SSS}] [%t/%level] [%logger]: %msg%n%xEx"/>
+                    <Policies>
+                        <OnStartupTriggeringPolicy/>
+                        <SizeBasedTriggeringPolicy size="200MB"/>
+                    </Policies>
+                    <DefaultRolloverStrategy max="5" fileIndex="min"/>
+                </RollingRandomAccessFile>
+            </Appenders>
+            <Loggers>
+                <Root level="debug">
+                    <AppenderRef ref="Console"/>
+                    <AppenderRef ref="DebugFile"/>
+                </Root>
+            </Loggers>
+        </Configuration>
+        """;
 
     // Later builds resolve NeoForge servers' mods as Forge ones (itzg/docker-minecraft-server@625b10ae), which NeoForge from 1.20.2 can't load.
     private const string ImageRelease = "2026.10.0";
@@ -57,8 +91,18 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         if (loaderVersion is not null)
             builder = builder.WithEnvironment(loader is ModLoader.Forge ? "FORGE_VERSION" : "NEOFORGE_VERSION", loaderVersion);
 
-        // Forge logs each step of its login handshake only at debug level, which shows where a failed login stopped
-        var jvmOptions = "-Dforge.logging.markers=FMLHANDSHAKE -Dforge.logging.console.level=debug";
+        string jvmOptions;
+
+        if (loader is ModLoader.Forge)
+        {
+            builder = builder.WithResourceMapping(Encoding.UTF8.GetBytes(DebugLogging), DebugLoggingPath);
+            jvmOptions = $"-Dlog4j.configurationFile={DebugLoggingPath}";
+        }
+        else
+        {
+            // NeoForge sets its logging up again while it starts, whose debug log also takes Minecraft's debug lines and packets once let through
+            jvmOptions = "-Dforge.logging.mojang.level=debug -Dforge.logging.marker.networking=ACCEPT";
+        }
 
         if (LegacyForgePatcher.AppliesToServer(loader, release))
         {
@@ -69,6 +113,13 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         builder = builder.WithEnvironment("JVM_OPTS", jvmOptions);
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
+    }
+
+    /// <summary>Saves the server's debug log, with everything Forge and Minecraft logged at debug level and every packet, into a directory.</summary>
+    public async Task SaveDebugLogAsync(string directory, CancellationToken cancellationToken = default)
+    {
+        Directory.CreateDirectory(directory);
+        await File.WriteAllBytesAsync(Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(LogFileName)}-debug.log"), await Container.ReadFileAsync(DebugLogPath, cancellationToken), cancellationToken);
     }
 
     /// <summary>Reads the loader build and mods the image installed, which clients start to play on the server.</summary>

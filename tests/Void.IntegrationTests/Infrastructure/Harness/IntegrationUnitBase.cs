@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -36,6 +37,7 @@ public class IntegrationUnitBase
         {
             Console.WriteLine($"Primary integration failure:\n{exception}");
             Console.WriteLine(await CollectLogsAsync(voidLogWindowStartedAt, sides));
+            await SaveServerDebugLogsAsync(sides);
             throw new IntegrationTestException($"Test execution failed: {exception.Message}", exception);
         }
         finally
@@ -75,6 +77,25 @@ public class IntegrationUnitBase
             catch (Exception retryException)
             {
                 throw new IntegrationTestException($"Test failed again after a server's own race: {retryException.Message}\nIts first run failed: {firstFailure}", retryException);
+            }
+        }
+    }
+
+    // Modded servers log everything at debug level, every packet included, into a file, which a failed test keeps in its steps.
+    private static async Task SaveServerDebugLogsAsync(IIntegrationSide[] sides)
+    {
+        var testName = string.Join('_', (TestContext.Current.Test?.TestDisplayName ?? "Unknown").Split(Path.GetInvalidFileNameChars()));
+        var directory = Path.Combine(Directory.GetCurrentDirectory(), "steps", "ServerDebugLogs", testName, DateTime.UtcNow.ToString("HHmmss"));
+
+        foreach (var server in sides.OfType<ModdedServer>().Distinct())
+        {
+            try
+            {
+                await server.SaveDebugLogAsync(directory, Timeouts.StepTimeoutToken);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine($"[Void.IntegrationTests] The debug log of {server.LogFileName} couldn't be saved: {exception.Message}");
             }
         }
     }
