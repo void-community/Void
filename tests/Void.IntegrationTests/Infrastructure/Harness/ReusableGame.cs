@@ -116,8 +116,14 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
 
         _session = null;
 
-        if (discardGame)
-            await StopGameAsync();
+        if (!discardGame)
+            return;
+
+        // A test that didn't end can leave the game hung, such as with its client thread stuck, which its threads show.
+        if (_game is { } game)
+            await game.TryDumpThreadsAsync();
+
+        await StopGameAsync();
     }
 
     private static async Task<bool> IsPlayableAsync(PortableMinecraftClient.Game game, CancellationToken cancellationToken)

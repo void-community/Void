@@ -364,7 +364,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         }
 
         // A JVM writes where each of its threads is, and which locks they hold, to its output on SIGQUIT, so a game that hangs shows where.
-        private async Task TryDumpThreadsAsync()
+        internal async Task TryDumpThreadsAsync()
         {
             try
             {
