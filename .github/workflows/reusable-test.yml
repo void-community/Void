@@ -91,6 +91,8 @@ jobs:
   tests:
     env:
       DOTNET_TEST_RUNNER: Microsoft.Testing.Platform
+      # Clients play the image pulled below, instead of pulling it again for every client.
+      VOID_CLIENT_IMAGE: ghcr.io/void-community/portable-minecraft-client:offline
     needs: test-matrix
     strategy:
       fail-fast: false
@@ -111,7 +113,7 @@ jobs:
 
       - name: Pull portable-minecraft-client image
         if: ${{ matrix.test-kind == 'integration' }}
-        run: docker pull ghcr.io/void-community/portable-minecraft-client:offline
+        run: docker pull "$VOID_CLIENT_IMAGE"
 
       - name: Create shard filter
         shell: bash
@@ -217,6 +219,10 @@ jobs:
                   fi
                   ;;
               esac
+            elif [[ $test_class =~ Tests_[0-9]+(_[0-9]+)*$ ]]; then
+              # Its collection's tests would otherwise each count as a collection of their own and start its servers on several shards
+              echo "::error title=Unknown server type::$test_class is a connection test of a server type this filter doesn't group by collection"
+              exit 1
             else
               collection=$test_class
               weight=$other_weight
@@ -291,9 +297,6 @@ jobs:
 
       - name: Run integration shard
         if: ${{ matrix.test-kind == 'integration' && env.HAS_INTEGRATION_TESTS == 'true' }}
-        env:
-          # Clients play the image pulled above, instead of pulling it again for every client.
-          VOID_CLIENT_IMAGE: ghcr.io/void-community/portable-minecraft-client:offline
         run: dotnet test tests/Void.IntegrationTests --configuration Release --filter "$TEST_FILTER" --output Detailed
 
       - name: Skip empty integration shard
