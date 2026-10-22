@@ -21,8 +21,9 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
     private const string DebugLogPath = "/data/logs/debug.log";
     private const string DebugLoggingPath = "/opt/void/log4j2-debug.xml";
 
-    // Forge's console keeps its usual lines and the steps of its login handshake, which show where a failed login stopped, while its debug log
-    // gets everything Forge and Minecraft log at debug level, every packet included. It uses only the parts of log4j every Forge ships.
+    // Forge's console keeps its usual lines, without the formatting codes servers before Minecraft 1.13 put in them, and the steps of its login
+    // handshake, which show where a failed login stopped, while its debug log gets everything Forge and Minecraft log at debug level, every packet
+    // included. It uses only the parts of log4j every Forge ships.
     private const string DebugLogging = """
         <?xml version="1.0" encoding="UTF-8"?>
         <Configuration status="warn">
@@ -32,7 +33,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
                         <MarkerFilter marker="FMLHANDSHAKE" onMatch="ACCEPT" onMismatch="NEUTRAL"/>
                         <ThresholdFilter level="info" onMatch="ACCEPT" onMismatch="DENY"/>
                     </Filters>
-                    <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level] [%logger{1}]: %msg%n%xEx"/>
+                    <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level] [%logger{1}]: %replace{%msg}{§[0-9a-fk-orA-FK-OR]}{}%n%xEx"/>
                 </Console>
                 <RollingRandomAccessFile name="DebugFile" fileName="logs/debug.log" filePattern="logs/debug-%i.log.gz">
                     <PatternLayout pattern="[%d{HH:mm:ss.SSS}] [%t/%level] [%logger]: %msg%n%xEx"/>
