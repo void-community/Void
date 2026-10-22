@@ -28,11 +28,6 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
 
     private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion.FirstRelease}";
 
-    public void ClearLogs()
-    {
-        _client?.ClearLogs();
-    }
-
     public async Task<IEnumerable<string>> ReadLogsAsync(DateTime since, CancellationToken cancellationToken = default)
     {
         return _client is { } client ? await client.ReadLogsAsync(since, cancellationToken) : [];

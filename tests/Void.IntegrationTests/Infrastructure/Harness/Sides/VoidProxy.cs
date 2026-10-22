@@ -70,11 +70,6 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
         return new VoidProxy(logWriter, result, cancellationTokenSource);
     }
 
-    public void ClearLogs()
-    {
-        LogWriter.Clear();
-    }
-
     public Task<IEnumerable<string>> ReadLogsAsync(DateTime since, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

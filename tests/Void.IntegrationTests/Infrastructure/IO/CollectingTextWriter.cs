@@ -27,14 +27,6 @@ public class CollectingTextWriter : TextWriter
     public event Action<string>? OnLine;
     public override Encoding Encoding { get; } = Encoding.UTF8;
 
-    public void Clear()
-    {
-        using var _ = _lock.EnterScope();
-
-        _lines.Clear();
-        _currentLineBuilder.Clear();
-    }
-
     public IReadOnlyList<string> GetLinesSince(DateTime since)
     {
         using var _ = _lock.EnterScope();

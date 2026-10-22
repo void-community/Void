@@ -29,15 +29,10 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
     private const string DockerHostGateway = "host-gateway";
     private const string LogMessagePrefix = $"[{nameof(Void)}.{nameof(IntegrationTests)}]";
 
-    private DateTime _readLogsSince = DateTime.UtcNow;
+    private readonly DateTime _readLogsSince = DateTime.UtcNow;
 
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => ReadLogsAsync(_readLogsSince).GetAwaiter().GetResult();
-
-    public void ClearLogs()
-    {
-        _readLogsSince = DateTime.UtcNow;
-    }
 
     public async ValueTask DisposeAsync()
     {

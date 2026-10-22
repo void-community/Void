@@ -11,6 +11,4 @@ public interface IIntegrationSide : IAsyncDisposable
     public IEnumerable<string> Logs { get; }
 
     public Task<IEnumerable<string>> ReadLogsAsync(DateTime since, CancellationToken cancellationToken = default);
-
-    public void ClearLogs();
 }
