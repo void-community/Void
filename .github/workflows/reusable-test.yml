@@ -149,13 +149,21 @@ jobs:
 
           # A collection starts its servers, proxy and games once for all of its tests, so its tests share a shard. A connection test
           # class such as ForgeProxiedPlayerTests_1_12_2 belongs to its server type and protocol version's collection, and any other
-          # class is a collection of its own. Weights are a collection's expected minutes times ten; NeoForge has no build before
-          # Minecraft 1.20.1, so its older collections only skip.
-          paper_weight=30
-          forge_weight=35
-          neoforge_weight=40
-          neoforge_skipped_weight=5
-          other_weight=10
+          # class is a collection of its own. Weights are a collection's median minutes times ten in CI, by era. Forge has no build for
+          # the versions below, and NeoForge none before Minecraft 1.20.1, so those collections only skip.
+          paper_weight=49
+          paper_1_16_weight=53
+          forge_weight=37
+          forge_1_13_weight=70
+          forge_1_17_weight=87
+          forge_1_21_weight=70
+          forge_26_weight=58
+          neoforge_1_20_weight=86
+          neoforge_1_21_weight=66
+          neoforge_26_weight=57
+          skipped_weight=3
+          other_weight=5
+          forge_skipped_versions=" 1_9_1 1_9_2 1_13 1_13_1 1_14 1_14_1 1_16 1_17 "
 
           collections_file="$assignment_dir/collections.tsv"
           groups_file="$assignment_dir/groups.tsv"
@@ -172,14 +180,40 @@ jobs:
               collection="${server_type}_${version}"
               IFS=_ read -r major minor _ <<< "$version"
 
+              minor=${minor:-0}
+
               case "$server_type" in
-                Paper) weight=$paper_weight ;;
-                Forge) weight=$forge_weight ;;
-                NeoForge)
-                  if [ "$major" -eq 1 ] && [ "${minor:-0}" -lt 20 ]; then
-                    weight=$neoforge_skipped_weight
+                Paper)
+                  if [ "$major" -eq 1 ] && [ "$minor" -lt 16 ]; then
+                    weight=$paper_weight
                   else
-                    weight=$neoforge_weight
+                    weight=$paper_1_16_weight
+                  fi
+                  ;;
+                Forge)
+                  if [[ $forge_skipped_versions == *" $version "* ]]; then
+                    weight=$skipped_weight
+                  elif [ "$major" -gt 1 ]; then
+                    weight=$forge_26_weight
+                  elif [ "$minor" -lt 13 ]; then
+                    weight=$forge_weight
+                  elif [ "$minor" -lt 17 ]; then
+                    weight=$forge_1_13_weight
+                  elif [ "$minor" -lt 21 ]; then
+                    weight=$forge_1_17_weight
+                  else
+                    weight=$forge_1_21_weight
+                  fi
+                  ;;
+                NeoForge)
+                  if [ "$major" -gt 1 ]; then
+                    weight=$neoforge_26_weight
+                  elif [ "$minor" -lt 20 ]; then
+                    weight=$skipped_weight
+                  elif [ "$minor" -lt 21 ]; then
+                    weight=$neoforge_1_20_weight
+                  else
+                    weight=$neoforge_1_21_weight
                   fi
                   ;;
               esac
