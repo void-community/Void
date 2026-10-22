@@ -101,7 +101,7 @@ public class AuthenticationService(ILogger<AuthenticationService> logger, IEvent
         try
         {
             // Packets the proxy handles itself, such as Keep Alives it answers, are canceled
-            while ((packet = await link.ReceiveCancellablePacketAsync<IMinecraftClientboundPacket>(relayCancellation.Token)) is not (JoinGamePacket or DisconnectPacket))
+            while ((packet = await ReceiveServerPacketAsync()) is not (JoinGamePacket or DisconnectPacket))
             {
                 // The server reads the player's packets as play ones only from its first packet after Login Success
                 serverPlaying.TrySetResult();
@@ -150,6 +150,19 @@ public class AuthenticationService(ILogger<AuthenticationService> logger, IEvent
             await link.SendPacketAsync(joinGamePacket, cancellationToken);
 
         return true;
+
+        async ValueTask<IMinecraftClientboundPacket?> ReceiveServerPacketAsync()
+        {
+            // Forge servers send nothing while the player applies their data, which large modpacks take a while for, so only a packet that has
+            // begun can time out
+            var message = await link.ServerChannel.ReadMessageAsync(relayCancellation.Token, cancellationToken);
+
+            if (message is not IMinecraftClientboundPacket serverPacket)
+                throw new InvalidOperationException($"Received {message} packet is not {typeof(IMinecraftClientboundPacket)} packet");
+
+            var cancelled = await events.ThrowWithResultAsync(new MessageReceivedEvent(Side.Server, Side.Server, Side.Proxy, Direction.Clientbound, serverPacket, link, link.Player), cancellationToken);
+            return cancelled ? null : serverPacket;
+        }
     }
 
     private async Task RelayPlayerPluginMessagesAsync(ILink link, Task serverPlaying, CancellationTokenSource relayCancellation, CancellationToken cancellationToken)
