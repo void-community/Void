@@ -17,6 +17,7 @@ using Void.Proxy.Api.Events.Proxy;
 using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
+using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Api.Plugins.Dependencies;
@@ -235,11 +236,20 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         if (!await StartPlayerLoginAsync(link, cancellationToken))
             return AuthenticationResult.NotAuthenticatedPlayer with { Message = "You are already online on this proxy." };
 
-        if (!await events.ThrowWithResultAsync(new PlayerVerifyingEncryptionEvent(link.Player, link), cancellationToken))
-            return AuthenticationResult.NotAuthenticatedPlayer with { Message = "Your encryption cannot be verified." };
+        try
+        {
+            if (!await events.ThrowWithResultAsync(new PlayerVerifyingEncryptionEvent(link.Player, link), cancellationToken))
+                return AuthenticationResult.NotAuthenticatedPlayer with { Message = "Your encryption cannot be verified." };
 
-        if (!await VerifyMojangProfile(link.Player, cancellationToken))
-            return AuthenticationResult.NotAuthenticatedPlayer with { Message = "Mojang session server rejected your session." };
+            if (!await VerifyMojangProfile(link.Player, cancellationToken))
+                return AuthenticationResult.NotAuthenticatedPlayer with { Message = "Mojang session server rejected your session." };
+        }
+        catch (StreamException)
+        {
+            // Login Start gave the player its profile, so a player that stopped logging in leaves rather than counting as logged in on the next server
+            link.PlayerChannel.Close();
+            throw;
+        }
 
         await events.ThrowAsync(new PlayerVerifiedEncryptionEvent(link.Player, link), cancellationToken);
 
