@@ -83,10 +83,9 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
 
                 var protocolVersion = $"global::Void.Minecraft.Network.ProtocolVersion.MINECRAFT_{key}";
 
-                // Paper's servers play every protocol version, so every Paper collection plays on the same ones.
                 sourceBuilder.AppendLine(serverType.IsModded
                     ? $"public sealed class {FixtureName(serverType, key)}() : {FixturesNamespace}.ModdedConnectionsFixture(global::Void.IntegrationTests.Infrastructure.Harness.ModLoader.{serverType.Name}, {protocolVersion});"
-                    : $"public sealed class {FixtureName(serverType, key)}({FixturesNamespace}.PaperFixture paperFixture) : {FixturesNamespace}.PaperConnectionsFixture(paperFixture, {protocolVersion});");
+                    : $"public sealed class {FixtureName(serverType, key)}() : {FixturesNamespace}.PaperConnectionsFixture({protocolVersion});");
                 sourceBuilder.AppendLine();
                 sourceBuilder.AppendLine("[global::Xunit.CollectionDefinition]");
                 sourceBuilder.AppendLine($"public sealed class {CollectionName(serverType, key)} : global::Xunit.ICollectionFixture<{FixtureName(serverType, key)}>;");

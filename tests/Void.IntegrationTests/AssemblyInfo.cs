@@ -1,4 +1,3 @@
-using Void.IntegrationTests.Infrastructure.Fixtures;
 using Xunit;
 using Xunit.v3;
 
@@ -11,5 +10,3 @@ using Xunit.v3;
 #else
 [assembly: Parallelization(MaxThreads = 10)]
 #endif
-
-[assembly: AssemblyFixture(typeof(PaperFixture))]

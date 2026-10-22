@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
@@ -7,8 +8,8 @@ using Void.Minecraft.Network;
 
 namespace Void.IntegrationTests.Infrastructure.Fixtures;
 
-/// <summary>Plays a protocol version on the shared Paper servers, which play every protocol version through ViaVersion.</summary>
-public abstract class PaperConnectionsFixture(PaperFixture paperFixture, ProtocolVersion protocolVersion) : ConnectionsFixture(protocolVersion)
+/// <summary>Plays a protocol version on Paper servers, which play every protocol version through ViaVersion.</summary>
+public abstract class PaperConnectionsFixture(ProtocolVersion protocolVersion) : ConnectionsFixture(protocolVersion)
 {
     private MinecraftServer[]? _servers;
 
@@ -20,12 +21,22 @@ public abstract class PaperConnectionsFixture(PaperFixture paperFixture, Protoco
 
     protected override async Task StartServersAsync()
     {
-        _servers = [.. await paperFixture.GetServersAsync()];
+        Task<PaperServer>[] serverTasks = [PaperServer.CreateAsync("server-1.log", Timeouts.SetupTimeoutToken), PaperServer.CreateAsync("server-2.log", Timeouts.SetupTimeoutToken)];
+
+        try
+        {
+            _servers = await Task.WhenAll(serverTasks);
+        }
+        catch
+        {
+            await Task.WhenAll(serverTasks.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result.DisposeAsync().AsTask()));
+            throw;
+        }
     }
 
-    // Every Paper collection plays on the same servers, which the assembly fixture stops.
-    protected override Task DisposeServersAsync()
+    protected override async Task DisposeServersAsync()
     {
-        return Task.CompletedTask;
+        if (_servers is { } servers)
+            await Task.WhenAll(servers.Select(server => server.DisposeAsync().AsTask()));
     }
 }
