@@ -2,6 +2,8 @@ name: "PR Workflow"
 
 on:
   pull_request:
+  # Runs the same checks on a branch by hand, such as again after a failure that wasn't the branch's.
+  workflow_dispatch:
 
 jobs:
   version:
