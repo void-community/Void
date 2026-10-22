@@ -351,7 +351,25 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                await TryDumpThreadsAsync();
                 throw new IntegrationTestException($"{GameName} did not reach its menu within {ReadyTimeout.TotalMinutes} minutes");
+            }
+        }
+
+        // A JVM writes where each of its threads is to its output on SIGQUIT, which the client logs, so a game that hangs shows where.
+        private async Task TryDumpThreadsAsync()
+        {
+            try
+            {
+                await Container.RunCommandAsync(["pkill", "--signal", "QUIT", "--exact", "java"], Timeouts.StepTimeoutToken);
+
+                // The JVM writes the dump on a thread of its own after the signal.
+                await Task.Delay(TimeSpan.FromSeconds(2));
+                await LogAsync($"Dumped {GameName} threads into its logs", CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                await LogAsync($"Dumping {GameName} threads failed: {exception.Message}", CancellationToken.None);
             }
         }
 
