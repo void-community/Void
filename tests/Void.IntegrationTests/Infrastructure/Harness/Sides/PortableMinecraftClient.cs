@@ -427,7 +427,16 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 return;
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new IntegrationTestException($"{operation} failed with HTTP {(int)response.StatusCode} {response.ReasonPhrase}\n{content}");
+
+            // The client's own failure leads the message, so a test's summary names the cause rather than only the status
+            var cause = TryDeserialize<ApiProblemDetails>(content) switch
+            {
+                { Failure: { } failure } => $": {failure.Code}: {failure.Message}",
+                { Detail: { } detail } => $": {detail}",
+                _ => ""
+            };
+
+            throw new IntegrationTestException($"{operation} failed with HTTP {(int)response.StatusCode} {response.ReasonPhrase}{cause}\n{content}");
         }
 
         private static async Task<ApiStatus> ReadApiStatusAsync(HttpResponseMessage response, string operation, CancellationToken cancellationToken = default)

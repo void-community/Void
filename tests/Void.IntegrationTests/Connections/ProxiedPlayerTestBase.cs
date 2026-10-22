@@ -56,8 +56,8 @@ public abstract class ProxiedPlayerTestBase(ConnectionsFixture fixture) : Integr
 
     private async Task RunPlayersAsync(CancellationToken disconnectionCancellationToken, List<Task> disconnectionTasks)
     {
-        await using var firstGame = await fixture.Game1.BeginSessionAsync(nameof(ProxiedPlayerTestBase), [fixture.Game2, fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
-        await using var secondGame = await fixture.Game2.BeginSessionAsync(nameof(ProxiedPlayerTestBase), [fixture.Game1, fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
+        await using var firstGame = await fixture.Game1.BeginSessionAsync(nameof(ProxiedPlayerTestBase), [fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
+        await using var secondGame = await fixture.Game2.BeginSessionAsync(nameof(ProxiedPlayerTestBase), [fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
 
         disconnectionTasks.Add(fixture.VoidProxy.WaitForPlayerDisconnectionAsync(firstGame.Username, disconnectionCancellationToken));
         disconnectionTasks.Add(fixture.VoidProxy.WaitForPlayerDisconnectionAsync(secondGame.Username, disconnectionCancellationToken));
