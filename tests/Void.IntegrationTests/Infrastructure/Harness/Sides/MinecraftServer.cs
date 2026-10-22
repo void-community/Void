@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using DotNet.Testcontainers.Builders;
@@ -14,12 +16,18 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
 {
     private const int MaximumStartupAttempts = 3;
     private const int StartupFailureLogLines = 200;
+    // The image downloads the server and its mods while it starts, and lookups and downloads can fail for a moment.
     private static readonly string[] TransientStartupFailureMarkers =
     [
         "DnsNameResolverTimeoutException",
         "SearchDomainUnknownHostException",
         "UnknownHostException",
-        "Temporary failure in name resolution"
+        "Temporary failure in name resolution",
+        "SslHandshakeTimeoutException",
+        "ConnectTimeoutException",
+        "ReadTimeoutException",
+        "PrematureCloseException",
+        "Connection reset"
     ];
     private readonly DateTime _readLogsSince = DateTime.UtcNow;
     public int Port => Container.GetMappedPublicPort(containerPort: 25565);
@@ -58,11 +66,11 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
                 await container.StartAsync(cancellationToken);
                 return container;
             }
-            catch (ContainerNotRunningException exception) when (startupAttempt < MaximumStartupAttempts && IsTransientStartupFailure(exception))
+            catch (Exception exception) when (startupAttempt < MaximumStartupAttempts && IsTransientStartupFailure(exception))
             {
                 await DisposeFailedContainerAsync(container, serverDescription);
                 var retryDelay = TimeSpan.FromSeconds(2 << (startupAttempt - 1));
-                Console.WriteLine($"[Void.IntegrationTests] {serverDescription} startup attempt {startupAttempt} of {MaximumStartupAttempts} failed because of a transient DNS error; retrying in {retryDelay.TotalSeconds:0} seconds");
+                Console.WriteLine($"[Void.IntegrationTests] {serverDescription} startup attempt {startupAttempt} of {MaximumStartupAttempts} failed because of a transient network error; retrying in {retryDelay.TotalSeconds:0} seconds: {exception.Message}");
                 await Task.Delay(retryDelay, cancellationToken);
             }
             catch (Exception exception)
@@ -77,9 +85,17 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         throw new InvalidOperationException($"{serverDescription} startup attempts were exhausted without returning or throwing.");
     }
 
-    private static bool IsTransientStartupFailure(ContainerNotRunningException exception)
+    private static bool IsTransientStartupFailure(Exception exception)
     {
-        return Array.Exists(TransientStartupFailureMarkers, marker => exception.ToString().Contains(marker, StringComparison.OrdinalIgnoreCase));
+        return exception switch
+        {
+            ContainerNotRunningException => Array.Exists(TransientStartupFailureMarkers, marker => exception.ToString().Contains(marker, StringComparison.OrdinalIgnoreCase)),
+
+            // Files Testcontainers downloads into the container, such as LegacyForgePatcher
+            HttpRequestException { StatusCode: null or HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError } => true,
+            TaskCanceledException { InnerException: TimeoutException } => true,
+            _ => false
+        };
     }
 
     private static async Task<string> TryReadLastLogsAsync(IContainer container)
