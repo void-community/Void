@@ -1,4 +1,5 @@
-﻿using Void.Minecraft.Buffers;
+﻿using System.Buffers;
+using Void.Minecraft.Buffers;
 using Void.Minecraft.Buffers.Exceptions;
 using Void.Minecraft.Buffers.Extensions;
 using Void.Minecraft.Commands.Brigadier;
@@ -111,8 +112,8 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
             rootChildren = reader.ReadVarIntArray();
             serverNodesStart = reader.Position;
 
-            // The tree's last byte is its root index, which is 0 only when the root is the first node.
-            if ((rootFlags & (byte)ProtocolCommandNodeFlags.NodeType) != (byte)ProtocolCommandNodeType.Root || (rootFlags & (byte)ProtocolCommandNodeFlags.HasRedirect) != 0 || copy[^1] != 0)
+            // The tree's last byte is its root index, which is 0 only when the root is the first node, and follows the root's own bytes.
+            if ((rootFlags & (byte)ProtocolCommandNodeFlags.NodeType) != (byte)ProtocolCommandNodeType.Root || (rootFlags & (byte)ProtocolCommandNodeFlags.HasRedirect) != 0 || copy[^1] != 0 || serverNodesStart >= copy.Length)
                 return null;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -231,7 +232,7 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
     {
         for (var size = InitialNodesBufferSize; size <= MaximumNodesBufferSize; size *= 2)
         {
-            var output = new byte[size];
+            var output = ArrayPool<byte>.Shared.Rent(size);
             var span = new BufferSpan(output);
 
             try
@@ -244,6 +245,10 @@ public class CommandsPacket : IMinecraftClientboundPacket<CommandsPacket>
             catch (EndOfBufferException)
             {
                 // The nodes need a bigger buffer.
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(output);
             }
         }
 

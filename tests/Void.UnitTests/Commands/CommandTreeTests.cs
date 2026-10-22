@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -7,6 +8,7 @@ using Void.Minecraft.Buffers.Extensions;
 using Void.Minecraft.Commands.Brigadier;
 using Void.Minecraft.Commands.Brigadier.ArgumentTypes;
 using Void.Minecraft.Commands.Brigadier.Builder;
+using Void.Minecraft.Commands.Brigadier.Registry;
 using Void.Minecraft.Commands.Brigadier.Tree;
 using Void.Minecraft.Commands.Brigadier.Tree.Nodes;
 using Void.Minecraft.Events.Chat;
@@ -21,15 +23,19 @@ public class CommandTreeTests
 {
     private static readonly CommandExecutor ExecuteNothing = (context, cancellationToken) => ValueTask.FromResult(0);
 
-    public static TheoryData<string, int, string> ModdedTrees => new()
-    {
+    private static readonly (string Fixture, ProtocolVersion ProtocolVersion, string CommandWithUnknownArguments)[] Fixtures =
+    [
         // Forge 1.16.5 names its argument types, such as forge:modid and forge:enum.
-        { "forge-1.16.5", ProtocolVersion.MINECRAFT_1_16_4.Value, "config" },
-        { "forge-1.20.1", ProtocolVersion.MINECRAFT_1_20.Value, "config" },
-        { "neoforge-1.21.1", ProtocolVersion.MINECRAFT_1_21.Value, "config" },
+        ("forge-1.16.5", ProtocolVersion.MINECRAFT_1_16_4, "config"),
+        ("forge-1.20.1", ProtocolVersion.MINECRAFT_1_20, "config"),
+        ("neoforge-1.21.1", ProtocolVersion.MINECRAFT_1_21, "config"),
         // All the Mods 10 8.3 has 148 arguments of types mods register, some named with spaces.
-        { "atm10-8.3", ProtocolVersion.MINECRAFT_1_21.Value, "minecolonies" }
-    };
+        ("atm10-8.3", ProtocolVersion.MINECRAFT_1_21, "minecolonies")
+    ];
+
+    public static TheoryData<string, int, string> ModdedTrees => [.. Fixtures.Select(fixture => (fixture.Fixture, fixture.ProtocolVersion.Value, fixture.CommandWithUnknownArguments))];
+
+    public static TheoryData<string, int> ModdedTreeFiles => [.. Fixtures.Select(fixture => (fixture.Fixture, fixture.ProtocolVersion.Value))];
 
     [Theory]
     [MemberData(nameof(ModdedTrees))]
@@ -47,10 +53,9 @@ public class CommandTreeTests
     }
 
     [Theory]
-    [MemberData(nameof(ModdedTrees))]
-    public void WritesTheTreeBackAsTheServerSentIt(string fixture, int protocol, string commandWithUnknownArguments)
+    [MemberData(nameof(ModdedTreeFiles))]
+    public void WritesTheTreeBackAsTheServerSentIt(string fixture, int protocol)
     {
-        _ = commandWithUnknownArguments;
         var protocolVersion = ProtocolVersion.Range().First(version => version.Value == protocol);
         var tree = ReadFixture(fixture);
 
@@ -77,10 +82,9 @@ public class CommandTreeTests
     }
 
     [Theory]
-    [MemberData(nameof(ModdedTrees))]
-    public void SplicesCommandsKeepingEveryServerNode(string fixture, int protocol, string commandWithUnknownArguments)
+    [MemberData(nameof(ModdedTreeFiles))]
+    public void SplicesCommandsKeepingEveryServerNode(string fixture, int protocol)
     {
-        _ = commandWithUnknownArguments;
         var protocolVersion = ProtocolVersion.Range().First(version => version.Value == protocol);
         var tree = ReadFixture(fixture);
 
@@ -145,6 +149,31 @@ public class CommandTreeTests
     }
 
     [Fact]
+    public void GivesUpQuicklyOnATreeNoLayoutFits()
+    {
+        // Every one of these arguments has lengths to try, and none of them makes the wrong root index fit.
+        var tree = Encode(TreeWithUnknownArguments(2000), ProtocolVersion.MINECRAFT_1_21);
+        tree[^1] = 1;
+
+        var stopwatch = Stopwatch.StartNew();
+        var packet = Decode(tree, ProtocolVersion.MINECRAFT_1_21);
+
+        Assert.Null(packet.RootNode);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Giving up took {stopwatch.Elapsed}");
+    }
+
+    [Fact]
+    public void KeepsATreeWithTooManyUnknownArgumentsAsSent()
+    {
+        // Each unknown argument is read one call deeper, so a tree with more of them than the search allows stays as the server sent it.
+        var tree = Encode(TreeWithUnknownArguments(3000), ProtocolVersion.MINECRAFT_1_21);
+        var packet = Decode(tree, ProtocolVersion.MINECRAFT_1_21);
+
+        Assert.Null(packet.RootNode);
+        Assert.Equal(tree, packet.FallbackNode.ToArray());
+    }
+
+    [Fact]
     public void EncodesTreesLargerThan128KiB()
     {
         var root = new RootCommandNode();
@@ -166,11 +195,25 @@ public class CommandTreeTests
             .Build();
     }
 
+    private static CommandsPacket TreeWithUnknownArguments(int count)
+    {
+        var root = new RootCommandNode();
+        var argumentType = new UnknownArgumentType(new ArgumentSerializerMapping("unknown:300", ProtocolVersion.MINECRAFT_1_21, 300), new byte[] { 4, 5 });
+
+        for (var i = 0; i < count; i++)
+            root.AddChild(LiteralArgumentBuilder.Create($"command{i}").Then(RequiredArgumentBuilder.Create("value", argumentType).Executes(ExecuteNothing)).Build());
+
+        return new CommandsPacket { RootNode = root };
+    }
+
     private static (int Count, int[] Children, int ServerNodesStart) ReadRoot(byte[] tree)
     {
         var reader = new BufferSpan(tree);
         var count = reader.ReadVarInt();
-        _ = reader.ReadUnsignedByte();
+
+        // The root's flags.
+        reader.ReadUnsignedByte();
+
         var children = reader.ReadVarIntArray().ToArray();
 
         return (count, children, reader.Position);

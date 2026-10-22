@@ -49,6 +49,20 @@ public class CrossStitchArgumentTests
     }
 
     [Fact]
+    public void UnwrapsAnArgumentThatOtherNodesFollow()
+    {
+        // The tree's end doesn't fix the length of these wrapped properties, which the proxy then finds by trying lengths.
+        var protocolVersion = ProtocolVersion.MINECRAFT_1_21;
+        var wrapped = new UnknownArgumentType(CrossStitchService.ModArgumentMapping, WrappedProperties(52, [1, 2, 3]));
+        var packet = Decode(Encode(TreeWithConfirmation(wrapped), protocolVersion), protocolVersion);
+
+        CrossStitchService.Unwrap(packet.RootNode!, protocolVersion);
+
+        var direct = TreeWithConfirmation(new UnknownArgumentType(new ArgumentSerializerMapping("unknown:52", protocolVersion, 52), new byte[] { 1, 2, 3 }));
+        Assert.Equal(Encode(direct, protocolVersion), Encode(packet, protocolVersion));
+    }
+
+    [Fact]
     public void LeavesArgumentsItDidNotWrapAsTheServerSentThem()
     {
         var protocolVersion = ProtocolVersion.MINECRAFT_1_21;
@@ -84,6 +98,15 @@ public class CrossStitchArgumentTests
     {
         var root = new RootCommandNode();
         root.AddChild(LiteralArgumentBuilder.Create("colony").Then(RequiredArgumentBuilder.Create("buildings", argumentType).Executes(ExecuteNothing)).Build());
+
+        return new CommandsPacket { RootNode = root };
+    }
+
+    private static CommandsPacket TreeWithConfirmation(IArgumentType argumentType)
+    {
+        var root = new RootCommandNode();
+        var confirmation = LiteralArgumentBuilder.Create("confirm").Executes(ExecuteNothing);
+        root.AddChild(LiteralArgumentBuilder.Create("colony").Then(RequiredArgumentBuilder.Create("buildings", argumentType).Then(confirmation)).Build());
 
         return new CommandsPacket { RootNode = root };
     }

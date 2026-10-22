@@ -55,7 +55,8 @@ public abstract class AbstractCommandService(ILogger logger, IEventService event
 
                     var availableCommandsEvent = new AvailableCommandsEvent(@event.Link, @event.Player, packet.RootNode);
 
-                    if (availableCommandsEvent.CommandsWithUnknownArguments is { Count: > 0 } commandsWithUnknownArguments)
+                    // Finding them walks the whole tree, which only this debug line needs
+                    if (logger.IsEnabled(LogLevel.Debug) && availableCommandsEvent.CommandsWithUnknownArguments is { Count: > 0 } commandsWithUnknownArguments)
                         logger.LogDebug("Player {Player} commands {Commands} have arguments of types the proxy doesn't know, which reach the player as the server sent them", @event.Player, string.Join(", ", commandsWithUnknownArguments.Select(command => command.Name)));
 
                     await events.ThrowAsync(availableCommandsEvent, cancellationToken);

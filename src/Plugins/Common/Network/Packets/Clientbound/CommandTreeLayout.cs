@@ -30,9 +30,13 @@ internal sealed class CommandTreeLayout
     // Properties longer than this aren't looked for; the longest seen in modpacks are class names well under it.
     private const int MaximumPropertiesLength = 4096;
 
-    // Each node is read about once on real trees, so this bounds only trees where no length fits.
+    // Each node and each length tried counts, and real trees take about one read per node, so this bounds only trees where no length fits.
     private const int NodeReadsPerNode = 64;
     private const int MinimumNodeReads = 100_000;
+
+    // Each unknown argument reads the rest of the tree one call deeper, so a tree with more of them is kept as the server wrote it before the
+    // stack runs out; modpacks have a few hundred.
+    private const int MaximumUnknownArguments = 2048;
 
     private readonly byte[] _tree;
     private readonly ProtocolVersion _protocolVersion;
@@ -67,10 +71,10 @@ internal sealed class CommandTreeLayout
     public static CommandNodeLayout[]? Find(byte[] tree, ProtocolVersion protocolVersion)
     {
         var layout = new CommandTreeLayout(tree, protocolVersion);
-        return layout.Read(0, layout._nodesStart) ? layout._nodes : null;
+        return layout.Read(0, layout._nodesStart, unknownArguments: 0) ? layout._nodes : null;
     }
 
-    private bool Read(int index, int position)
+    private bool Read(int index, int position, int unknownArguments)
     {
         var state = ((long)index << 32) | (uint)position;
 
@@ -79,7 +83,7 @@ internal sealed class CommandTreeLayout
 
         var orderRejections = _orderRejections;
 
-        if (ReadFrom(index, position))
+        if (ReadFrom(index, position, unknownArguments))
             return true;
 
         // Only the order check depends on how earlier nodes were read, so failures from it aren't remembered.
@@ -89,7 +93,7 @@ internal sealed class CommandTreeLayout
         return false;
     }
 
-    private bool ReadFrom(int index, int position)
+    private bool ReadFrom(int index, int position, int unknownArguments)
     {
         for (; index < _nodes.Length; index++)
         {
@@ -106,10 +110,16 @@ internal sealed class CommandTreeLayout
                 continue;
             }
 
+            if (unknownArguments == MaximumUnknownArguments)
+                return false;
+
             var hasSuggestionsType = (_tree[node.Start] & HasSuggestionsType) != 0;
 
             foreach (var length in CandidatePropertiesLengths(unknownPropertiesStart))
             {
+                if (++_nodeReads > _nodeReadsBudget)
+                    return false;
+
                 var propertiesEnd = unknownPropertiesStart + length;
                 var end = hasSuggestionsType ? ReadIdentifierEnd(propertiesEnd, allowEmptyPath: false) : propertiesEnd;
 
@@ -118,7 +128,7 @@ internal sealed class CommandTreeLayout
 
                 _nodes[index] = node with { End = end, PropertiesStart = unknownPropertiesStart, PropertiesEnd = propertiesEnd };
 
-                if (Read(index + 1, end))
+                if (Read(index + 1, end, unknownArguments + 1))
                     return true;
             }
 
