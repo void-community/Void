@@ -181,7 +181,19 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
 
     private async ValueTask<ConnectionResult> ConnectCoreAsync(IPlayer player, IServer server, bool anonymous = false, CancellationToken cancellationToken = default)
     {
-        return await ConnectCoreAsync(await player.GetChannelAsync(cancellationToken), player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+        var playerChannel = await player.GetChannelAsync(cancellationToken);
+
+        try
+        {
+            return await ConnectCoreAsync(playerChannel, player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+        }
+        catch (StreamClosedException) when (playerChannel.IsAlive)
+        {
+            // A server can close the connection of a player that joins it for a reason that passes, such as a race of its own, so it gets one
+            // more try before the player goes to another server
+            logger.LogInformation("Server {Server} closed the connection of {Player} player while it joined, so it joins once more", server, player);
+            return await ConnectCoreAsync(playerChannel, player, server, firstConnection: player.Server is null, anonymous, cancellationToken);
+        }
     }
 
     private async ValueTask<ConnectionResult> ConnectCoreAsync(INetworkChannel playerChannel, IPlayer player, IServer server, bool firstConnection, bool anonymous, CancellationToken cancellationToken = default)
