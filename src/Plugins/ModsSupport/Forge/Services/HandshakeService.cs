@@ -70,7 +70,8 @@ public class HandshakeService(IPlayerContext context) : IEventListener
     [Subscribe]
     public async ValueTask OnLegacyHandshakeMessage(MessageReceivedEvent @event, CancellationToken cancellationToken)
     {
-        if (@event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13 || @event.Message is not PluginMessagePacket packet)
+        // Only Minecraft players get plugin messages, and only legacy Forge handshakes on this channel
+        if (@event.Message is not PluginMessagePacket packet || @event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13)
             return;
 
         // The player's first handshake shows how to answer the handshakes of later servers for a player that can't take a reset
