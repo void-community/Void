@@ -49,14 +49,25 @@ jobs:
     if: ${{ inputs.release-please }}
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      void-version: ${{ steps.release.outputs.version }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_created: ${{ steps.release.outputs.release_created || steps.release-again.outputs.release_created }}
+      void-version: ${{ steps.release.outputs.version || steps.release-again.outputs.version }}
+      tag_name: ${{ steps.release.outputs.tag_name || steps.release-again.outputs.tag_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # release-please sometimes fails for reasons that pass, such as a GitHub API error, so it gets one more try.
       - name: Create Release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         id: release
+        continue-on-error: true
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: .github/RELEASE_PLEASE/config.json
+          manifest-file: .github/RELEASE_PLEASE/manifest.json
+
+      - name: Create Release again
+        if: ${{ steps.release.outcome == 'failure' }}
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        id: release-again
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: .github/RELEASE_PLEASE/config.json
