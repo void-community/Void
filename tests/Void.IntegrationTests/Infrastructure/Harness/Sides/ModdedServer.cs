@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,37 +22,6 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
     private const string ImageRelease = "2026.10.0";
 
     private static readonly ReleaseVersion LargerMemoryRelease = new(Major: 1, Minor: 17, Patch: 0);
-
-    private const string NetworkLoggingPath = "/opt/void/log4j2-network.xml";
-
-    // Forge servers for Minecraft 1.12 sometimes drop a player with "Can't serialize unregistered packet", which names neither the packet nor
-    // the connection's state. Minecraft logs both, and where the packet was sent from, only at debug level, which this lets through alone.
-    private const string NetworkLogging = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <Configuration status="warn">
-            <Appenders>
-                <Console name="Console" target="SYSTEM_OUT">
-                    <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level] [%logger{1}]: %msg%n%xEx"/>
-                </Console>
-            </Appenders>
-            <Loggers>
-                <Logger level="debug" name="net.minecraft.network.NettyPacketEncoder" additivity="false">
-                    <RegexFilter regex="OUT: \[[A-Z_]+:null\] .*" onMatch="ACCEPT" onMismatch="DENY"/>
-                    <AppenderRef ref="Console"/>
-                </Logger>
-                <Logger level="debug" name="net.minecraft.network.NetworkManager" additivity="false">
-                    <RegexFilter regex="(?s)Internal Exception: io\.netty\.handler\.codec\.EncoderException.*" onMatch="ACCEPT" onMismatch="DENY"/>
-                    <AppenderRef ref="Console"/>
-                </Logger>
-                <Root level="info">
-                    <filters>
-                        <MarkerFilter marker="NETWORK_PACKETS" onMatch="DENY" onMismatch="NEUTRAL"/>
-                    </filters>
-                    <AppenderRef ref="Console"/>
-                </Root>
-            </Loggers>
-        </Configuration>
-        """;
 
     /// <param name="loaderVersion">The loader build as the image selects it, such as beta for NeoForge's newest beta, or <see langword="null"/> for its newest stable build.</param>
     /// <param name="contentMod">A mod that must be installed on both sides, as the image takes Modrinth projects, such as storagedrawers, or refined-storage:alpha for its newest build of any kind. The image installs it with the mods it requires.</param>
@@ -96,12 +64,6 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         {
             builder = builder.WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath);
             jvmOptions = $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}";
-        }
-
-        if (loader is ModLoader.Forge && release is { Major: 1, Minor: 12 })
-        {
-            builder = builder.WithResourceMapping(Encoding.UTF8.GetBytes(NetworkLogging), NetworkLoggingPath);
-            jvmOptions = $"-Dlog4j.configurationFile={NetworkLoggingPath} {jvmOptions}";
         }
 
         builder = builder.WithEnvironment("JVM_OPTS", jvmOptions);
