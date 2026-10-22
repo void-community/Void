@@ -20,11 +20,11 @@ namespace Void.Proxy.Plugins.ModsSupport.Forge.Services;
 
 public class HandshakeService(IPlayerContext context) : IEventListener
 {
-    private const string LegacyHandshakeChannel = "FML|HS";
     private const byte LegacyServerHelloDiscriminator = 0;
     private static readonly byte[] LegacyHandshakeResetData = [0xFE, 0x00];
 
     private readonly ConcurrentDictionary<IPlayer, PlayerCachedMods> _playerMods = [];
+    private readonly LegacyHandshake _legacyHandshake = new();
     private bool _joinedServer;
 
     [Subscribe]
@@ -42,16 +42,17 @@ public class HandshakeService(IPlayerContext context) : IEventListener
     [Subscribe]
     public async ValueTask OnLegacyServerHello(MessageReceivedEvent @event, CancellationToken cancellationToken)
     {
-        if (@event is not { Direction: Direction.Clientbound, Message: PluginMessagePacket { Channel: LegacyHandshakeChannel } packet } || packet.Data.Span is not [LegacyServerHelloDiscriminator, ..])
+        if (@event is not { Direction: Direction.Clientbound, Message: PluginMessagePacket { Channel: LegacyHandshake.Channel } packet } || packet.Data.Span is not [LegacyServerHelloDiscriminator, ..])
             return;
 
         // A legacy Forge client that has finished a handshake ignores the next server's hello until it's reset. 1.7 clients don't mark
-        // themselves as Forge, and vanilla clients ignore the reset, so every player that has joined a server gets one.
-        if (!_joinedServer)
+        // themselves as Forge, and vanilla clients ignore the reset, so every player that has joined a server gets one, except those that
+        // can't take it, whose handshakes the proxy answers.
+        if (!_joinedServer || !_legacyHandshake.CanReset)
             return;
 
         context.Logger.LogDebug("Resetting legacy Forge handshake before {Server} starts it", @event.Link.Server);
-        await @event.Link.SendPacketAsync(Side.Client, new PluginMessagePacket { Channel = LegacyHandshakeChannel, Data = LegacyHandshakeResetData }, cancellationToken);
+        await @event.Link.SendPacketAsync(Side.Client, new PluginMessagePacket { Channel = LegacyHandshake.Channel, Data = LegacyHandshakeResetData }, cancellationToken);
     }
 
     [Subscribe]
@@ -62,8 +63,43 @@ public class HandshakeService(IPlayerContext context) : IEventListener
 
         // Until the next server's Join Game, the player's mods keep sending messages about the world it is leaving, which only the
         // handshake with the next server should get past
-        if (@event is { Direction: Direction.Serverbound, Link.IsAlive: false, Message: PluginMessagePacket { Channel: not (LegacyHandshakeChannel or "REGISTER" or "UNREGISTER") } })
+        if (@event is { Direction: Direction.Serverbound, Link.IsAlive: false, Message: PluginMessagePacket { Channel: not (LegacyHandshake.Channel or "REGISTER" or "UNREGISTER") } })
             @event.Cancel();
+    }
+
+    [Subscribe]
+    public async ValueTask OnLegacyHandshakeMessage(MessageReceivedEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13 || @event.Message is not PluginMessagePacket packet)
+            return;
+
+        // The player's first handshake shows how to answer the handshakes of later servers for a player that can't take a reset
+        if (!_joinedServer)
+        {
+            if (@event.Direction is Direction.Clientbound && packet.Channel is LegacyHandshake.Channel)
+                _legacyHandshake.RecordServerMessage(packet.Data.Span);
+            else if (@event.Direction is Direction.Serverbound && packet.Channel is LegacyHandshake.Channel or "REGISTER")
+                _legacyHandshake.RecordPlayerMessage(packet.Channel, packet.Data.Span);
+
+            return;
+        }
+
+        if (_legacyHandshake.CanReset || @event.Direction is not Direction.Clientbound || packet.Channel is not LegacyHandshake.Channel)
+            return;
+
+        // Such a player ignores every handshake after its first, so the proxy answers the server as the player answered the first one
+        @event.Cancel();
+
+        if (!_legacyHandshake.KeepsIds(packet.Data.Span))
+        {
+            // The player would show the server's blocks and items by the ids of the first server, so it goes back to the previous server
+            context.Logger.LogWarning("Player {Player} can't join {Server}, which numbers its blocks and items differently from the first server the player joined", @event.Player, @event.Link.Server);
+            @event.Link.ServerChannel.Close();
+            return;
+        }
+
+        foreach (var answer in _legacyHandshake.AnswersTo(packet.Data.Span))
+            await @event.Link.SendPacketAsync(Side.Server, answer, cancellationToken);
     }
 
     [Subscribe]
