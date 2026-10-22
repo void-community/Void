@@ -5,7 +5,7 @@ COPY . /demo
 
 RUN cd /demo/shared/controller && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/controller .
 
-FROM alpine@sha256:c6b073f8e9e58d881f6ffba6ebf3b9ebd60b9e7d6e8337018c0e68bb5c356873
+FROM alpine@sha256:71e9b7bae160ba167fa17414401b94cbcdaf3c32feeab9298bd794a2a0614c35
 
 RUN apk add --no-cache docker-cli docker-cli-buildx docker-cli-compose
 
