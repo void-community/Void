@@ -288,13 +288,11 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
 
             if (packet is IMinecraftBinaryMessage message)
             {
-                // TODO: What should we do with unknown messages that expect a response?
-                // Client is already in the Play state, so it cannot answer these messages
-                // Possible solution is to handle these packets in some "healing" service?
-                // Happens when Velocity Forwarding plugin is not loaded
-                await link.SendPacketAsync(message, cancellationToken);
-                throw new NotSupportedException("This packet is not processed by anyone and might be waiting for a response");
-                // continue;
+                // The server sent something no login reads, such as a packet of another phase after it broke down, which the player couldn't read
+                // either. The server is dropped as if it had closed the connection, so the player joins another server instead.
+                message.Dispose();
+                link.ServerChannel.Close();
+                throw new StreamClosedException();
             }
 
             var result = await HandleServerPacketAsync(link, packet, cancellationToken);

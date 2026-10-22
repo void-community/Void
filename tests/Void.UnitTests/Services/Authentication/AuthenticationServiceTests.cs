@@ -1,7 +1,10 @@
 using System;
+using System.IO;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Void.Minecraft.Network;
 using Void.Minecraft.Network.Messages.Packets;
 using Void.Minecraft.Players;
@@ -14,11 +17,13 @@ using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Network.Exceptions;
+using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Contexts;
 using Void.Proxy.Api.Plugins.Dependencies;
 using Void.Proxy.Api.Servers;
 using Void.Proxy.Plugins.Common.Events;
+using Void.Proxy.Plugins.Common.Network.Messages.Binary;
 using Void.Proxy.Plugins.Common.Services.Authentication;
 using Xunit;
 using static Void.UnitTests.Players.PlayerServiceDisconnectTests;
@@ -57,6 +62,59 @@ public class AuthenticationServiceTests
         Assert.True(channelClosed);
     }
 
+    [Fact]
+    public async Task ServerThatSendsWhatNoLoginReadsIsDroppedAsIfItClosed()
+    {
+        // A server that broke down during login can send a packet of another phase, which neither the proxy nor the player can read.
+        var serverClosed = false;
+        var server = StandIn.Create<INetworkChannel>((method, _) =>
+        {
+            if (method.Name is nameof(INetworkChannel.Close))
+                serverClosed = true;
+
+            return method.Name switch
+            {
+                "get_IsAlive" => !serverClosed,
+                nameof(INetworkChannel.ReadMessageAsync) => ValueTask.FromResult<INetworkMessage>(new MinecraftBinaryPacket(id: 0x1A, new MemoryStream([1, 2, 3]))),
+                _ => null
+            };
+        });
+
+        var forwardedToPlayer = false;
+        var playerChannel = StandIn.Create<INetworkChannel>((method, _) =>
+        {
+            if (method.Name is nameof(INetworkChannel.WriteMessageAsync))
+                forwardedToPlayer = true;
+
+            return method.Name is "get_IsAlive" ? true : null;
+        });
+
+        var events = StandIn.Create<IEventService>((_, _) => null);
+        var services = StandIn.Create<IServiceProvider>((_, arguments) => arguments[0] switch
+        {
+            Type type when type == typeof(IEventService) => events,
+            Type type when type == typeof(ILoggerFactory) => NullLoggerFactory.Instance,
+            _ => null
+        });
+
+        var context = StandIn.Create<IPlayerContext>((method, _) => method.Name is "get_Services" ? services : null);
+        var player = new MinecraftPlayer(new TcpClient(), context, remoteEndPoint: "127.0.0.1:50000", DateTimeOffset.UtcNow, ProtocolVersion.MINECRAFT_1_14_4) { Profile = new GameProfile("Notch") };
+        var link = StandIn.Create<ILink>((method, _) => method.Name switch
+        {
+            "get_Player" => player,
+            "get_PlayerChannel" => playerChannel,
+            "get_ServerChannel" => server,
+            _ => null
+        });
+
+        var service = new LoginStartOnlyAuthenticationService(events);
+
+        await Assert.ThrowsAsync<StreamClosedException>(() => service.AuthenticateServerAsync(link).AsTask());
+
+        Assert.True(serverClosed);
+        Assert.False(forwardedToPlayer);
+    }
+
     private sealed class LoginStartOnlyAuthenticationService(IEventService events) : AbstractAuthenticationService(
         events,
         StandIn.Create<IPlayerService>((_, _) => null),
@@ -67,6 +125,11 @@ public class AuthenticationServiceTests
         public ValueTask<AuthenticationResult> AuthenticateAsync(ILink link)
         {
             return AuthenticatePlayerAsync(link, CancellationToken.None);
+        }
+
+        public ValueTask<AuthenticationResult> AuthenticateServerAsync(ILink link)
+        {
+            return AuthenticateServerAsync(link, AuthenticationResult.Authenticated, new HandshakeBuildEventResult(NextState: 2), CancellationToken.None);
         }
 
         protected override bool IsSupportedVersion(ProtocolVersion version)
