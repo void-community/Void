@@ -46,20 +46,6 @@ public class NbtTagNumberAdapter
         throw new JsonException($"\"{Encoding.UTF8.GetString(reader.ValueSpan)}\" is not a valid NBT number.");
     }
 
-    /// <summary>Gets the single common type of all tags in a list.</summary>
-    /// <param name="tags">The tags to inspect.</param>
-    /// <returns>The common tag type.</returns>
-    /// <exception cref="JsonException">The list is empty or contains multiple tag types.</exception>
-    public static NbtTagType GetTagsType(List<NbtTag> tags)
-    {
-        var types = tags.Select(tag => tag.Type).Distinct();
-
-        if (types.Count() is 1)
-            return types.ElementAt(0);
-
-        throw new JsonException($"{nameof(NbtList)} cannot contain multiple NBT types. Present types: {string.Join(", ", types)}.");
-    }
-
     /// <summary>
     /// Promotes numeric tags in a list to the widest numeric <see cref="NbtTagType"/> already present in that list.
     /// </summary>

@@ -12,7 +12,8 @@ namespace Void.Minecraft.Nbt.Serializers.Json.Tags;
 /// <remarks>
 /// Numeric elements are widened to a common NBT numeric type during deserialization. An array whose elements have different types becomes a
 /// list of compounds, with each element that isn't a compound under an empty key, as Minecraft writes such lists since 1.20.3, so a text
-/// component's arguments can mix strings and components.
+/// component's arguments can mix strings and components. As in Minecraft, serialization writes any compound that holds only an empty key as its
+/// value, even in a list that held only compounds.
 /// </remarks>
 public class NbtListJsonConverter : JsonConverter<NbtList>
 {
