@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
@@ -71,6 +72,32 @@ public class PlayerServiceDisconnectTests
     }
 
     [Fact]
+    public async Task KickedPlayerThatIsStillJoiningIsReadUntilItLeaves()
+    {
+        // Closing a connection the player still sends to resets it, which the player may show instead of the reason it was kicked for.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        using var game = new TcpClient();
+        await game.ConnectAsync((IPEndPoint)listener.LocalEndpoint, cancellationToken);
+
+        var test = await Proxy.JoinAsync(client: await listener.AcceptTcpClientAsync(cancellationToken));
+        test.KickTimeout = 10_000;
+
+        var kick = test.Service.KickPlayerAsync(test.Player, "Server is full", cancellationToken).AsTask();
+        await game.GetStream().WriteAsync(new byte[64], cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+
+        Assert.False(kick.IsCompleted);
+
+        game.Close();
+        await kick.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        Assert.Same(test.Player, Assert.Single(test.Disconnections).Player);
+    }
+
+    [Fact]
     public async Task ShutdownStillCancelsTheMove()
     {
         var test = await Proxy.JoinAsync();
@@ -134,6 +161,10 @@ public class PlayerServiceDisconnectTests
                     {
                         case PlayerConnectingEvent:
                             return Activator.CreateInstance(method.ReturnType, Player);
+                        case PlayerKickEvent kick:
+                            // The player is told why it was kicked
+                            _events.Add(kick);
+                            return ValueTask.FromResult(true);
                         default:
                             _events.Add(arguments[0]!);
                             return null;
@@ -141,7 +172,8 @@ public class PlayerServiceDisconnectTests
                 }
             );
 
-            Service = new PlayerService(NullLogger<PlayerService>.Instance, StandIn.Create<IDependencyService>((_, _) => null), links, events, StandIn.Create<ISettings>((_, _) => null));
+            var settings = StandIn.Create<ISettings>((method, _) => method.Name is "get_KickTimeout" ? KickTimeout : null);
+            Service = new PlayerService(NullLogger<PlayerService>.Instance, StandIn.Create<IDependencyService>((_, _) => null), links, events, settings);
         }
 
         public PlayerService Service { get; }
@@ -150,7 +182,9 @@ public class PlayerServiceDisconnectTests
 
         public IPlayerContext Context { get; }
 
-        public TcpClient Client { get; } = new();
+        public TcpClient Client { get; private init; } = new();
+
+        public int KickTimeout { get; set; }
 
         public bool ChannelAlive { get; set; } = true;
 
@@ -162,9 +196,9 @@ public class PlayerServiceDisconnectTests
 
         public IEnumerable<PlayerKickEvent> Kicks => _events.OfType<PlayerKickEvent>();
 
-        public static async Task<Proxy> JoinAsync(bool hasChannel = true, Func<ValueTask<ConnectionResult>>? firstConnection = null, bool channelAlive = true)
+        public static async Task<Proxy> JoinAsync(bool hasChannel = true, Func<ValueTask<ConnectionResult>>? firstConnection = null, bool channelAlive = true, TcpClient? client = null)
         {
-            var proxy = new Proxy { ChannelAlive = channelAlive };
+            var proxy = new Proxy { ChannelAlive = channelAlive, Client = client ?? new TcpClient() };
             proxy.FirstConnection = firstConnection ?? proxy.FirstConnection;
 
             if (hasChannel)

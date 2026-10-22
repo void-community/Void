@@ -112,8 +112,10 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         {
             var kicked = await events.ThrowWithResultAsync(playerKickEvent, cancellationToken);
 
-            // Only a live link notices the player leaving, so a player that is still joining a server has nothing to wait for
-            if (kicked && links.TryGetLink(player, out var playingLink) && playingLink.IsAlive)
+            // Only a live link notices the player leaving, so a player that is still joining a server is read here until it leaves
+            var linked = links.TryGetLink(player, out var playingLink) && playingLink.IsAlive;
+
+            if (kicked && linked)
             {
                 var timestamp = Stopwatch.GetTimestamp();
 
@@ -134,6 +136,9 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
 
             channel.TryResume();
             await channel.FlushAsync(cancellationToken);
+
+            if (kicked && !linked)
+                await ReadUntilLeftAsync(player, cancellationToken);
         }
         catch (StreamException)
         {
@@ -220,6 +225,29 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
 
             dependencies.DisposePlayerScope(player.Context);
             await player.DisposeAsync();
+        }
+    }
+
+    // Closing a connection the player still sends to resets it, and the player may then show the reset instead of the reason it was kicked for
+    private async ValueTask ReadUntilLeftAsync(IPlayer player, CancellationToken cancellationToken)
+    {
+        if (!player.Client.Connected)
+            return;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(settings.KickTimeout);
+
+        try
+        {
+            await player.Client.GetStream().CopyToAsync(Stream.Null, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogTrace("Player {Player} didn't leave in {Timeout}ms after its kick", player, settings.KickTimeout);
+        }
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        {
+            // The player has already left.
         }
     }
 }
