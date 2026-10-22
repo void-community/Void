@@ -54,7 +54,10 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
                 // Paper for Minecraft 1.17 refuses any Java but 16, which the image has no variant for, while it runs on Java 17 too.
                 .WithEnvironment("JVM_OPTS", "-Dpaper.playerconnection.keepalive=120 -DPaper.IgnoreJavaVersion=true")
                 .WithEnvironment("PATCH_DEFINITIONS", "patches")
-                .WithEnvironment("DOWNLOAD_EXTRA_CONFIGS", "patches<https://raw.githubusercontent.com/caunt/ItzgTemplates/refs/heads/main/bukkit-yml.patch.json")
+                // The image starts from default configs, which it has no bukkit.yml for on some releases, such as 1.7.10 and 1.18.1. There an
+                // empty one takes its place, so the throttle can still be patched.
+                .WithEnvironment("DOWNLOAD_EXTRA_CONFIGS", "patches<https://raw.githubusercontent.com/caunt/ItzgTemplates/refs/heads/main/bukkit-yml.patch.json,"
+                    + "https://raw.githubusercontent.com/caunt/ItzgTemplates/refs/heads/main/bukkit.yml")
                 .WithEnvironment("CFG_BUKKIT_CONNECTION_THROTTLE", "-1");
         }
 
