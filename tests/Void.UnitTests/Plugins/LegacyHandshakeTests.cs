@@ -40,22 +40,47 @@ public class LegacyHandshakeTests
     [Theory]
     [InlineData(1, false)]
     [InlineData(2, true)]
-    public void OnlyPlayersOfFmlProtocol1CantReset(byte protocol, bool canReset)
+    public void OnlyPlayersOfFmlProtocol2CanReset(byte protocol, bool canReset)
     {
         var handshake = new LegacyHandshake();
         handshake.RecordServerMessage(ServerHello);
         handshake.RecordPlayerMessage(LegacyHandshake.Channel, [0x01, protocol]);
+        handshake.Complete();
 
         Assert.Equal(canReset, handshake.CanReset);
+        Assert.Equal(!canReset, handshake.AnswersForPlayer);
     }
 
     [Fact]
-    public void PlayersThatNeverSentAHelloCanReset()
+    public void PlayersThatNeverSentAHelloAreNeitherResetNorAnswered()
     {
+        // Such as a Forge 1.7.2 player whose first server runs no Forge handshake.
         var handshake = new LegacyHandshake();
         handshake.RecordServerMessage(ServerHello);
+        handshake.Complete();
 
-        Assert.True(handshake.CanReset);
+        Assert.False(handshake.CanReset);
+        Assert.False(handshake.IsComplete);
+        Assert.False(handshake.AnswersForPlayer);
+    }
+
+    [Fact]
+    public void RecordsOnlyTheHandshakeOfTheLastServerHello()
+    {
+        // The player's first server stopped once it sent its ids, and the player then joined another server.
+        var handshake = new LegacyHandshake();
+        handshake.RecordServerMessage(ServerHello);
+        handshake.RecordPlayerMessage(LegacyHandshake.Channel, ClientHello);
+        handshake.RecordServerMessage(ModIdData(("minecraft:stone", 2)));
+        handshake.RecordPlayerMessage(LegacyHandshake.Channel, Acknowledgement(3));
+
+        Record(handshake, ModIdData(("minecraft:stone", 1)));
+        handshake.Complete();
+
+        Assert.True(handshake.AnswersForPlayer);
+        Assert.Equal([Answer("REGISTER", Register), Answer(LegacyHandshake.Channel, ClientHello), Answer(LegacyHandshake.Channel, ModList)], Answers(handshake, ServerHello));
+        Assert.True(handshake.KeepsIds(ModIdData(("minecraft:stone", 1))));
+        Assert.False(handshake.KeepsIds(ModIdData(("minecraft:stone", 2))));
     }
 
     [Fact]
@@ -89,8 +114,11 @@ public class LegacyHandshakeTests
     // The first handshake of a Forge 1.7.2 player, as the proxy sees it.
     private static LegacyHandshake Record(byte[] modIdData)
     {
-        var handshake = new LegacyHandshake();
+        return Record(new LegacyHandshake(), modIdData);
+    }
 
+    private static LegacyHandshake Record(LegacyHandshake handshake, byte[] modIdData)
+    {
         handshake.RecordServerMessage(ServerHello);
         handshake.RecordPlayerMessage("REGISTER", Register);
         handshake.RecordPlayerMessage(LegacyHandshake.Channel, ClientHello);

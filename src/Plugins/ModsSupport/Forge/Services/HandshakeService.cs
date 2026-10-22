@@ -37,6 +37,7 @@ public class HandshakeService(IPlayerContext context) : IEventListener
     public void OnPlayerJoinedServer(PlayerJoinedServerEvent @event)
     {
         _joinedServer = true;
+        _legacyHandshake.Complete();
     }
 
     [Subscribe]
@@ -45,10 +46,9 @@ public class HandshakeService(IPlayerContext context) : IEventListener
         if (@event is not { Direction: Direction.Clientbound, Message: PluginMessagePacket { Channel: LegacyHandshake.Channel } packet } || packet.Data.Span is not [LegacyServerHelloDiscriminator, ..])
             return;
 
-        // A legacy Forge client that has finished a handshake ignores the next server's hello until it's reset. 1.7 clients don't mark
-        // themselves as Forge, and vanilla clients ignore the reset, so every player that has joined a server gets one, except those that
-        // can't take it, whose handshakes the proxy answers.
-        if (!_joinedServer || !_legacyHandshake.CanReset)
+        // A legacy Forge client that has started a handshake ignores the next server's hello until it's reset. 1.7 clients don't mark
+        // themselves as Forge, so players get one once their hello shows they can take it, and the proxy answers handshakes for the rest.
+        if (!_legacyHandshake.CanReset)
             return;
 
         context.Logger.LogDebug("Resetting legacy Forge handshake before {Server} starts it", @event.Link.Server);
@@ -58,7 +58,8 @@ public class HandshakeService(IPlayerContext context) : IEventListener
     [Subscribe]
     public void OnLegacyPluginMessageWhileSwitching(MessageReceivedEvent @event)
     {
-        if (!_joinedServer || @event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13)
+        // Only Minecraft players get plugin messages
+        if (@event.Message is not PluginMessagePacket || !_joinedServer || @event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13)
             return;
 
         // Until the next server's Join Game, the player's mods keep sending messages about the world it is leaving, which only the
@@ -74,8 +75,9 @@ public class HandshakeService(IPlayerContext context) : IEventListener
         if (@event.Message is not PluginMessagePacket packet || @event.Player.ProtocolVersion >= ProtocolVersion.MINECRAFT_1_13)
             return;
 
-        // The player's first handshake shows how to answer the handshakes of later servers for a player that can't take a reset
-        if (!_joinedServer)
+        // The handshake the player first joins a server through shows how to answer the handshakes of later servers for a player that can't
+        // take a reset
+        if (!_legacyHandshake.IsComplete)
         {
             if (@event.Direction is Direction.Clientbound && packet.Channel is LegacyHandshake.Channel)
                 _legacyHandshake.RecordServerMessage(packet.Data.Span);
@@ -85,7 +87,7 @@ public class HandshakeService(IPlayerContext context) : IEventListener
             return;
         }
 
-        if (_legacyHandshake.CanReset || @event.Direction is not Direction.Clientbound || packet.Channel is not LegacyHandshake.Channel)
+        if (!_legacyHandshake.AnswersForPlayer || @event.Direction is not Direction.Clientbound || packet.Channel is not LegacyHandshake.Channel)
             return;
 
         // Such a player ignores every handshake after its first, so the proxy answers the server as the player answered the first one
