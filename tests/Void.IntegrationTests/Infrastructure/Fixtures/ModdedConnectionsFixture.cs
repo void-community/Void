@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DotNet.Testcontainers.Containers;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
@@ -144,9 +145,10 @@ public abstract class ModdedConnectionsFixture(ModLoader loader, ProtocolVersion
             {
                 Console.WriteLine($"[Void.IntegrationTests] {contentMod} has no {loader} build for Minecraft {release}");
             }
-            catch (IntegrationTestException exception)
+            catch (IntegrationTestException exception) when (exception.InnerException is ContainerNotRunningException)
             {
-                // A mod can declare nothing wrong and still crash its server, such as one built against another loader build.
+                // A mod can declare nothing wrong and still crash its server, such as one built against another loader build. Anything else
+                // that stops a server, such as a timeout, fails with its cause rather than trying the next mod.
                 failures.Add(exception);
                 Console.WriteLine($"[Void.IntegrationTests] {loader} servers for Minecraft {release} with {contentMod} didn't start");
             }

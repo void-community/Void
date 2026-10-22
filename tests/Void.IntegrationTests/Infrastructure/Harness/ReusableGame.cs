@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
 using Void.Minecraft.Network;
+using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Harness;
 
@@ -24,6 +25,8 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
 
     // Forge for Minecraft 1.7.2 can't start on the client's Java without LegacyForgePatcher.
     private IReadOnlyList<Uri> JvmAgents => setup is { } moddedSetup && LegacyForgePatcher.AppliesTo(moddedSetup.Loader, moddedSetup.MinecraftRelease) ? [LegacyForgePatcher.Url] : [];
+
+    private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion}";
 
     public void ClearLogs()
     {
@@ -50,17 +53,17 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
 
         _client ??= await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
 
-        // A game that crashed, or that its client stopped, since the last test launches again.
-        if (_game is { } game && !await IsPlayableAsync(game, cancellationToken))
-            await StopGameAsync();
-
         try
         {
+            // A game that crashed, or that its client stopped, since the last test launches again.
+            if (_game is { } game && !await IsPlayableAsync(game, cancellationToken))
+                await StopGameAsync();
+
             _game ??= await LaunchGameAsync(_client, cancellationToken);
         }
         catch
         {
-            // The next test starts another client rather than one that failed to launch its game.
+            // The next test starts another client rather than one that failed to launch its game or stopped answering.
             await ReleaseAsync();
             throw;
         }
@@ -68,7 +71,8 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         return _session = new GameSession(this, _game, testName, [this, .. logSides]);
     }
 
-    // A Forge game can corrupt its own config on its first launch and hang, so a game that failed to launch gets one more try in a new client.
+    // A game can fail to launch once and then launch fine, such as a Forge game that corrupts its own config on its first launch and hangs, so
+    // a game that failed to launch gets one more try in a new client. The test still shows why the first launch failed.
     private async Task<PortableMinecraftClient.Game> LaunchGameAsync(PortableMinecraftClient client, CancellationToken cancellationToken)
     {
         try
@@ -77,11 +81,20 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         }
         catch (IntegrationTestException exception)
         {
-            await PortableMinecraftClient.Game.LogAsync($"Launching the game again in a new client: {exception.Message}", CancellationToken.None);
+            var warning = $"{GameName} failed to launch, so it launched again in a new client: {exception.Message}";
+            TestContext.Current.AddWarning(warning);
+            await PortableMinecraftClient.Game.LogAsync(warning, CancellationToken.None);
             await ReleaseAsync();
 
-            _client = await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
-            return await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
+            try
+            {
+                _client = await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
+                return await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
+            }
+            catch (Exception retryException)
+            {
+                throw new IntegrationTestException($"{GameName} failed to launch again: {retryException.Message}\nIts first launch failed: {exception.Message}", retryException);
+            }
         }
     }
 
