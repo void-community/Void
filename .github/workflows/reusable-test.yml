@@ -92,8 +92,7 @@ jobs:
     env:
       DOTNET_TEST_RUNNER: Microsoft.Testing.Platform
       # Clients play the image pulled below, instead of pulling it again for every client.
-      # TEMPORARY: the client image of the last green run, to compare Forge 1.12.x races against newer images.
-      VOID_CLIENT_IMAGE: ghcr.io/void-community/portable-minecraft-client@sha256:acf38abf4bd6771b4b0d48949e7673184c28de5d0447e642ee18b6704b658a51
+      VOID_CLIENT_IMAGE: ghcr.io/void-community/portable-minecraft-client:offline
     needs: test-matrix
     strategy:
       fail-fast: false
