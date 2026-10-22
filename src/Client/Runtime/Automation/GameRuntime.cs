@@ -299,6 +299,8 @@ internal sealed partial class GameRuntime
         CancellationToken cancellationToken
     )
     {
+        IReadOnlyList<string> agentArguments = await CreateJvmAgentArgumentsAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
         using (await _windowOperations.LockAsync(cancellationToken))
         {
             _windowSessionId = diagnostics?.CurrentSessionId;
@@ -310,8 +312,8 @@ internal sealed partial class GameRuntime
             await (diagnostics?.RegisterSecretAsync(EncodeAgentArgument(tracker.Token), cancellationToken) ?? Task.CompletedTask).ConfigureAwait(continueOnCapturedContext: false);
 
             string?[] launchArguments = memoryMb is { } value
-                ? [.. arguments.Append(CreateMaximumHeapArgument(value)).Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>()]
-                : [.. arguments.Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Cast<string?>()];
+                ? [.. arguments.Append(CreateMaximumHeapArgument(value)).Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Concat(agentArguments).Cast<string?>()]
+                : [.. arguments.Append($"--jvm-arg=-javaagent:{PortableMinecraftAgentPath}={CreateAgentArguments(tracker)}").Concat(agentArguments).Cast<string?>()];
 
             long? initialOutOfMemoryKillCount = CgroupMemory.ReadOutOfMemoryKillCount();
             Process process;

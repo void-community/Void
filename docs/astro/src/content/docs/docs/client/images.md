@@ -105,6 +105,18 @@ When the container runs out of memory, the system kills the game, and the client
 
 On Kubernetes 1.28 or later with cgroup v2, the kubelet kills every process in the container instead, so the client restarts without reporting it. The pod's `status.containerStatuses[].lastState.terminated.reason` is then `OOMKilled`, and with a volume at the [**diagnostics directory**](/docs/client/api/#retention), such as an `emptyDir`, the game's diagnostic session survives and says it was cut off. Setting `singleProcessOOMKill: true` in the kubelet configuration (Kubernetes 1.32 or later) kills only the game, so the client can report it.
 
+## JVM Agents
+
+`JVM_AGENTS` loads native JVM agents into every game the client starts, as Java's `-agentpath` option does. It is a comma or newline separated list, as in itzg's image: text after `#` is a comment, and blank entries are ignored. Each agent is an absolute path in the container or an HTTP or HTTPS URL. The client downloads a URL at the first start that needs it and reuses the download for later starts. For example, [**LegacyForgePatcher**](https://github.com/void-community/LegacyForgePatcher) lets Forge for Minecraft 1.7.2 start on Java 8u20 and later:
+
+```bash
+docker run --name void-client --rm -d -p 8080:80 \
+  --env JVM_AGENTS=https://github.com/void-community/LegacyForgePatcher/releases/latest/download/legacyforgepatcher-linux-x64.so \
+  ghcr.io/void-community/portable-minecraft-client:latest
+```
+
+An agent that doesn't exist or can't be downloaded fails the start with `client.install.failed`, or with `client.install.unavailable` when its server stayed unavailable after retries. Either way, the failure's stage is `agent`.
+
 ## CurseForge Configuration
 
 Starting a CurseForge modpack requires `CURSEFORGE_API_KEY`:
