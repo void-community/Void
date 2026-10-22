@@ -82,10 +82,10 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
                     if (player.Context.Channel is not { IsAlive: true })
                         return result;
                 }
-                catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+                catch (StreamException exception) when (player.Context.Channel is { IsAlive: true })
                 {
                     // Try next server, unless the player is the one who left
-                    logger.LogWarning("Player {Player} could not join server {Server}", player, server);
+                    logger.LogWarning(exception, "Player {Player} could not join server {Server}", player, server);
                 }
             }
 
@@ -170,10 +170,10 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
             {
                 return await ConnectCoreAsync(player, server, anonymous, cancellationToken);
             }
-            catch (StreamException) when (player.Context.Channel is { IsAlive: true })
+            catch (StreamException exception) when (player.Context.Channel is { IsAlive: true })
             {
                 // Otherwise the player would be left without any server
-                logger.LogWarning("Player {Player} could not join server {Server}", player, server);
+                logger.LogWarning(exception, "Player {Player} could not join server {Server}", player, server);
                 return ConnectionResult.NotConnected;
             }
         }
