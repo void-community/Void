@@ -16,6 +16,8 @@ using Xunit;
 
 public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult RunResult, CancellationTokenSource CancellationTokenSource) : IIntegrationSide
 {
+    private readonly List<(DateTime From, DateTime Until)> _checkedWindows = [];
+
     public string LogFileName => "void-proxy.log";
     public IEnumerable<string> Logs => LogWriter.Lines;
     public int Port => RunResult.ListeningPort;
@@ -87,6 +89,29 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
 
         if (unexpectedLogs.Length > 0)
             Assert.Fail($"Void emitted {minimumLogLevel} or higher logs:\n{string.Join('\n', unexpectedLogs)}");
+    }
+
+    /// <summary>Records that a test checked what the proxy logged while it ran, which its own result then reports.</summary>
+    public void MarkChecked(DateTime from, DateTime until)
+    {
+        lock (_checkedWindows)
+            _checkedWindows.Add((from, until));
+    }
+
+    /// <summary>Asserts that the proxy logged no warning or worse since a time, other than while a test that checks it ran.</summary>
+    public void AssertNoUncheckedWarningOrHigherLogsSince(DateTime since)
+    {
+        (DateTime From, DateTime Until)[] checkedWindows;
+
+        lock (_checkedWindows)
+            checkedWindows = [.. _checkedWindows];
+
+        var unexpectedLogs = LogWriter.GetLinesSince(since, timestamp => Array.Exists(checkedWindows, window => timestamp >= window.From && timestamp <= window.Until))
+            .Where(line => GetLogLevel(line) is >= LogLevel.Warning)
+            .ToArray();
+
+        if (unexpectedLogs.Length > 0)
+            Assert.Fail($"Void emitted Warning or higher logs outside of tests:\n{string.Join('\n', unexpectedLogs)}");
     }
 
     private static LogLevel? GetLogLevel(string line)

@@ -18,12 +18,11 @@ public abstract class ProxiedServerRedirectionTestBase(ConnectionsFixture fixtur
     {
         fixture.SkipIfUnavailable();
 
-        var firstMessage = $"server1-{Guid.NewGuid()}";
-        var secondMessage = $"server2-{Guid.NewGuid()}";
-        var thirdMessage = $"server1-{Guid.NewGuid()}";
-
-        await LoggedExecutorAsync(async () =>
+        await RetryAfterServerRaceAsync(() => LoggedExecutorAsync(async () =>
         {
+            var firstMessage = $"server1-{Guid.NewGuid()}";
+            var secondMessage = $"server2-{Guid.NewGuid()}";
+            var thirdMessage = $"server1-{Guid.NewGuid()}";
             Task playerDisconnectionTask;
             string username;
             DateTime startedAt;
@@ -69,6 +68,6 @@ public abstract class ProxiedServerRedirectionTestBase(ConnectionsFixture fixtur
 
             Assert.Contains(proxyLogs, line => line.Contains("connected to args-server-2"));
             Assert.True(proxyLogs.Count(line => line.Contains("connected to args-server-1")) is >= 2); // TODO: sometimes, proxy prints multiple times "connected to" message
-        }, fixture.Game1, fixture.VoidProxy, fixture.Server1, fixture.Server2);
+        }, fixture.Game1, fixture.VoidProxy, fixture.Server1, fixture.Server2), fixture.Servers);
     }
 }

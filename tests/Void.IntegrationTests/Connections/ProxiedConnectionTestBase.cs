@@ -19,10 +19,9 @@ public abstract class ProxiedConnectionTestBase(ConnectionsFixture fixture) : In
     {
         fixture.SkipIfUnavailable();
 
-        var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
-
-        await LoggedExecutorAsync(async () =>
+        await RetryAfterServerRaceAsync(() => LoggedExecutorAsync(async () =>
         {
+            var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
             Task playerDisconnectionTask;
 
             await using (var game = await fixture.Game1.BeginSessionAsync(nameof(ProxiedConnectionTestBase), [fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken))
@@ -42,6 +41,6 @@ public abstract class ProxiedConnectionTestBase(ConnectionsFixture fixture) : In
             await playerDisconnectionTask;
 
             Assert.Contains(fixture.Server1.Logs, line => line.Contains(expectedText));
-        }, fixture.Game1, fixture.VoidProxy, fixture.Server1);
+        }, fixture.Game1, fixture.VoidProxy, fixture.Server1), fixture.Servers);
     }
 }

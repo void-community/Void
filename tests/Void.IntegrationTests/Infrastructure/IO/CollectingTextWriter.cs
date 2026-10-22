@@ -33,6 +33,12 @@ public class CollectingTextWriter : TextWriter
         return [.. _lines.Where(line => line.Timestamp >= since).Select(line => line.Text)];
     }
 
+    public IReadOnlyList<string> GetLinesSince(DateTime since, Func<DateTime, bool> isExcluded)
+    {
+        using var _ = _lock.EnterScope();
+        return [.. _lines.Where(line => line.Timestamp >= since && !isExcluded(line.Timestamp)).Select(line => line.Text)];
+    }
+
     public async Task<string> WaitForLineAsync(Func<string, bool> predicate, CancellationToken cancellationToken = default)
     {
         var completionSource = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
