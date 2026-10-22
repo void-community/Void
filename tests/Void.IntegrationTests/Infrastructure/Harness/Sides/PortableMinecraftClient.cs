@@ -47,8 +47,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         return await Container.ReadLogsAsync(since, cancellationToken);
     }
 
-    /// <param name="jvmAgents">The native JVM agents every game of the client loads, which the client downloads.</param>
-    public static async Task<PortableMinecraftClient> CreateAsync(IReadOnlyList<Uri> jvmAgents, CancellationToken cancellationToken = default)
+    /// <param name="javaAgents">The Java agents every game of the client loads, which the client downloads.</param>
+    public static async Task<PortableMinecraftClient> CreateAsync(IReadOnlyList<Uri> javaAgents, CancellationToken cancellationToken = default)
     {
         var image = Environment.GetEnvironmentVariable("VOID_CLIENT_IMAGE");
         var builder = new ContainerBuilder(image ?? "ghcr.io/void-community/portable-minecraft-client:offline")
@@ -63,8 +63,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         if (OperatingSystem.IsLinux())
             builder = builder.WithExtraHost(DockerHost, DockerHostGateway);
 
-        if (jvmAgents.Count > 0)
-            builder = builder.WithEnvironment("JVM_AGENTS", string.Join(',', jvmAgents.Select(agent => agent.AbsoluteUri)));
+        if (javaAgents.Count > 0)
+            builder = builder.WithEnvironment("JAVA_AGENTS", string.Join(',', javaAgents.Select(agent => agent.AbsoluteUri)));
 
         var container = builder.Build();
 

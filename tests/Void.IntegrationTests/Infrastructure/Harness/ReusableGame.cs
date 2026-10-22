@@ -24,7 +24,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public IEnumerable<string> Logs => _client?.Logs ?? [];
 
     // Forge for Minecraft 1.7.2 can't start on the client's Java without LegacyForgePatcher.
-    private IReadOnlyList<Uri> JvmAgents => setup is { } moddedSetup && LegacyForgePatcher.AppliesTo(moddedSetup.Loader, moddedSetup.MinecraftRelease) ? [LegacyForgePatcher.Url] : [];
+    private IReadOnlyList<Uri> JavaAgents => setup is { } moddedSetup && LegacyForgePatcher.AppliesTo(moddedSetup.Loader, moddedSetup.MinecraftRelease) ? [LegacyForgePatcher.Url] : [];
 
     private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion.FirstRelease}";
 
@@ -46,7 +46,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         if (_session is not null)
             throw new InvalidOperationException($"{testName} can't play a game another test is still playing");
 
-        _client ??= await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
+        _client ??= await PortableMinecraftClient.CreateAsync(JavaAgents, cancellationToken);
 
         try
         {
@@ -87,7 +87,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
 
             try
             {
-                _client = await PortableMinecraftClient.CreateAsync(JvmAgents, retryCancellation.Token);
+                _client = await PortableMinecraftClient.CreateAsync(JavaAgents, retryCancellation.Token);
                 return await _client.LaunchGameAsync(protocolVersion, setup, retryCancellation.Token);
             }
             catch (Exception retryException)

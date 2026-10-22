@@ -63,7 +63,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         if (LegacyForgePatcher.AppliesTo(loader, release))
         {
             builder = builder.WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath);
-            jvmOptions = $"-agentpath:{LegacyForgePatcher.ServerPath} {jvmOptions}";
+            jvmOptions = $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}";
         }
 
         builder = builder.WithEnvironment("JVM_OPTS", jvmOptions);

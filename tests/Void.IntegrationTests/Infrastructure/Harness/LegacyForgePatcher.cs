@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
 using Void.Minecraft;
 
 namespace Void.IntegrationTests.Infrastructure.Harness;
@@ -11,12 +10,12 @@ namespace Void.IntegrationTests.Infrastructure.Harness;
 internal static class LegacyForgePatcher
 {
     /// <summary>Where servers keep the agent.</summary>
-    public const string ServerPath = "/opt/legacyforgepatcher/legacyforgepatcher.so";
+    public const string ServerPath = "/opt/legacyforgepatcher/legacyforgepatcher.jar";
 
     private static readonly ReleaseVersion PatchedRelease = new(Major: 1, Minor: 7, Patch: 2);
 
-    /// <summary>The agent of the latest release, for the architecture of the Docker host, which runs the tests too.</summary>
-    public static Uri Url { get; } = new($"https://github.com/void-community/LegacyForgePatcher/releases/latest/download/legacyforgepatcher-{(RuntimeInformation.OSArchitecture is Architecture.Arm64 ? "linux-arm64" : "linux-x64")}.so");
+    /// <summary>The Java agent of the latest release, a jar that loads with <c>-javaagent</c> on every architecture.</summary>
+    public static Uri Url { get; } = new("https://github.com/void-community/LegacyForgePatcher/releases/latest/download/legacyforgepatcher.jar");
 
     public static bool AppliesTo(ModLoader loader, ReleaseVersion release)
     {
