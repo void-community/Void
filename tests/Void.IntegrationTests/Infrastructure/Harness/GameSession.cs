@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Extensions;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
 
@@ -90,7 +91,7 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
 
     /// <summary>
     /// Ends the test by leaving the server the game is on, and waits until that server has seen the player leave, so the next test can join
-    /// as the same player.
+    /// as the same player. A game that is no longer on that server, such as one that crashed or was kicked, fails the test.
     /// </summary>
     /// <param name="joinedServer">The server the player is on, behind the proxy when it joined through one, or <see langword="null"/> when it joined none.</param>
     public async Task EndAsync(MinecraftServer? joinedServer, CancellationToken cancellationToken = default)
@@ -102,6 +103,10 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
 
             if (joinedServer is not null)
                 await joinedServer.Container.ExpectTextAsync($"{Username} left the game", disconnectedAt, cancellationToken);
+        }
+        else if (joinedServer is not null)
+        {
+            throw new IntegrationTestException($"Game of {Username} was no longer on its server when the test ended. Client diagnostics:\n{await game.ReadDiagnosticsAsync()}");
         }
 
         await MakeStepAsync("disconnected", cancellationToken);

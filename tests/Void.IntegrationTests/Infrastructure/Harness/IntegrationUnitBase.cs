@@ -33,11 +33,6 @@ public class IntegrationUnitBase
             Console.WriteLine(await CollectLogsAsync(voidLogWindowStartedAt, sides));
             throw new IntegrationTestException($"Test execution failed: {exception.Message}", exception);
         }
-        finally
-        {
-            foreach (var voidProxy in voidProxies)
-                voidProxy.ClearLogs();
-        }
     }
 
     // Sides outlive the test, so only what they logged while it ran belongs to its failure.

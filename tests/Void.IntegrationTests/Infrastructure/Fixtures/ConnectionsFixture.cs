@@ -78,7 +78,7 @@ public abstract class ConnectionsFixture(ProtocolVersion protocolVersion) : IAsy
                     await voidProxy.LogWriter.WriteLineAsync($"Stopping {nameof(VoidProxy)} because of {nameof(ConnectionsFixture)} disposal");
                     await voidProxy.DisposeAsync();
 
-                    // Tests check the proxy's logs while they play, so this sees what it logged between and after them.
+                    // Each test checks what the proxy logged while it played, and this also covers what it logged between and after them.
                     voidProxy.AssertNoWarningOrHigherLogsSince(_voidLogWindowStartedAt);
                 }
             }
