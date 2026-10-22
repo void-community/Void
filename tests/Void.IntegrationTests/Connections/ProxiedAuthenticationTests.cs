@@ -20,7 +20,7 @@ public class ProxiedAuthenticationTests : IntegrationUnitBase
     public async Task PaperServerFullKickIsRelayedToPlayerAsync()
     {
         await using var client = new ReusableGame(TestProtocolVersion, setup: null);
-        await using var paperServer = await PaperServer.CreateAsync("server-full.log", Timeouts.SetupTimeoutToken, maximumPlayers: 0);
+        await using var paperServer = await PaperServer.CreateAsync(TestProtocolVersion.FirstRelease, vanilla: false, "server-full.log", Timeouts.SetupTimeoutToken, maximumPlayers: 0);
         var voidProxy = await VoidProxy.CreateAsync(
             Path.Combine(Path.GetTempPath(), nameof(ProxiedAuthenticationTests), Path.GetRandomFileName()),
             $"localhost:{paperServer.Port}",

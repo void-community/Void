@@ -2,13 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
+using Void.Minecraft;
 using Void.Minecraft.Network;
 
 namespace Void.IntegrationTests.Infrastructure.Fixtures;
 
-/// <summary>Plays a protocol version on Paper servers, which play every protocol version through ViaVersion.</summary>
+/// <summary>
+/// Plays a protocol version on servers of its own: Paper's for the newest release of the version that Paper built, or vanilla Minecraft's for
+/// the newest release when Paper built none, so that every version is played on the server it was made for.
+/// </summary>
 public abstract class PaperConnectionsFixture(ProtocolVersion protocolVersion) : ConnectionsFixture(protocolVersion)
 {
     private MinecraftServer[]? _servers;
@@ -21,7 +26,27 @@ public abstract class PaperConnectionsFixture(ProtocolVersion protocolVersion) :
 
     protected override async Task StartServersAsync()
     {
-        Task<PaperServer>[] serverTasks = [PaperServer.CreateAsync("server-1.log", Timeouts.SetupTimeoutToken), PaperServer.CreateAsync("server-2.log", Timeouts.SetupTimeoutToken)];
+        var releases = ProtocolVersion.Releases.OrderDescending().ToArray();
+
+        foreach (var release in releases)
+        {
+            try
+            {
+                await StartServersAsync(release, vanilla: false);
+                return;
+            }
+            catch (IntegrationTestException exception) when (exception.Message.Contains(PaperServer.MissingBuildMessage, StringComparison.Ordinal))
+            {
+                Console.WriteLine($"[Void.IntegrationTests] Paper has no build for Minecraft {release}");
+            }
+        }
+
+        await StartServersAsync(releases[0], vanilla: true);
+    }
+
+    private async Task StartServersAsync(ReleaseVersion release, bool vanilla)
+    {
+        Task<PaperServer>[] serverTasks = [PaperServer.CreateAsync(release, vanilla, "server-1.log", Timeouts.SetupTimeoutToken), PaperServer.CreateAsync(release, vanilla, "server-2.log", Timeouts.SetupTimeoutToken)];
 
         try
         {
