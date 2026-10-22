@@ -9,6 +9,7 @@ namespace Void.Client.UnitTests;
 public sealed class JvmAgentTests : IDisposable
 {
     private const string AgentUrl = "https://github.test/agent/releases/latest/download/agent-linux-x64.so";
+    private const string JavaAgentUrl = "https://github.test/agent/releases/latest/download/agent.jar";
 
     private readonly string _directory = Directory.CreateTempSubdirectory(prefix: "void-agents-").FullName;
 
@@ -67,6 +68,26 @@ public sealed class JvmAgentTests : IDisposable
         Assert.NotEqual(first, second);
         Assert.Equal("first.test", await File.ReadAllTextAsync(first, TestContext.Current.CancellationToken));
         Assert.Equal("second.test", await File.ReadAllTextAsync(second, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task NativeAgentsAndJavaAgentsLoadWithTheirOwnOptions()
+    {
+        string nativeAgent = Path.Join(_directory, "agent.so");
+        string javaAgent = Path.Join(_directory, "agent.jar");
+        await File.WriteAllTextAsync(nativeAgent, "native", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(javaAgent, "java", TestContext.Current.CancellationToken);
+
+        Dictionary<string, string> variables = new() { ["JVM_AGENTS"] = nativeAgent, ["JAVA_AGENTS"] = $"{javaAgent},{JavaAgentUrl}" };
+        StubHandler handler = new(_ => Content("downloaded"));
+        using HttpClient httpClient = new(handler);
+
+        IReadOnlyList<string> arguments = await GameRuntime.CreateJvmAgentArgumentsAsync(httpClient, variables.GetValueOrDefault, CacheDirectory, TimeSpan.Zero, TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, arguments.Count);
+        Assert.Equal($"--jvm-arg=-agentpath:{nativeAgent}", arguments[0]);
+        Assert.Equal($"--jvm-arg=-javaagent:{javaAgent}", arguments[1]);
+        Assert.StartsWith($"--jvm-arg=-javaagent:{CacheDirectory}", arguments[2]);
     }
 
     [Fact]

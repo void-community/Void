@@ -11,6 +11,36 @@ internal sealed partial class GameRuntime
 {
     private static readonly string JvmAgentCacheDirectory = Path.Combine(Path.GetTempPath(), path2: "void-client", path3: "jvm-agents");
 
+    // Native agents load as Java's -agentpath option loads them, and Java agents, which are jars, as its -javaagent option does.
+    private static readonly (string Variable, string Option)[] JvmAgentVariables = [("JVM_AGENTS", "-agentpath"), ("JAVA_AGENTS", "-javaagent")];
+
+    /// <summary>
+    /// Finds or downloads the native JVM agents that <c>JVM_AGENTS</c> lists and the Java agents that <c>JAVA_AGENTS</c> lists, and returns the
+    /// arguments that load them into the game.
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> CreateJvmAgentArgumentsAsync(
+        HttpClient httpClient,
+        Func<string, string?> getVariable,
+        string cacheDirectory,
+        TimeSpan retryDelay,
+        CancellationToken cancellationToken
+    )
+    {
+        List<string> arguments = [];
+
+        foreach ((string variable, string option) in JvmAgentVariables)
+        {
+            foreach (string agent in SplitList(getVariable(variable)))
+            {
+                string path = await ResolveJvmAgentAsync(httpClient, agent, cacheDirectory, retryDelay, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
+                arguments.Add($"--jvm-arg={option}:{path}");
+            }
+        }
+
+        return arguments;
+    }
+
     /// <summary>
     /// Returns the path of a JVM agent in the container: an absolute path as it is, or an HTTP or HTTPS URL downloaded into the cache directory,
     /// unless an earlier start already downloaded it.
@@ -52,26 +82,16 @@ internal sealed partial class GameRuntime
         return [.. (value ?? string.Empty).Split([',', '\n']).Select(static entry => entry.Split(separator: '#')[0].Trim()).Where(static entry => entry.Length > 0)];
     }
 
-    /// <summary>Finds or downloads the native JVM agents that <c>JVM_AGENTS</c> lists, and returns the arguments that load them into the game.</summary>
     private static async Task<IReadOnlyList<string>> CreateJvmAgentArgumentsAsync(CancellationToken cancellationToken)
     {
-        IReadOnlyList<string> agents = SplitList(Environment.GetEnvironmentVariable(variable: "JVM_AGENTS"));
+        bool hasAgents = Array.Exists(JvmAgentVariables, static agentVariable => SplitList(Environment.GetEnvironmentVariable(agentVariable.Variable)).Count > 0);
 
-        if (agents.Count is 0)
+        if (!hasAgents)
             return [];
 
         using HttpClient httpClient = CreateUpstreamHttpClient();
 
-        List<string> arguments = [];
-
-        foreach (string agent in agents)
-        {
-            string path = await ResolveJvmAgentAsync(httpClient, agent, JvmAgentCacheDirectory, UpstreamRetryDelay, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-
-            arguments.Add($"--jvm-arg=-agentpath:{path}");
-        }
-
-        return arguments;
+        return await CreateJvmAgentArgumentsAsync(httpClient, Environment.GetEnvironmentVariable, JvmAgentCacheDirectory, UpstreamRetryDelay, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 
     private static GameClientException JvmAgentFailure(string message, Exception? innerException = null, bool unavailable = false)

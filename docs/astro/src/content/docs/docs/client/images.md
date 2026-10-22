@@ -107,11 +107,11 @@ On Kubernetes 1.28 or later with cgroup v2, the kubelet kills every process in t
 
 ## JVM Agents
 
-`JVM_AGENTS` loads native JVM agents into every game the client starts, as Java's `-agentpath` option does. It is a comma or newline separated list, as in itzg's image: text after `#` is a comment, and blank entries are ignored. Each agent is an absolute path in the container or an HTTP or HTTPS URL. The client downloads a URL at the first start that needs it and reuses the download for later starts. For example, [**LegacyForgePatcher**](https://github.com/void-community/LegacyForgePatcher) lets Forge for Minecraft 1.7.2 start on Java 8u20 and later:
+`JAVA_AGENTS` loads Java agents, which are jars, into every game the client starts, as Java's `-javaagent` option does. `JVM_AGENTS` loads native JVM agents, as Java's `-agentpath` option does. Each is a comma or newline separated list, as in itzg's image: text after `#` is a comment, and blank entries are ignored. Each agent is an absolute path in the container or an HTTP or HTTPS URL. The client downloads a URL at the first start that needs it and reuses the download for later starts. For example, [**LegacyForgePatcher**](https://github.com/void-community/LegacyForgePatcher) lets Forge for Minecraft 1.7.2 start on Java 8u20 and later:
 
 ```bash
 docker run --name void-client --rm -d -p 8080:80 \
-  --env JVM_AGENTS=https://github.com/void-community/LegacyForgePatcher/releases/latest/download/legacyforgepatcher-linux-x64.so \
+  --env JAVA_AGENTS=https://github.com/void-community/LegacyForgePatcher/releases/latest/download/legacyforgepatcher.jar \
   ghcr.io/void-community/portable-minecraft-client:latest
 ```
 
