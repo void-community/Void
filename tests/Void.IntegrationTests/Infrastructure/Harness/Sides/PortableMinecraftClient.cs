@@ -94,6 +94,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
     public record Game(PortableMinecraftClient Client, ProtocolVersion ProtocolVersion, GameSetup? Setup, string Username, DateTime LaunchedAt)
     {
         private const string ModsDirectory = "/root/.minecraft/mods/";
+        private const string JvmOutputPath = "/root/jvm-output.log";
+        private const string ThreadDumpHeader = "Full thread dump";
         private const string WorldAbsentMessage = "The game has no player in a world";
         private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(5);
 
@@ -334,7 +336,12 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 "--fetch-exclude-all",
                 "--username",
                 Username,
-                "--jvm-arg=-Djava.awt.headless=false"
+                "--jvm-arg=-Djava.awt.headless=false",
+                // The launcher cuts the game's output short at the first lock address of a thread dump, so the JVM also writes its own output
+                // into a file.
+                "--jvm-arg=-XX:+UnlockDiagnosticVMOptions",
+                "--jvm-arg=-XX:+LogVMOutput",
+                $"--jvm-arg=-XX:LogFile={JvmOutputPath}"
             };
 
             // The client's game jar of Forge for Minecraft 1.7.2 carries no Mojang signature, which its FML refuses to launch unless told to ignore it.
@@ -367,7 +374,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             }
         }
 
-        // A JVM writes where each of its threads is to its output on SIGQUIT, which the client logs, so a game that hangs shows where.
+        // A JVM writes where each of its threads is, and which locks they hold, to its output on SIGQUIT, so a game that hangs shows where.
         private async Task TryDumpThreadsAsync()
         {
             try
@@ -376,7 +383,24 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
                 // The JVM writes the dump on a thread of its own after the signal.
                 await Task.Delay(TimeSpan.FromSeconds(2));
-                await LogAsync($"Dumped {GameName} threads into its logs", CancellationToken.None);
+
+                // The file starts with the game's command line, which holds the client agent's token, so only the dump is kept.
+                var output = Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken));
+                var dumpStart = output.LastIndexOf(ThreadDumpHeader, StringComparison.Ordinal);
+
+                if (dumpStart < 0)
+                {
+                    await LogAsync($"{GameName} wrote no thread dump", CancellationToken.None);
+                    return;
+                }
+
+                // The file is XML, which escapes the dump's text and puts lines of its own in between.
+                var dump = WebUtility.HtmlDecode(string.Join('\n', output[dumpStart..].Split('\n').Where(line => !line.StartsWith('<'))));
+                var dumpPath = Path.Combine(WorkingDirectory, "threads.log");
+
+                Directory.CreateDirectory(WorkingDirectory);
+                await File.WriteAllTextAsync(dumpPath, dump, Timeouts.StepTimeoutToken);
+                await LogAsync($"Dumped {GameName} threads into {dumpPath}", CancellationToken.None);
             }
             catch (Exception exception)
             {
