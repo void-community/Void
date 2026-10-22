@@ -60,7 +60,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
+      # Installing .NET sometimes fails for reasons that pass, such as a dropped download or a crashed installer, so it gets one more try.
       - name: Setup .NET
+        id: setup-dotnet
+        continue-on-error: true
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+          dotnet-quality: ${{ inputs.dotnet-version == 'latest' && 'preview' || '' }}
+
+      - name: Setup .NET again
+        if: ${{ steps.setup-dotnet.outcome == 'failure' }}
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
