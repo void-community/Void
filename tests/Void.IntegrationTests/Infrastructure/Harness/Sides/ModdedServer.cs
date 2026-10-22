@@ -92,7 +92,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         // Forge logs each step of its login handshake only at debug level, which shows where a failed login stopped
         var jvmOptions = "-Dforge.logging.markers=FMLHANDSHAKE -Dforge.logging.console.level=debug";
 
-        if (LegacyForgePatcher.AppliesTo(loader, release))
+        if (LegacyForgePatcher.AppliesToServer(loader, release))
         {
             builder = builder.WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath);
             jvmOptions = $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}";
