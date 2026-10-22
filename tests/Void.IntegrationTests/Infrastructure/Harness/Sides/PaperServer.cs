@@ -14,6 +14,9 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
     /// <summary>What the image reports, before the server starts, for a release that Paper has no build for.</summary>
     public const string MissingBuildMessage = "Invalid parameter provided for 'install-paper' command";
 
+    /// <summary>What Paper's early builds for Minecraft 1.12 report when they start, since they download Mojang's server from an address Mojang no longer serves.</summary>
+    public const string UnusableBuildMessage = "Error downloading original jar";
+
     /// <param name="vanilla">Whether to start vanilla Minecraft's server rather than Paper's.</param>
     public static async Task<PaperServer> CreateAsync(ReleaseVersion release, bool vanilla, string logFileName, CancellationToken cancellationToken = default, int? maximumPlayers = null)
     {
@@ -46,7 +49,8 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
         if (!vanilla)
         {
             builder = builder
-                .WithEnvironment("JVM_OPTS", "-Dpaper.playerconnection.keepalive=120")
+                // Paper for Minecraft 1.17 refuses any Java but 16, which the image has no variant for, while it runs on Java 17 too.
+                .WithEnvironment("JVM_OPTS", "-Dpaper.playerconnection.keepalive=120 -DPaper.IgnoreJavaVersion=true")
                 .WithEnvironment("PATCH_DEFINITIONS", "patches")
                 .WithEnvironment("DOWNLOAD_EXTRA_CONFIGS", "patches<https://raw.githubusercontent.com/caunt/ItzgTemplates/refs/heads/main/bukkit-yml.patch.json")
                 .WithEnvironment("CFG_BUKKIT_CONNECTION_THROTTLE", "-1");

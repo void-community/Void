@@ -35,9 +35,9 @@ public abstract class PaperConnectionsFixture(ProtocolVersion protocolVersion) :
                 await StartServersAsync(release, vanilla: false);
                 return;
             }
-            catch (IntegrationTestException exception) when (exception.Message.Contains(PaperServer.MissingBuildMessage, StringComparison.Ordinal))
+            catch (IntegrationTestException exception) when (exception.Message.Contains(PaperServer.MissingBuildMessage, StringComparison.Ordinal) || exception.Message.Contains(PaperServer.UnusableBuildMessage, StringComparison.Ordinal))
             {
-                Console.WriteLine($"[Void.IntegrationTests] Paper has no build for Minecraft {release}");
+                Console.WriteLine($"[Void.IntegrationTests] Paper has no build for Minecraft {release} that starts");
             }
         }
 
