@@ -31,8 +31,6 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
     private DateTime _readLogsSince = DateTime.UtcNow;
 
-    public static IEnumerable<ProtocolVersion> SupportedVersions => ProtocolVersion.Range(ProtocolVersion.Oldest, ProtocolVersion.Latest);
-
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => ReadLogsAsync(_readLogsSince).GetAwaiter().GetResult();
 

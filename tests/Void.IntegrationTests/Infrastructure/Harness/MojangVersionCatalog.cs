@@ -67,17 +67,19 @@ internal static class MojangVersionCatalog
     /// <summary>Reads a file from Mojang, retrying failures that are likely to pass.</summary>
     private static async Task<string> GetStringAsync(Uri uri)
     {
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt < MaximumAttempts; attempt++)
         {
             try
             {
                 return await HttpClient.GetStringAsync(uri);
             }
-            catch (Exception exception) when (attempt < MaximumAttempts && IsTransient(exception))
+            catch (Exception exception) when (IsTransient(exception))
             {
                 await Task.Delay(TimeSpan.FromSeconds(2 << (attempt - 1)));
             }
         }
+
+        return await HttpClient.GetStringAsync(uri);
     }
 
     private static bool IsTransient(Exception exception)

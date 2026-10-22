@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Extensions;
@@ -18,9 +17,6 @@ public abstract class DirectConnectionTestBase(ConnectionsFixture fixture) : Int
 
     protected async Task RunAsync()
     {
-        if (!PortableMinecraftClient.SupportedVersions.Contains(fixture.ProtocolVersion))
-            Assert.Skip($"Protocol version {fixture.ProtocolVersion} is not supported by the client, skipping test.");
-
         fixture.SkipIfUnavailable();
 
         var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";

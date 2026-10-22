@@ -21,9 +21,6 @@ public abstract class ProxiedPlayerTestBase(ConnectionsFixture fixture) : Integr
 
     protected async Task RunAsync()
     {
-        if (!PortableMinecraftClient.SupportedVersions.Contains(fixture.ProtocolVersion))
-            Assert.Skip($"Protocol version {fixture.ProtocolVersion} is not supported by the clients, skipping test.");
-
         fixture.SkipIfUnavailable();
 
         try

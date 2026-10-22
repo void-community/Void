@@ -16,8 +16,8 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
     private const string FixturesNamespace = "global::Void.IntegrationTests.Infrastructure.Fixtures";
 
     /// <summary>
-    /// The servers every family runs against: Paper for vanilla clients, whose shared servers play every protocol version, and the mod loaders
-    /// the proxy supports, which run servers of the collection's own version.
+    /// The servers every family runs against: Paper for vanilla clients, whose servers play every protocol version, and the mod loaders the
+    /// proxy supports, whose servers run the collection's own version. Each collection starts its own servers.
     /// </summary>
     private static readonly ServerType[] ServerTypes =
     [

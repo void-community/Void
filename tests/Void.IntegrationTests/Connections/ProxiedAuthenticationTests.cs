@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Extensions;
@@ -20,9 +19,6 @@ public class ProxiedAuthenticationTests : IntegrationUnitBase
     [Fact]
     public async Task PaperServerFullKickIsRelayedToPlayerAsync()
     {
-        if (!PortableMinecraftClient.SupportedVersions.Contains(TestProtocolVersion))
-            Assert.Skip($"Protocol version {TestProtocolVersion} is not supported by the client, skipping test.");
-
         await using var client = new ReusableGame(TestProtocolVersion, setup: null);
         await using var paperServer = await PaperServer.CreateAsync("server-full.log", Timeouts.SetupTimeoutToken, maximumPlayers: 0);
         var voidProxy = await VoidProxy.CreateAsync(

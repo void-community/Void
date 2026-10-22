@@ -16,9 +16,6 @@ public abstract class ProxiedServerRedirectionTestBase(ConnectionsFixture fixtur
 
     protected async Task RunAsync()
     {
-        if (!PortableMinecraftClient.SupportedVersions.Contains(fixture.ProtocolVersion))
-            Assert.Skip($"Protocol version {fixture.ProtocolVersion} is not supported by the client, skipping test.");
-
         fixture.SkipIfUnavailable();
 
         var firstMessage = $"server1-{Guid.NewGuid()}";
