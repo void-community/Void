@@ -54,7 +54,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         return await Container.ReadLogsAsync(since, cancellationToken);
     }
 
-    public static async Task<PortableMinecraftClient> CreateAsync(CancellationToken cancellationToken = default)
+    /// <param name="jvmAgents">The native JVM agents every game of the client loads, which the client downloads.</param>
+    public static async Task<PortableMinecraftClient> CreateAsync(IReadOnlyList<Uri> jvmAgents, CancellationToken cancellationToken = default)
     {
         var image = Environment.GetEnvironmentVariable("VOID_CLIENT_IMAGE");
         var builder = new ContainerBuilder(image ?? "ghcr.io/void-community/portable-minecraft-client:offline")
@@ -68,6 +69,9 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
         if (OperatingSystem.IsLinux())
             builder = builder.WithExtraHost(DockerHost, DockerHostGateway);
+
+        if (jvmAgents.Count > 0)
+            builder = builder.WithEnvironment("JVM_AGENTS", string.Join(',', jvmAgents.Select(agent => agent.AbsoluteUri)));
 
         var container = builder.Build();
 
@@ -329,13 +333,9 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 "--jvm-arg=-Djava.awt.headless=false"
             };
 
+            // The client's game jar of Forge for Minecraft 1.7.2 carries no Mojang signature, which its FML refuses to launch unless told to ignore it.
             if (Setup is { } forgeSetup && LegacyForgePatcher.AppliesTo(forgeSetup.Loader, forgeSetup.MinecraftRelease))
-            {
-                await Container.CopyAsync(await LegacyForgePatcher.ReadAsync(cancellationToken), LegacyForgePatcher.ContainerPath, ct: cancellationToken);
-
-                // The client's game jar of that Forge carries no Mojang signature, which its FML refuses to launch unless told to ignore it.
-                arguments = [.. arguments, $"--jvm-arg={LegacyForgePatcher.JvmArgument}", "--jvm-arg=-Dfml.ignoreInvalidMinecraftCertificates=true"];
-            }
+                arguments = [.. arguments, "--jvm-arg=-Dfml.ignoreInvalidMinecraftCertificates=true"];
 
             // The client starts a loader build as the servers report it, with its Minecraft version.
             using var response = Setup switch

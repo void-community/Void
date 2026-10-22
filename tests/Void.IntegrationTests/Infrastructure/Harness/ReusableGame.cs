@@ -22,6 +22,9 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => _client?.Logs ?? [];
 
+    // Forge for Minecraft 1.7.2 can't start on the client's Java without LegacyForgePatcher.
+    private IReadOnlyList<Uri> JvmAgents => setup is { } moddedSetup && LegacyForgePatcher.AppliesTo(moddedSetup.Loader, moddedSetup.MinecraftRelease) ? [LegacyForgePatcher.Url] : [];
+
     public void ClearLogs()
     {
         _client?.ClearLogs();
@@ -45,7 +48,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         if (_session is not null)
             throw new InvalidOperationException($"{testName} can't play a game another test is still playing");
 
-        _client ??= await PortableMinecraftClient.CreateAsync(cancellationToken);
+        _client ??= await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
 
         // A game that crashed, or that its client stopped, since the last test launches again.
         if (_game is { } game && !await IsPlayableAsync(game, cancellationToken))
@@ -77,7 +80,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
             await PortableMinecraftClient.Game.LogAsync($"Launching the game again in a new client: {exception.Message}", CancellationToken.None);
             await ReleaseAsync();
 
-            _client = await PortableMinecraftClient.CreateAsync(cancellationToken);
+            _client = await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
             return await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
         }
     }

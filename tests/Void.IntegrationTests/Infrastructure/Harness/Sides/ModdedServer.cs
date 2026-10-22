@@ -60,8 +60,8 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         if (LegacyForgePatcher.AppliesTo(loader, release))
         {
             builder = builder
-                .WithResourceMapping(await LegacyForgePatcher.ReadAsync(cancellationToken), LegacyForgePatcher.ContainerPath)
-                .WithEnvironment("JVM_OPTS", LegacyForgePatcher.JvmArgument);
+                .WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath)
+                .WithEnvironment("JVM_OPTS", $"-agentpath:{LegacyForgePatcher.ServerPath}");
         }
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
