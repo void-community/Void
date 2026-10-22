@@ -303,8 +303,16 @@ public final class GameAutomationController {
                 return;
             }
 
+            // A proxy that moves the game to another server leaves it without a player until that server's world loads, so the chat
+            // waits for the world while the game is still on a server.
             if (Tracker.activePlayer(client) == null) {
-                complete(operation, disconnected("world.absent", "The game has no player in a world to chat from"));
+                if (!JoinedConnection.hasJoined())
+                    complete(operation, disconnected("world.absent", "The game has no player in a world to chat from"));
+                else if (operation.worldAbsentSince == 0L)
+                    operation.worldAbsentSince = System.currentTimeMillis();
+                else if (System.currentTimeMillis() - operation.worldAbsentSince >= WorldDeadlineMilliseconds)
+                    complete(operation, disconnected("world.absent", "The game has had no player in a world to chat from for "
+                        + WorldDeadlineMilliseconds / 60000L + " minutes"));
                 return;
             }
 
@@ -1233,6 +1241,7 @@ public final class GameAutomationController {
         volatile String rejection;
         volatile long closedAt;
         volatile long unroutableSince;
+        volatile long worldAbsentSince;
         volatile Object routeScreen;
 
         PendingOperation(String requestId, String kind, String value) {

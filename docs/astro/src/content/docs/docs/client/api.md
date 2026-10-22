@@ -312,7 +312,7 @@ Returns `409 Conflict` when the game isn't connected or another operation is run
 
 ## Sending Chat
 
-The game must be `connected`. Messages that start with `/` are sent as commands.
+The game must be `connected`. Messages that start with `/` are sent as commands. While a proxy moves the game to another server, the message waits until the game is in that server's world.
 
 ```bash
 curl --fail-with-body \
@@ -322,7 +322,7 @@ curl --fail-with-body \
   http://localhost:8080/api/game/send-chat
 ```
 
-Returns `409 Conflict` when the game isn't in a world, for example while a proxy switches servers.
+Returns `409 Conflict` when the game has left its server, or still isn't in a world 5 minutes later.
 
 ## Players
 
