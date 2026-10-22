@@ -81,10 +81,14 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
             await PortableMinecraftClient.Game.LogAsync(warning, CancellationToken.None);
             await ReleaseAsync();
 
+            // A launch that hung may have used up most of the caller's time, so the second launch gets as long as a first one
+            using var retryCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            retryCancellation.CancelAfter(Timeouts.SetupTimeout);
+
             try
             {
-                _client = await PortableMinecraftClient.CreateAsync(JvmAgents, cancellationToken);
-                return await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
+                _client = await PortableMinecraftClient.CreateAsync(JvmAgents, retryCancellation.Token);
+                return await _client.LaunchGameAsync(protocolVersion, setup, retryCancellation.Token);
             }
             catch (Exception retryException)
             {
