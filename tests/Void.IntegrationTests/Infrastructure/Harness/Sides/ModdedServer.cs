@@ -57,12 +57,16 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         if (loaderVersion is not null)
             builder = builder.WithEnvironment(loader is ModLoader.Forge ? "FORGE_VERSION" : "NEOFORGE_VERSION", loaderVersion);
 
+        // Forge logs each step of its login handshake only at debug level, which shows where a failed login stopped
+        var jvmOptions = "-Dforge.logging.markers=FMLHANDSHAKE -Dforge.logging.console.level=debug";
+
         if (LegacyForgePatcher.AppliesTo(loader, release))
         {
-            builder = builder
-                .WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath)
-                .WithEnvironment("JVM_OPTS", $"-agentpath:{LegacyForgePatcher.ServerPath}");
+            builder = builder.WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath);
+            jvmOptions = $"-agentpath:{LegacyForgePatcher.ServerPath} {jvmOptions}";
         }
+
+        builder = builder.WithEnvironment("JVM_OPTS", jvmOptions);
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
     }
