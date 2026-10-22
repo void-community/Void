@@ -96,7 +96,6 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         private const string ModsDirectory = "/root/.minecraft/mods/";
         private const string JvmOutputPath = "/root/jvm-output.log";
         private const string ThreadDumpHeader = "Full thread dump";
-        private const string WorldAbsentMessage = "The game has no player in a world";
         private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(5);
 
         private ApiProblemDetails? _lastPlayersProblem;
@@ -226,18 +225,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         {
             await LogAsync($"Sending chat input: {text}", cancellationToken);
 
-            var response = await HttpClient.PostAsJsonAsync("/api/game/send-chat", new { message = text }, cancellationToken);
-
-            // A game answers a server it just joined before it has loaded the world its player is in, so it chats once it has
-            while (response.StatusCode is HttpStatusCode.Conflict && (await ReadProblemDetailsAsync(response, cancellationToken))?.Detail?.Contains(WorldAbsentMessage, StringComparison.Ordinal) is true)
-            {
-                response.Dispose();
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
-                response = await HttpClient.PostAsJsonAsync("/api/game/send-chat", new { message = text }, cancellationToken);
-            }
-
-            using (response)
-                await EnsureSuccessAsync(response, $"Sending chat input: {text}", cancellationToken);
+            using var response = await HttpClient.PostAsJsonAsync("/api/game/send-chat", new { message = text }, cancellationToken);
+            await EnsureSuccessAsync(response, $"Sending chat input: {text}", cancellationToken);
         }
 
         public async Task WaitForLogsSilenceAsync(TimeSpan duration, CancellationToken cancellationToken = default)
