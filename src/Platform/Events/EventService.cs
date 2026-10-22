@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using DryIoc;
@@ -10,21 +11,12 @@ namespace Void.Proxy.Events;
 
 public partial class EventService(ILogger<EventService> logger, IContainer container) : IEventService
 {
-    private readonly List<Entry> _entries = [];
     private readonly ConcurrentDictionary<Func<IEvent, bool>, TaskCompletionSource> _waiters = [];
 
-    public IEnumerable<IEventListener> Listeners
-    {
-        get
-        {
-            var listeners = new IEventListener[_entries.Count];
+    // Events read the entries on every thread without waiting, so registering and unregistering publish a new array rather than change it
+    private ImmutableArray<Entry> _entries = [];
 
-            for (var i = 0; i < _entries.Count; i++)
-                listeners[i] = _entries[i].Listener;
-
-            return listeners;
-        }
-    }
+    public IEnumerable<IEventListener> Listeners => [.. _entries.Select(entry => entry.Listener)];
 
     public async ValueTask ThrowAsync<T>(CancellationToken cancellationToken = default) where T : IEvent, new()
     {
@@ -51,51 +43,10 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
         var invoked = new HashSet<InvokedListenerMethod>(InvokedListenerMethodComparer.Instance);
         var firstParameterTypeCache = new Dictionary<MethodInfo, Type>(ReferenceEqualityComparer.Instance);
 
-        // Entries list is often modified during invocation (listeners being registered/unregistered), so we iterate until no more candidates are found
-        while (true)
+        // Listeners are often registered while the event is invoked, such as by the listeners it invokes, so the entries are read again until
+        // they have no more candidates
+        while (FindInvocationCandidates(_entries) is { Count: > 0 } invocationCandidates)
         {
-            var invocationCandidates = new List<InvocationCandidate>();
-
-            var entriesCountSnapshot = _entries.Count;
-            for (var entryIndex = 0; entryIndex < entriesCountSnapshot; entryIndex++)
-            {
-                // TODO: This list can be modified while we scan it, so we can't safely index it until we build a stable snapshot
-                // Consider making copies not on ThrowAsync, but on Register/Unregister instead, rebuild whole List on each modification
-                var entry = (uint)entryIndex < (uint)_entries.Count ? _entries[entryIndex] : null;
-
-                if (entry is null)
-                    continue;
-
-                var invokedKey = new InvokedListenerMethod(entry.Listener, entry.Method);
-
-                if (invoked.Contains(invokedKey))
-                    continue;
-
-                if (!firstParameterTypeCache.TryGetValue(entry.Method, out var firstParameterType))
-                {
-                    firstParameterType = entry.Method.GetParameters()[0].ParameterType;
-                    firstParameterTypeCache.Add(entry.Method, firstParameterType);
-                }
-
-                if (!eventType.IsAssignableTo(firstParameterType))
-                    continue;
-
-                invoked.Add(invokedKey);
-
-                invocationCandidates.Add(new InvocationCandidate(
-                    entry.Order,
-                    entryIndex,
-                    new WeakEntry(
-                        new WeakReference<IEventListener>(entry.Listener),
-                        new WeakReference<MethodInfo>(entry.Method),
-                        entry.Order,
-                        entry.BypassScopedFilter,
-                        entry.CancellationToken)));
-            }
-
-            if (invocationCandidates.Count is 0)
-                break;
-
             invocationCandidates.Sort(static (left, right) =>
             {
                 var orderComparison = left.Order.CompareTo(right.Order);
@@ -124,6 +75,45 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
 
             if (_waiters.TryRemove(condition, out _))
                 taskCompletionSource.SetResult();
+        }
+
+        return;
+
+        List<InvocationCandidate> FindInvocationCandidates(ImmutableArray<Entry> entries)
+        {
+            var candidates = new List<InvocationCandidate>();
+
+            for (var entryIndex = 0; entryIndex < entries.Length; entryIndex++)
+            {
+                var entry = entries[entryIndex];
+                var invokedKey = new InvokedListenerMethod(entry.Listener, entry.Method);
+
+                if (invoked.Contains(invokedKey))
+                    continue;
+
+                if (!firstParameterTypeCache.TryGetValue(entry.Method, out var firstParameterType))
+                {
+                    firstParameterType = entry.Method.GetParameters()[0].ParameterType;
+                    firstParameterTypeCache.Add(entry.Method, firstParameterType);
+                }
+
+                if (!eventType.IsAssignableTo(firstParameterType))
+                    continue;
+
+                invoked.Add(invokedKey);
+
+                candidates.Add(new InvocationCandidate(
+                    entry.Order,
+                    entryIndex,
+                    new WeakEntry(
+                        new WeakReference<IEventListener>(entry.Listener),
+                        new WeakReference<MethodInfo>(entry.Method),
+                        entry.Order,
+                        entry.BypassScopedFilter,
+                        entry.CancellationToken)));
+            }
+
+            return candidates;
         }
     }
 
@@ -157,40 +147,41 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
 
     public void RegisterListeners(CancellationToken cancellationToken = default, params IEventListener[] listeners)
     {
-        lock (this)
+        foreach (var listener in listeners)
         {
-            foreach (var listener in listeners)
+            if (IsRegistered(_entries, listener))
+                continue;
+
+            LogRegisteringTypeEventListener(listener);
+
+            var listenerEntries = new List<Entry>();
+            var type = listener.GetType();
+            while (type != null)
             {
-                if (_entries.Any(entry => entry.Listener == listener))
-                    continue;
+                var methods = type
+                    .GetMethods(
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic |
+                        BindingFlags.Static |
+                        BindingFlags.Instance |
+                        BindingFlags.DeclaredOnly)
+                    .Where(method => Attribute.IsDefined(method, typeof(SubscribeAttribute)));
 
-                LogRegisteringTypeEventListener(listener);
-
-                var type = listener.GetType();
-                while (type != null)
+                foreach (var method in methods)
                 {
-                    var methods = type
-                        .GetMethods(
-                            BindingFlags.Public |
-                            BindingFlags.NonPublic |
-                            BindingFlags.Static |
-                            BindingFlags.Instance |
-                            BindingFlags.DeclaredOnly)
-                        .Where(method => Attribute.IsDefined(method, typeof(SubscribeAttribute)));
+                    LogRegisteringTypeEventListenerMethodName(listener, method.Name);
+                    SubscribeAttribute.SanityChecks(method);
 
-                    foreach (var method in methods)
-                    {
-                        LogRegisteringTypeEventListenerMethodName(listener, method.Name);
-                        SubscribeAttribute.SanityChecks(method);
-
-                        var attribute = method.GetCustomAttribute<SubscribeAttribute>()
-                                        ?? throw new InvalidOperationException($"Method {method.Name} does not define {nameof(SubscribeAttribute)}.");
-                        _entries.Add(new Entry(listener, method, attribute.Order, attribute.BypassScopedFilter, cancellationToken));
-                    }
-
-                    type = type.BaseType;
+                    var attribute = method.GetCustomAttribute<SubscribeAttribute>()
+                                    ?? throw new InvalidOperationException($"Method {method.Name} does not define {nameof(SubscribeAttribute)}.");
+                    listenerEntries.Add(new Entry(listener, method, attribute.Order, attribute.BypassScopedFilter, cancellationToken));
                 }
+
+                type = type.BaseType;
             }
+
+            // Another thread may have registered the same listener meanwhile, whose entries then stay the only ones
+            ImmutableInterlocked.Update(ref _entries, static (entries, registration) => IsRegistered(entries, registration.Listener) ? entries : entries.AddRange(registration.Entries), (Listener: listener, Entries: listenerEntries));
         }
     }
 
@@ -202,26 +193,15 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
 
     public void UnregisterListeners(params IEventListener[] listeners)
     {
-        lock (this)
-        {
-            foreach (var listener in listeners)
-            {
-                LogUnregisteringListenerTypeEventListener(listener);
+        foreach (var listener in listeners)
+            LogUnregisteringListenerTypeEventListener(listener);
 
-                for (var i = _entries.Count - 1; i >= 0; i--)
-                {
-                    if (_entries.Count <= i)
-                        continue;
+        ImmutableInterlocked.Update(ref _entries, static (entries, removedListeners) => entries.RemoveAll(entry => Array.Exists(removedListeners, listener => listener == entry.Listener)), listeners);
+    }
 
-                    var entry = _entries[i];
-
-                    if (entry.Listener != listener)
-                        continue;
-
-                    _entries.Remove(entry);
-                }
-            }
-        }
+    private static bool IsRegistered(ImmutableArray<Entry> entries, IEventListener listener)
+    {
+        return entries.Any(entry => entry.Listener == listener);
     }
 
     private async ValueTask ThrowOnceAsync<T>(WeakEntry[] entries, T @event, CancellationToken cancellationToken = default) where T : IEvent
