@@ -139,7 +139,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
         foreach (var plugin in _plugins.Values)
         {
-            if (!plugin.Scopes.Remove(playerStableHashCode, out var resolverContext))
+            if (!plugin.Scopes.TryRemove(playerStableHashCode, out var resolverContext))
                 continue;
 
             foreach (var scope in resolverContext.CurrentScope)
@@ -407,5 +407,6 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         }
     }
 
-    private record PluginContainer(IServiceProvider Root, Dictionary<int, IResolverContext> Scopes);
+    // Players join and leave on threads of their own, each opening or disposing its scopes.
+    private record PluginContainer(IServiceProvider Root, ConcurrentDictionary<int, IResolverContext> Scopes);
 }
