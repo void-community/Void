@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Docker.DotNet;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Void.IntegrationTests.Infrastructure.Exceptions;
@@ -103,6 +104,9 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             // Files Testcontainers downloads into the container, such as LegacyForgePatcher
             HttpRequestException { StatusCode: null or HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError } => true,
             TaskCanceledException { InnerException: TimeoutException } => true,
+
+            // An image pull that a registry failed, such as with a 502, leaves no image to create the container from.
+            DockerImageNotFoundException => true,
             _ => false
         };
     }
