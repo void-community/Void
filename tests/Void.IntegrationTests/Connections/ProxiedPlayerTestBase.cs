@@ -25,7 +25,7 @@ public abstract class ProxiedPlayerTestBase(ConnectionsFixture fixture) : Integr
 
         try
         {
-            await RetryAfterServerRaceAsync(() => LoggedExecutorAsync(RunAttemptAsync, fixture.Game1, fixture.Game2, fixture.VoidProxy, fixture.Server1), fixture.Servers);
+            await LoggedExecutorAsync(RunAttemptAsync, fixture.Game1, fixture.Game2, fixture.VoidProxy, fixture.Server1);
         }
         finally
         {

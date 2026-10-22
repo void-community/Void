@@ -19,10 +19,10 @@ public abstract class DirectConnectionTestBase(ConnectionsFixture fixture) : Int
     {
         fixture.SkipIfUnavailable();
 
-        await RetryAfterServerRaceAsync(() => LoggedExecutorAsync(async () =>
-        {
-            var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
+        var expectedText = $"{ExpectedText} test #{Random.Shared.Next()}";
 
+        await LoggedExecutorAsync(async () =>
+        {
             await using (var game = await fixture.Game1.BeginSessionAsync(nameof(DirectConnectionTestBase), [fixture.Server1], Timeouts.SetupTimeoutToken))
             {
                 await game.JoinServerAsync(ServerEndPoint, Timeouts.SetupTimeoutToken);
@@ -36,6 +36,6 @@ public abstract class DirectConnectionTestBase(ConnectionsFixture fixture) : Int
             }
 
             Assert.Contains(fixture.Server1.Logs, line => line.Contains(expectedText));
-        }, fixture.Game1, fixture.Server1), fixture.Servers);
+        }, fixture.Game1, fixture.Server1);
     }
 }
