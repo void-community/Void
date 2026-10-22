@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Extensions;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
+using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Harness;
 
@@ -16,6 +17,10 @@ namespace Void.IntegrationTests.Infrastructure.Harness;
 /// </summary>
 public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game game, string testName, IReadOnlyList<IIntegrationSide> logSides) : IAsyncDisposable
 {
+    // Minecraft from 1.20.5 switches its outgoing packets to play only after it tells the server it finished configuring, and it answers the
+    // server's first chunks from another thread, so a game that answers before it switched drops the connection itself.
+    private const string OutboundProtocolRace = "Pipeline has no outbound protocol configured";
+
     private readonly string _workingDirectory = PortableMinecraftClient.Game.StepsDirectory(testName, game.ProtocolVersion, game.Setup, game.Username);
     private bool _ended;
     private int _step;
@@ -39,7 +44,27 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
 
     public async Task JoinServerAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {
-        await game.JoinServerAsync(endPoint, cancellationToken);
+        try
+        {
+            await game.JoinServerAsync(endPoint, cancellationToken);
+        }
+        catch (IntegrationTestException exception) when (exception.Message.Contains(OutboundProtocolRace, StringComparison.Ordinal))
+        {
+            // The game lost its own race, so it joins once more, and the test still shows that it did.
+            var firstFailure = exception.Message.Split('\n', 2)[0];
+            var warning = $"{game.GameName} dropped its join to {endPoint} by its own race, so it joined again: {firstFailure}";
+            TestContext.Current.AddWarning(warning);
+            await PortableMinecraftClient.Game.LogAsync(warning, CancellationToken.None);
+
+            try
+            {
+                await game.JoinServerAsync(endPoint, cancellationToken);
+            }
+            catch (Exception retryException)
+            {
+                throw new IntegrationTestException($"{game.GameName} failed to join {endPoint} again: {retryException.Message}\nIts first join failed: {firstFailure}", retryException);
+            }
+        }
     }
 
     public async Task JoinServerExpectingFailureAsync(EndPoint endPoint, string expectedReason, CancellationToken cancellationToken = default)
