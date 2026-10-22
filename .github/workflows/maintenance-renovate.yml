@@ -13,7 +13,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Renovate sometimes fails for reasons that pass, such as a GitHub API error, so it gets one more try.
       - name: Run Renovate
+        id: renovate
+        continue-on-error: true
+        uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
+        with:
+          token: ${{ secrets.RENOVATE_TOKEN }}
+        env:
+          LOG_LEVEL: debug
+          RENOVATE_PLATFORM: github
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+
+      - name: Run Renovate again
+        if: ${{ steps.renovate.outcome == 'failure' }}
         uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
         with:
           token: ${{ secrets.RENOVATE_TOKEN }}
