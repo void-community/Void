@@ -134,7 +134,7 @@ public abstract class ModdedConnectionsFixture(ModLoader loader, ProtocolVersion
         {
             try
             {
-                (_servers, _setup) = await StartServersAsync(release, loaderVersion, contentMod, Timeouts.SetupTimeoutToken);
+                (_servers, _setup) = await StartServersAsync(release, loaderVersion, contentMod, TestContext.Current.CancellationToken);
                 return StartOutcome.Started;
             }
             catch (IntegrationTestException exception) when (exception.Message.Contains(_loaderMissingMessage, StringComparison.Ordinal))

@@ -7,6 +7,7 @@ using Void.IntegrationTests.Infrastructure.Harness;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
 using Void.Minecraft;
 using Void.Minecraft.Network;
+using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Fixtures;
 
@@ -46,7 +47,7 @@ public abstract class PaperConnectionsFixture(ProtocolVersion protocolVersion) :
 
     private async Task StartServersAsync(ReleaseVersion release, bool vanilla)
     {
-        Task<PaperServer>[] serverTasks = [PaperServer.CreateAsync(release, vanilla, "server-1.log", Timeouts.SetupTimeoutToken), PaperServer.CreateAsync(release, vanilla, "server-2.log", Timeouts.SetupTimeoutToken)];
+        Task<PaperServer>[] serverTasks = [PaperServer.CreateAsync(release, vanilla, "server-1.log", TestContext.Current.CancellationToken), PaperServer.CreateAsync(release, vanilla, "server-2.log", TestContext.Current.CancellationToken)];
 
         try
         {

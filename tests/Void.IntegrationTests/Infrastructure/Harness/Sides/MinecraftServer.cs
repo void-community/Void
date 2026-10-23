@@ -83,16 +83,21 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             await Container.ExpectTextAsync(text, cancellationToken);
     }
 
-    /// <summary>Starts a server container, retrying startups that failed because of a transient DNS error.</summary>
+    /// <summary>
+    /// Starts a server container, retrying startups that failed because of a transient network error. Each attempt has the whole setup time,
+    /// since a download that hangs until it times out, as Forge's Maven sometimes does, can take most of it.
+    /// </summary>
     protected static async Task<IContainer> StartContainerAsync(ContainerBuilder builder, string serverDescription, CancellationToken cancellationToken)
     {
         for (var startupAttempt = 1; startupAttempt <= MaximumStartupAttempts; startupAttempt++)
         {
             var container = builder.Build();
+            using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attemptTimeout.CancelAfter(Timeouts.SetupTimeout);
 
             try
             {
-                await container.StartAsync(cancellationToken);
+                await container.StartAsync(attemptTimeout.Token);
                 return container;
             }
             catch (Exception exception) when (startupAttempt < MaximumStartupAttempts && IsTransientStartupFailure(exception))
