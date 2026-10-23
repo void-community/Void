@@ -1,5 +1,8 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Void.Minecraft.Components.Text;
+using Void.Minecraft.Components.Text.Properties;
+using Void.Minecraft.Components.Text.Properties.Content;
 using Void.Minecraft.Events;
 using Void.Minecraft.Events.Chat;
 using Void.Minecraft.Links.Extensions;
@@ -15,6 +18,7 @@ using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
+using Void.Proxy.Api.Servers;
 using Void.Proxy.Plugins.Common.Events;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Network.Packets.Serverbound;
@@ -28,6 +32,9 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     private const string DefaultKickMessage = "You were kicked from proxy";
 
     private readonly KeepAliveForwarding _keepAliveForwarding = new();
+
+    // Players that a server kicked while they played on it, until they play on another server, are kicked, or leave
+    private readonly ConcurrentDictionary<IPlayer, (IServer Server, Component Reason)> _serverKicks = [];
 
     [Subscribe]
     public void OnPlayerConnecting(PlayerConnectingEvent @event)
@@ -85,7 +92,32 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
             case KeepAliveResponsePacket keepAliveResponse:
                 HandleKeepAliveResponse(@event, keepAliveResponse);
                 break;
+            case DisconnectPacket disconnect:
+                HandleServerKick(@event, disconnect);
+                break;
         }
+    }
+
+    [Subscribe]
+    public async ValueTask OnPlayerJoinedServer(PlayerJoinedServerEvent @event, CancellationToken cancellationToken)
+    {
+        if (!@event.Player.IsMinecraft)
+            return;
+
+        if (!IsSupportedVersion(@event.Player.ProtocolVersion))
+            return;
+
+        if (!_serverKicks.TryRemove(@event.Player, out var kick))
+            return;
+
+        var message = new Component(new TextContent($"You were kicked from {kick.Server.Name}: "), new Children([kick.Reason]), Formatting.Default with { Color = "red" }, Interactivity.Default);
+        await @event.Player.SendChatMessageAsync(message, cancellationToken);
+    }
+
+    [Subscribe]
+    public void OnPlayerDisconnected(PlayerDisconnectedEvent @event)
+    {
+        _serverKicks.TryRemove(@event.Player, out _);
     }
 
     [Subscribe]
@@ -112,9 +144,12 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
 
-        var reason = @event is MinecraftPlayerKickEvent minecraftPlayerKick
-            ? minecraftPlayerKick.Reason ?? DefaultKickMessage
-            : @event.Text ?? DefaultKickMessage;
+        // A player that its server kicked and no other server took is told why the server kicked it
+        var reason = _serverKicks.TryRemove(@event.Player, out var serverKick)
+            ? serverKick.Reason
+            : @event is MinecraftPlayerKickEvent minecraftPlayerKick
+                ? minecraftPlayerKick.Reason ?? DefaultKickMessage
+                : @event.Text ?? DefaultKickMessage;
 
         try
         {
@@ -160,6 +195,22 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
 
         _keepAliveForwarding.Remember(@event.Link, keepAliveRequest.Id);
         @event.Player.Logger.LogTrace("Forwarding Keep Alive request {Id} from {Server}", keepAliveRequest.Id, @event.Link.Server);
+    }
+
+    /// <summary>
+    /// Keeps a kick by the server the player plays on from the player, so that the player moves to another server as when that server
+    /// stops, and reads there why it was kicked. A server that the player is still joining refuses it during login instead.
+    /// </summary>
+    private void HandleServerKick(MessageReceivedEvent @event, DisconnectPacket disconnect)
+    {
+        var playing = @event.Player.Phase is Phase.Play && ReferenceEquals(@event.Player.Link, @event.Link) && @event.Link.IsAlive;
+
+        if (!playing)
+            return;
+
+        @event.Cancel();
+        _serverKicks[@event.Player] = (@event.Link.Server, disconnect.Reason);
+        logger.LogInformation("Player {Player} was kicked from {Server}: {Reason}", @event.Player, @event.Link.Server, disconnect.Reason.AsText);
     }
 
     private void HandleKeepAliveResponse(MessageReceivedEvent @event, KeepAliveResponsePacket keepAliveResponse)
