@@ -4,6 +4,7 @@ using Void.Minecraft.Network;
 using Void.Minecraft.Network.Messages.Packets;
 using Void.Minecraft.World;
 using Void.Proxy.Api.Extensions;
+using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 
 namespace Void.Proxy.Plugins.ProtocolSupport.Java.v1_13_to_1_20_1.Packets.Clientbound;
 

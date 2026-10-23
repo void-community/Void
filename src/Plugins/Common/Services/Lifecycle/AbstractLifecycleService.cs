@@ -13,7 +13,6 @@ using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Exceptions;
-using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Plugins.Common.Events;
@@ -46,8 +45,12 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
 
+        // Players older than 1.20.2 get their Join Game while they join, and start to play when the link starts
+        if (@event.Player.ProtocolVersion < ProtocolVersion.MINECRAFT_1_20_2)
+            return;
+
         // The game has no world of the server until its Join Game, so the player starts to play there only once that reaches it
-        if (!IsJoinGame(@event.Message))
+        if (@event.Message is not JoinGamePacket)
             return;
 
         await events.ThrowAsync(new PlayerJoinedServerEvent(@event.Link.Player, @event.Link.Server, @event.Link, IsRedirected: false), cancellationToken);
@@ -146,15 +149,6 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     protected abstract ValueTask<bool> KickPlayerAsync(IPlayer player, Component reason, CancellationToken cancellationToken);
     protected abstract ValueTask<bool> SendChatMessageAsync(IPlayer player, Component text, CancellationToken cancellationToken);
     protected abstract bool IsSupportedVersion(ProtocolVersion version);
-
-    /// <summary>
-    /// Whether <paramref name="message" /> is the Join Game of a server, for protocols whose players get it through the link. Older protocols
-    /// give it to a joining player before the link starts.
-    /// </summary>
-    protected virtual bool IsJoinGame(INetworkMessage message)
-    {
-        return false;
-    }
 
     /// <summary>
     /// Forwards the backend's keep-alive to the player, so that the backend decides when the player has timed out, as with a
