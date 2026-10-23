@@ -87,7 +87,48 @@ FROM ghcr.io/void-community/portable-minecraft-client:latest
 COPY --chmod=0755 prepare /etc/portableminecraftclient/prepare.d/10-prepare
 ```
 
-Each file must be executable. A script that exits with a code other than `0`, can't run, or runs longer than 5 minutes fails the start with `client.install.failed`, and the scripts after it don't run. Their output appears in the container log and the start's [**diagnostic session**](/docs/client/api/#diagnostics). CurseForge starts don't run them, because a modpack brings its own files.
+Each file must be executable. A script that exits with a code other than `0`, can't run, or runs longer than 5 minutes fails the start with `client.install.failed`, and the scripts after it don't run. Their output appears in the container log and the start's [**diagnostic session**](/docs/client/api/#diagnostics). CurseForge starts don't run them, because a modpack brings its own files. To change a modpack's files, [patch](#patching-files) them instead.
+
+## Patching Files
+
+`VOID_PATCH_DEFINITIONS` changes the game's files on every start, before the game launches, with patch definitions in the format of itzg's [**`PATCH_DEFINITIONS`**](https://github.com/itzg/docker-minecraft-server/blob/master/docs/configuration/interpolating.md#patching-existing-files), so a definition written for a server works for a client too. Like `JAVA_AGENTS`, it's a comma or newline separated list. Each entry is an HTTP or HTTPS URL or a file that holds a patch definition or a patch set (`{"patches": [...]}`), or a directory whose `*.json` files each hold a patch definition.
+
+A relative `file` is resolved against the directory the game runs in: the [game directory](#persistent-game-directory), or its `modpack` directory for a CurseForge start. Patches run after the [preparation scripts](#preparing-games), and for a CurseForge start after the modpack and its overrides are installed, so they apply on every start.
+
+Text values can name environment variables as `${NAME}`. Only names that start with `VOID_PATCH_ENV_PREFIX`, which defaults to `CFG_`, are replaced, and `NAME_FILE` reads the value from a file instead. For example, some All the Mods 10 releases freeze the game unless FML's config watcher is off:
+
+```json
+{
+  "file": "config/fml.toml",
+  "ops": [
+    {
+      "$set": {
+        "path": "$.disableConfigWatcher",
+        "value": "${CFG_FML_DISABLE_CONFIG_WATCHER}",
+        "value-type": "bool"
+      }
+    }
+  ]
+}
+```
+
+```bash
+docker run --name void-client --rm -d -p 8080:80 \
+  --env VOID_PATCH_DEFINITIONS=https://example.org/config--fml-toml.patch.json \
+  --env CFG_FML_DISABLE_CONFIG_WATCHER=true \
+  ghcr.io/void-community/portable-minecraft-client:latest
+```
+
+| Supported | |
+| :-------- | :- |
+| Files | JSON, TOML and properties files, detected by their suffix or named by `file-format`. |
+| Operations | `$set` replaces a value, or adds it to an existing object. `$put` sets a `key` on an object. `$add` appends to a list. |
+| Paths | `$.a.b`, `$['a.b']` and `$.list[0]`. |
+| Value types | `int`, `float`, `bool` (`true`, `yes`, `false` or `no`), `auto`, and `list of` any of them, for text values. |
+
+A patched file loses its comments, as it does on itzg's image. YAML and JSON5 files aren't supported, unlike on itzg's image.
+
+Each applied operation appears in the container log and the start's [**diagnostic session**](/docs/client/api/#diagnostics), and so does each patch skipped because its file doesn't exist, can't be read or has an unsupported format, and each operation skipped because a variable it names is missing. A source that can't be read and an operation that fails, such as one whose path doesn't exist, fail the start with `client.install.failed`, or with `client.install.unavailable` when a URL's server stayed unavailable after retries. Either way, the failure's stage is `minecraft`.
 
 ## Memory
 
@@ -130,6 +171,8 @@ docker run --name void-client --rm -d -p 8080:80 \
 `CURSEFORGE_API_BASE_URL` optionally replaces the default `https://api.curseforge.com` API base URL.
 
 `CURSEFORGE_PARALLEL_DOWNLOADS` sets how many modpack files download at the same time and defaults to `4`, like itzg's `CF_PARALLEL_DOWNLOADS`. It must be a positive integer.
+
+[Patch definitions](#patching-files) apply to the modpack's files on every start.
 
 
 ## Launcher Retry Configuration

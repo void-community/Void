@@ -548,6 +548,8 @@ internal sealed partial class GameRuntime
             cancellationToken
         ).ConfigureAwait(continueOnCapturedContext: false);
 
+        await ApplyPatchDefinitionsAsync(minecraftDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
         return installation.Version;
     }
 

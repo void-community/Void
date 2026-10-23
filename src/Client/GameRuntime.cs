@@ -175,6 +175,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         var installation = await RunPortableMinecraftDryRunAsync(minecraftDirectory, portableMinecraftVersion, armLaunchOptions, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         await Console.Error.WriteLineAsync($"Prepared Minecraft {installation.MinecraftVersion} for the modpack").ConfigureAwait(continueOnCapturedContext: false);
 
+        // The modpack's overrides are installed again on every start, so its files are patched on every start too.
+        await ApplyPatchDefinitionsAsync(modpackDirectory, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+
         return await LaunchGameAsync(minecraftDirectory, modpackDirectory, $"mojang:{installation.Version}", armLaunchOptions, arguments, memoryMb, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
     }
 

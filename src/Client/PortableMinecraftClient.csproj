@@ -11,5 +11,6 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
+    <PackageReference Include="Tomlyn" Version="2.10.1" />
   </ItemGroup>
 </Project>
