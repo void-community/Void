@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +19,7 @@ using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Contexts;
 using Void.Proxy.Api.Servers;
+using Void.Proxy.Plugins.Common.Network.Messages.Binary;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Services.Lifecycle;
 using Xunit;
@@ -28,15 +30,21 @@ namespace Void.UnitTests.Services.Lifecycle;
 public class ServerKickTests
 {
     [Fact]
-    public async Task PlayerThatItsServerKicksReadsWhyOnTheNextServer()
+    public async Task PlayerThatItsServerKicksReadsWhyOnceTheNextServerSentItSomething()
     {
         var test = new Proxy();
         var kick = test.ServerKick("Kicked by an operator");
 
         await test.Service.OnMessageReceived(kick, CancellationToken.None);
-        await test.Service.OnPlayerJoinedServer(new PlayerJoinedServerEvent(test.Player, test.Server, test.Link, IsRedirected: true), CancellationToken.None);
-
         Assert.True(kick.Result);
+
+        // From 1.20.2 the player joins as the proxy forwards the end of configuration, before the game has a world for chat.
+        test.Service.OnPlayerJoinedServer(new PlayerJoinedServerEvent(test.Player, test.Server, test.NextLink, IsRedirected: true));
+        await test.Service.OnMessageSent(test.NextServerMessageSent(), CancellationToken.None);
+        Assert.Empty(test.ChatMessages);
+
+        await test.NextServerSendsAsync();
+
         Assert.Equal("You were kicked from lobby: Kicked by an operator", Assert.Single(test.ChatMessages).AsText);
         Assert.Empty(test.Kicks);
     }
@@ -71,9 +79,22 @@ public class ServerKickTests
     {
         var test = new Proxy();
 
-        await test.Service.OnPlayerJoinedServer(new PlayerJoinedServerEvent(test.Player, test.Server, test.Link, IsRedirected: true), CancellationToken.None);
+        test.Service.OnPlayerJoinedServer(new PlayerJoinedServerEvent(test.Player, test.Server, test.NextLink, IsRedirected: true));
+        await test.NextServerSendsAsync();
 
         Assert.Empty(test.ChatMessages);
+    }
+
+    [Fact]
+    public async Task PlayerThatAnotherServerTookIsKickedForTheProxysOwnReason()
+    {
+        var test = new Proxy();
+
+        await test.Service.OnMessageReceived(test.ServerKick("Kicked by an operator"), CancellationToken.None);
+        test.Service.OnPlayerJoinedServer(new PlayerJoinedServerEvent(test.Player, test.Server, test.NextLink, IsRedirected: true));
+        await test.Service.OnPlayerKickEvent(new PlayerKickEvent(test.Player, "The proxy is restarting"), CancellationToken.None);
+
+        Assert.Equal("The proxy is restarting", Assert.Single(test.Kicks).AsText);
     }
 
     private sealed class Proxy
@@ -116,6 +137,13 @@ public class ServerKickTests
                 _ => null
             });
 
+            NextLink = StandIn.Create<ILink>((method, _) => method.Name switch
+            {
+                "get_Player" => Player,
+                "get_IsAlive" => true,
+                _ => null
+            });
+
             Service = new RecordingLifecycleService(events, Kicks);
         }
 
@@ -125,12 +153,26 @@ public class ServerKickTests
         public MinecraftPlayer Player { get; }
         public IServer Server { get; }
         public ILink Link { get; }
+        public ILink NextLink { get; }
         public AbstractLifecycleService Service { get; }
 
         public MessageReceivedEvent ServerKick(string reason)
         {
             return new MessageReceivedEvent(Side.Server, Side.Server, Side.Proxy, Direction.Clientbound, new JsonDisconnectPacket { Reason = reason }, Link, Player);
         }
+
+        public MessageSentEvent NextServerMessageSent()
+        {
+            return new MessageSentEvent(Side.Server, Side.Proxy, Side.Client, Direction.Clientbound, NextServerMessage, NextLink, Player);
+        }
+
+        public async Task NextServerSendsAsync()
+        {
+            await Service.OnMessageReceived(new MessageReceivedEvent(Side.Server, Side.Server, Side.Proxy, Direction.Clientbound, NextServerMessage, NextLink, Player), CancellationToken.None);
+            await Service.OnMessageSent(NextServerMessageSent(), CancellationToken.None);
+        }
+
+        private static MinecraftBinaryPacket NextServerMessage => new(id: 0x2B, new MemoryStream([1, 2, 3]));
     }
 
     private sealed class RecordingLifecycleService(IEventService events, List<Component> kicks) : AbstractLifecycleService(NullLogger.Instance, events)
