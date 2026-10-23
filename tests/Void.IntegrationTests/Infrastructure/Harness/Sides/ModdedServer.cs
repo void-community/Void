@@ -108,8 +108,8 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         }
 
         builder = builder
-            .WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath)
-            .WithEnvironment("JVM_OPTS", $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}");
+            .WithResourceMapping(ModLoaderFixes.Url, ModLoaderFixes.ServerPath)
+            .WithEnvironment("JVM_OPTS", $"-javaagent:{ModLoaderFixes.ServerPath} {jvmOptions}");
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
     }

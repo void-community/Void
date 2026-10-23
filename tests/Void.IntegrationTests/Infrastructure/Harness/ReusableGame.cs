@@ -21,7 +21,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => _client?.Logs ?? [];
 
-    private static IReadOnlyList<Uri> JavaAgents => [LegacyForgePatcher.Url];
+    private static IReadOnlyList<Uri> JavaAgents => [ModLoaderFixes.Url];
 
     private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion.FirstRelease}";
 

@@ -47,7 +47,7 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
 
-        var jvmOptions = $"-javaagent:{LegacyForgePatcher.ServerPath}";
+        var jvmOptions = $"-javaagent:{ModLoaderFixes.ServerPath}";
 
         // Paper's own settings: a longer keep-alive, and no throttle on players that reconnect at once, which vanilla servers don't have.
         if (!vanilla)
@@ -65,7 +65,7 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
         }
 
         builder = builder
-            .WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath)
+            .WithResourceMapping(ModLoaderFixes.Url, ModLoaderFixes.ServerPath)
             .WithEnvironment("JVM_OPTS", jvmOptions);
 
         if (maximumPlayers is { } value)

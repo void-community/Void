@@ -120,7 +120,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         {
             ContainerNotRunningException => Array.Exists(TransientStartupFailureMarkers, marker => exception.ToString().Contains(marker, StringComparison.OrdinalIgnoreCase)),
 
-            // Files Testcontainers downloads into the container, such as LegacyForgePatcher
+            // Files Testcontainers downloads into the container, such as ModLoaderFixes
             HttpRequestException { StatusCode: null or HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError } => true,
             TaskCanceledException { InnerException: TimeoutException } => true,
 
