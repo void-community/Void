@@ -1,8 +1,5 @@
-﻿using System.Collections.Concurrent;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Void.Minecraft.Components.Text;
-using Void.Minecraft.Components.Text.Properties;
-using Void.Minecraft.Components.Text.Properties.Content;
 using Void.Minecraft.Events;
 using Void.Minecraft.Events.Chat;
 using Void.Minecraft.Links.Extensions;
@@ -16,10 +13,8 @@ using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Exceptions;
-using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
-using Void.Proxy.Api.Servers;
 using Void.Proxy.Plugins.Common.Events;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Network.Packets.Serverbound;
@@ -33,9 +28,6 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     private const string DefaultKickMessage = "You were kicked from proxy";
 
     private readonly KeepAliveForwarding _keepAliveForwarding = new();
-
-    // Players that a server kicked while they played on it, until they read why on another server, are kicked, or leave
-    private readonly ConcurrentDictionary<IPlayer, ServerKick> _serverKicks = [];
 
     [Subscribe]
     public void OnPlayerConnecting(PlayerConnectingEvent @event)
@@ -93,49 +85,7 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
             case KeepAliveResponsePacket keepAliveResponse:
                 HandleKeepAliveResponse(@event, keepAliveResponse);
                 break;
-            case DisconnectPacket disconnect:
-                HandleServerKick(@event, disconnect);
-                break;
         }
-    }
-
-    [Subscribe]
-    public void OnPlayerJoinedServer(PlayerJoinedServerEvent @event)
-    {
-        if (!@event.Player.IsMinecraft)
-            return;
-
-        if (!IsSupportedVersion(@event.Player.ProtocolVersion))
-            return;
-
-        if (_serverKicks.TryGetValue(@event.Player, out var kick))
-            kick.NextLink = @event.Link;
-    }
-
-    [Subscribe]
-    public async ValueTask OnMessageSent(MessageSentEvent @event, CancellationToken cancellationToken)
-    {
-        if (!@event.Player.IsMinecraft)
-            return;
-
-        if (!IsSupportedVersion(@event.Player.ProtocolVersion))
-            return;
-
-        // A game shows chat only in a world, which it may not have yet when it joins the next server
-        if (!_serverKicks.TryGetValue(@event.Player, out var kick) || !ReferenceEquals(kick.NextLink, @event.Link) || !GivesWorld(@event.Message))
-            return;
-
-        if (!_serverKicks.TryRemove(new KeyValuePair<IPlayer, ServerKick>(@event.Player, kick)))
-            return;
-
-        var message = new Component(new TextContent($"You were kicked from {kick.Server.Name}: "), new Children([kick.Reason]), Formatting.Default with { Color = "red" }, Interactivity.Default);
-        await @event.Player.SendChatMessageAsync(message, cancellationToken);
-    }
-
-    [Subscribe]
-    public void OnPlayerDisconnected(PlayerDisconnectedEvent @event)
-    {
-        _serverKicks.TryRemove(@event.Player, out _);
     }
 
     [Subscribe]
@@ -162,12 +112,9 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
 
-        // A player that its server kicked and no other server took is told why the server kicked it
-        var reason = _serverKicks.TryRemove(@event.Player, out var serverKick) && serverKick.NextLink is null
-            ? serverKick.Reason
-            : @event is MinecraftPlayerKickEvent minecraftPlayerKick
-                ? minecraftPlayerKick.Reason ?? DefaultKickMessage
-                : @event.Text ?? DefaultKickMessage;
+        var reason = @event is MinecraftPlayerKickEvent minecraftPlayerKick
+            ? minecraftPlayerKick.Reason ?? DefaultKickMessage
+            : @event.Text ?? DefaultKickMessage;
 
         try
         {
@@ -197,15 +144,6 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     protected abstract bool IsSupportedVersion(ProtocolVersion version);
 
     /// <summary>
-    /// Whether the player has the world of the server it joined once <paramref name="message" /> from that server has reached it. The proxy gives
-    /// a player the world while it joins, unless the protocol passes it on later.
-    /// </summary>
-    protected virtual bool GivesWorld(INetworkMessage message)
-    {
-        return true;
-    }
-
-    /// <summary>
     /// Forwards the backend's keep-alive to the player, so that the backend decides when the player has timed out, as with a
     /// direct connection. A link that is still joining has no player waiting behind it yet, so the proxy answers for the player.
     /// </summary>
@@ -224,22 +162,6 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         @event.Player.Logger.LogTrace("Forwarding Keep Alive request {Id} from {Server}", keepAliveRequest.Id, @event.Link.Server);
     }
 
-    /// <summary>
-    /// Keeps a kick by the server the player plays on from the player, so that the player moves to another server as when that server
-    /// stops, and reads there why it was kicked. A server that the player is still joining refuses it during login instead.
-    /// </summary>
-    private void HandleServerKick(MessageReceivedEvent @event, DisconnectPacket disconnect)
-    {
-        var playing = @event.Player.Phase is Phase.Play && ReferenceEquals(@event.Player.Link, @event.Link) && @event.Link.IsAlive;
-
-        if (!playing)
-            return;
-
-        @event.Cancel();
-        _serverKicks[@event.Player] = new ServerKick(@event.Link.Server, disconnect.Reason);
-        logger.LogInformation("Player {Player} was kicked from {Server}: {Reason}", @event.Player, @event.Link.Server, disconnect.Reason.AsText);
-    }
-
     private void HandleKeepAliveResponse(MessageReceivedEvent @event, KeepAliveResponsePacket keepAliveResponse)
     {
         // Clients older than 1.12.2 answer 0 while they load terrain, which backends accept as a sign of life.
@@ -255,17 +177,5 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         // Answers to a backend the player has left would otherwise reach the next backend as unexpected ids.
         @event.Cancel();
         @event.Player.Logger.LogDebug("Dropping Keep Alive response {Id} that {Server} did not request", keepAliveResponse.Id, @event.Link.Server);
-    }
-
-    /// <summary>
-    /// Why a server kicked a player, which the player reads on the server it moves to once it has that server's world.
-    /// </summary>
-    private sealed class ServerKick(IServer server, Component reason)
-    {
-        public IServer Server { get; } = server;
-        public Component Reason { get; } = reason;
-
-        /// <summary>The link to the server the player moved to, or <see langword="null"/> while it moves.</summary>
-        public ILink? NextLink { get; set; }
     }
 }
