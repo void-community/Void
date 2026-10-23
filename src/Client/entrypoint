@@ -54,7 +54,9 @@ shutdown() {
   done
 }
 
-trap shutdown EXIT INT TERM
+trap shutdown EXIT
+# A requested stop ends the client cleanly here, so only a process that exits on its own reaches the check below.
+trap 'shutdown; exit 0' INT TERM
 
 start_process xvfb Xvfb "$DISPLAY" -screen 0 854x480x24 -noreset -nolisten tcp
 xvfb_process_id="${pids[-1]}"
@@ -85,7 +87,7 @@ set -e
 
 exited_process_name="unknown"
 for index in "${!pids[@]}"; do
-  if [[ "${pids[$index]}" == "$exited_process_id" ]]; then
+  if [[ "${pids[$index]}" == "${exited_process_id:-}" ]]; then
     exited_process_name="${process_names[$index]}"
     break
   fi
