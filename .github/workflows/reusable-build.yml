@@ -77,20 +77,21 @@ jobs:
           dotnet-quality: ${{ inputs.dotnet-version == 'latest' && 'preview' || '' }}
 
       # Restoring packages sometimes fails for reasons that pass, such as nuget.org not answering for a while, so it gets one more try.
+      # Properties take a dash, since Git Bash on Windows turns arguments that start with a slash into paths.
       - name: Restore
         id: restore
         continue-on-error: true
         shell: bash
         run: |
           dotnet restore ${{ matrix.parameters }}
-          dotnet restore src/Platform --runtime ${{ matrix.runtime-identifier }} /p:SelfContained=true /p:PublishSingleFile=true ${{ matrix.parameters }}
+          dotnet restore src/Platform --runtime ${{ matrix.runtime-identifier }} -p:SelfContained=true -p:PublishSingleFile=true ${{ matrix.parameters }}
 
       - name: Restore again
         if: ${{ steps.restore.outcome == 'failure' }}
         shell: bash
         run: |
           dotnet restore ${{ matrix.parameters }}
-          dotnet restore src/Platform --runtime ${{ matrix.runtime-identifier }} /p:SelfContained=true /p:PublishSingleFile=true ${{ matrix.parameters }}
+          dotnet restore src/Platform --runtime ${{ matrix.runtime-identifier }} -p:SelfContained=true -p:PublishSingleFile=true ${{ matrix.parameters }}
 
       - name: Build
         # Do not include runtime here
