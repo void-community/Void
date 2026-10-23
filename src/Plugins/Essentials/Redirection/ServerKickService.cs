@@ -12,8 +12,8 @@ using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 namespace Void.Proxy.Plugins.Essentials.Redirection;
 
 /// <summary>
-/// Holds back a kick from the server a player plays on while another server can take the player, so the proxy moves the player there as when
-/// a server stops, and tells the player there why it was kicked.
+/// Cancels a kick from the server a player plays on when there is another server, so the proxy moves the player there as when a server stops,
+/// and tells the player there why it was kicked. Without another server, the player is kicked with the server's reason.
 /// </summary>
 public class ServerKickService(IServerService servers) : IEventListener
 {
