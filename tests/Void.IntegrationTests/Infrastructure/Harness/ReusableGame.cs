@@ -2,10 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Harness.Sides;
 using Void.Minecraft.Network;
-using Xunit;
 
 namespace Void.IntegrationTests.Infrastructure.Harness;
 
@@ -53,7 +51,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
             if (_game is { } game && !await IsPlayableAsync(game, cancellationToken))
                 await StopGameAsync();
 
-            _game ??= await LaunchGameAsync(_client, cancellationToken);
+            _game ??= await _client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
         }
         catch
         {
@@ -63,37 +61,6 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         }
 
         return _session = new GameSession(this, _game, testName, [this, .. logSides]);
-    }
-
-    // A game can fail to launch once and then launch fine, such as a Forge game that corrupts its own config on its first launch and hangs, so
-    // a game that failed to launch gets one more try in a new client. The test still shows why the first launch failed.
-    private async Task<PortableMinecraftClient.Game> LaunchGameAsync(PortableMinecraftClient client, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await client.LaunchGameAsync(protocolVersion, setup, cancellationToken);
-        }
-        catch (IntegrationTestException exception)
-        {
-            var warning = $"{GameName} failed to launch, so it launched again in a new client: {exception.Message}";
-            TestContext.Current.AddWarning(warning);
-            await PortableMinecraftClient.Game.LogAsync(warning, CancellationToken.None);
-            await ReleaseAsync();
-
-            // A launch that hung may have used up most of the caller's time, so the second launch gets as long as a first one
-            using var retryCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            retryCancellation.CancelAfter(Timeouts.SetupTimeout);
-
-            try
-            {
-                _client = await PortableMinecraftClient.CreateAsync(JavaAgents, retryCancellation.Token);
-                return await _client.LaunchGameAsync(protocolVersion, setup, retryCancellation.Token);
-            }
-            catch (Exception retryException)
-            {
-                throw new IntegrationTestException($"{GameName} failed to launch again: {retryException.Message}\nIts first launch failed: {exception.Message}", retryException);
-            }
-        }
     }
 
     /// <summary>Stops the game and its client, which a collection no longer needs.</summary>

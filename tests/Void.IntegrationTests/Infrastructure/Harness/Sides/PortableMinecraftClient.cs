@@ -348,7 +348,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
             _sessionId = acceptedStatus.SessionId;
 
-            // A game that hasn't reached its menu by then won't, which leaves the setup timeout room to launch it again.
+            // A game that hasn't reached its menu by then won't, so its launch fails with where its threads are rather than at the setup timeout.
             using var readyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             readyTimeout.CancelAfter(ReadyTimeout);
 
