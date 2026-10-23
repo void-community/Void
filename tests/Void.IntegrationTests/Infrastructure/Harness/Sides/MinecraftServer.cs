@@ -69,7 +69,9 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         var sentAt = DateTime.UtcNow;
         var marker = $"ran-{Guid.NewGuid():N}";
 
-        await Container.RunCommandAsync(["sh", "-c", $"printf '%s\\n' \"$0\" \"$1\" > {ConsolePipePath}", command, $"say {marker}"], cancellationToken);
+        // The pipe belongs to the server's user in /tmp, where kernels that protect FIFOs refuse anyone else who opens it to create it, as a
+        // shell redirect does, so it's opened without creating it.
+        await Container.RunCommandAsync(["sh", "-c", $"printf '%s\\n' \"$0\" \"$1\" | dd of={ConsolePipePath} conv=nocreat,notrunc status=none", command, $"say {marker}"], cancellationToken);
         await Container.ExpectTextAsync(marker, sentAt, cancellationToken);
     }
 
