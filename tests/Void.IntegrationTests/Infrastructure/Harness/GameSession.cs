@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Exceptions;
@@ -43,14 +42,11 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
         await game.JoinServerAsync(endPoint, cancellationToken);
     }
 
-    /// <summary>Waits until the server the game is on has kicked it, and checks that the game shows the reason the server gave.</summary>
-    public async Task ExpectKickAsync(string reason, CancellationToken cancellationToken = default)
+    /// <summary>Waits until the game has shown <paramref name="text"/> in its chat since <paramref name="since"/>.</summary>
+    public async Task ExpectChatAsync(string text, DateTime since, CancellationToken cancellationToken = default)
     {
-        var shownReason = await game.WaitForLeaveAsync(cancellationToken);
-        await MakeStepAsync("kicked", cancellationToken);
-
-        if (shownReason?.Contains(reason, StringComparison.Ordinal) is not true)
-            throw new IntegrationTestException($"{game.GameName} left its server showing {JsonSerializer.Serialize(shownReason)} rather than the server's reason {reason}");
+        await game.Container.ExpectTextAsync(text, since, cancellationToken);
+        await MakeStepAsync("chat", cancellationToken);
     }
 
     public async Task JoinServerExpectingFailureAsync(EndPoint endPoint, string expectedReason, CancellationToken cancellationToken = default)
@@ -107,6 +103,17 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
     /// <param name="joinedServer">The server the player is on, behind the proxy when it joined through one, or <see langword="null"/> when it joined none.</param>
     public async Task EndAsync(MinecraftServer? joinedServer, CancellationToken cancellationToken = default)
     {
+        await LeaveAsync(joinedServer, cancellationToken);
+        _ended = true;
+    }
+
+    /// <summary>
+    /// Leaves the server the game is on, and waits until that server has seen the player leave, so the game can join again. A game that is no
+    /// longer on that server, such as one that crashed or was kicked, fails the test.
+    /// </summary>
+    /// <param name="joinedServer">The server the player is on, behind the proxy when it joined through one, or <see langword="null"/> when it joined none.</param>
+    public async Task LeaveAsync(MinecraftServer? joinedServer, CancellationToken cancellationToken = default)
+    {
         if (await game.IsConnectedAsync(cancellationToken))
         {
             var disconnectedAt = DateTime.UtcNow;
@@ -121,7 +128,6 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
         }
 
         await MakeStepAsync("disconnected", cancellationToken);
-        _ended = true;
     }
 
     private async Task MakeStepAsync(string action, CancellationToken cancellationToken = default)

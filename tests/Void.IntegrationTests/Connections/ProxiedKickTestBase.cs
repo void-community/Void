@@ -7,8 +7,9 @@ using Void.IntegrationTests.Infrastructure.Harness;
 namespace Void.IntegrationTests.Connections;
 
 /// <summary>
-/// The reasons a server gives for removing a player reach the game through the proxy: a kick of a player that plays, which the proxy passes
-/// on, and the refusal of a player that joins, which the proxy turns into a kick of its own.
+/// The reasons a server gives for removing a player reach the game through the proxy: a kick of a player that plays, which moves the player to
+/// the other server, where the game shows the reason in its chat, and the refusal of a player that joins, which the proxy turns into a kick of
+/// its own.
 /// </summary>
 public abstract class ProxiedKickTestBase(ConnectionsFixture fixture) : IntegrationUnitBase
 {
@@ -24,7 +25,7 @@ public abstract class ProxiedKickTestBase(ConnectionsFixture fixture) : Integrat
 
         await LoggedExecutorAsync(async () =>
         {
-            await using var game = await fixture.Game1.BeginSessionAsync(nameof(ProxiedKickTestBase), [fixture.VoidProxy, fixture.Server1], Timeouts.SetupTimeoutToken);
+            await using var game = await fixture.Game1.BeginSessionAsync(nameof(ProxiedKickTestBase), [fixture.VoidProxy, fixture.Server1, fixture.Server2], Timeouts.SetupTimeoutToken);
 
             var playerDisconnectionTask = fixture.VoidProxy.WaitForPlayerDisconnectionAsync(game.Username, Timeouts.SetupTimeoutToken);
 
@@ -32,11 +33,17 @@ public abstract class ProxiedKickTestBase(ConnectionsFixture fixture) : Integrat
             await fixture.Server1.ExpectLoginAsync(game.Username, game.StartedAt, Timeouts.SetupTimeoutToken);
             await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
+            var kickedAt = DateTime.UtcNow;
+            var secondServerReadyTask = fixture.VoidProxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-2", Timeouts.StepTimeoutToken);
             await fixture.Server1.RunCommandAsync($"kick {game.Username} {kickReason}", Timeouts.StepTimeoutToken);
-            await game.ExpectKickAsync(kickReason, Timeouts.StepTimeoutToken);
+            await secondServerReadyTask;
+            await game.ExpectChatAsync(kickReason, kickedAt, Timeouts.StepTimeoutToken);
+            await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
+
+            await game.LeaveAsync(fixture.Server2, Timeouts.StepTimeoutToken);
             await playerDisconnectionTask;
 
-            // An offline server bans a player by the name it saw join, as the player just did.
+            // An offline server bans a player by the name it saw join, as the player did.
             await fixture.Server1.RunCommandAsync($"ban {game.Username} {banReason}", Timeouts.StepTimeoutToken);
 
             try
@@ -49,6 +56,6 @@ public abstract class ProxiedKickTestBase(ConnectionsFixture fixture) : Integrat
             }
 
             await game.EndAsync(joinedServer: null, Timeouts.StepTimeoutToken);
-        }, fixture.Game1, fixture.VoidProxy, fixture.Server1);
+        }, fixture.Game1, fixture.VoidProxy, fixture.Server1, fixture.Server2);
     }
 }
