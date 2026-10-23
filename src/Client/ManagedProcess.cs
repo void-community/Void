@@ -12,7 +12,8 @@ internal sealed class ManagedProcess(
     Task? outputCompletion = null,
     TimeSpan? outputGracePeriod = null,
     string? minecraftDirectory = null,
-    DateTime launchedAt = default
+    DateTime launchedAt = default,
+    GameErrorLog? errors = null
 ) : IManagedProcess
 {
     /// <summary>How long the game's output may stay open after its launcher exited.</summary>
@@ -44,6 +45,9 @@ internal sealed class ManagedProcess(
     public bool HasExited => process.HasExited;
 
     public int Id => process.Id;
+
+    /// <summary>Gets the last error the game logged shortly before it exited, or <see langword="null"/> without one.</summary>
+    public string? LastError => process.HasExited ? errors?.ReadLastError(process.ExitTime.ToUniversalTime()) : null;
 
     public int? MemoryMb { get; } = memoryMb;
 

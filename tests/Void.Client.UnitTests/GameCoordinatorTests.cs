@@ -960,6 +960,18 @@ public sealed class GameCoordinatorTests
         Assert.Equal("client.process.exited", coordinator.Status.Failure?.Code);
         Assert.Equal("Minecraft exited without a stop request", coordinator.Status.Error);
 
+        // Issue #1620: a game that exits without a crash report is described by the error it logged just before.
+        await coordinator.StartVanillaAsync(new("1.17", []), CancellationToken.None);
+        runtime.CompleteLaunch();
+        await WaitForStateAsync(coordinator, GameState.Ready);
+
+        runtime.ExitGame(0, false, lastError: "The game failed to start because the currently active LWJGL version is not compatible.");
+
+        await WaitForStateAsync(coordinator, GameState.Failed);
+        Assert.Equal("Game exited without a stop request", coordinator.Status.Message);
+        Assert.Equal("Minecraft exited without a stop request, last error: The game failed to start because the currently active LWJGL version is not compatible.", coordinator.Status.Error);
+        Assert.Equal("client.process.exited", coordinator.Status.Failure?.Code);
+
         // A failed game can be started again, and its crash report tells why it crashed.
         await coordinator.StartVanillaAsync(new("1.17", []), CancellationToken.None);
         runtime.CompleteLaunch();
@@ -1158,9 +1170,9 @@ public sealed class GameCoordinatorTests
             _disconnect?.SetException(exception);
         }
 
-        public void ExitGame(int exitCode, bool wasOutOfMemoryKilled, string? crashCause = null)
+        public void ExitGame(int exitCode, bool wasOutOfMemoryKilled, string? crashCause = null, string? lastError = null)
         {
-            _process?.Exit(exitCode, wasOutOfMemoryKilled, crashCause);
+            _process?.Exit(exitCode, wasOutOfMemoryKilled, crashCause, lastError);
         }
 
         public Task WriteOptionsAsync(string options, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -1306,17 +1318,19 @@ public sealed class GameCoordinatorTests
         public int? MemoryMb { get; } = memoryMb;
         public bool WasOutOfMemoryKilled { get; private set; }
         public string? CrashCause { get; private set; }
+        public string? LastError { get; private set; }
 
         public Task WaitForExitAsync(CancellationToken cancellationToken) => _exit.Task.WaitAsync(cancellationToken);
 
         public void KillTree() => Exit(137, false);
 
-        public void Exit(int exitCode, bool wasOutOfMemoryKilled = false, string? crashCause = null)
+        public void Exit(int exitCode, bool wasOutOfMemoryKilled = false, string? crashCause = null, string? lastError = null)
         {
             HasExited = true;
             ExitCode = exitCode;
             WasOutOfMemoryKilled = wasOutOfMemoryKilled;
             CrashCause = crashCause;
+            LastError = lastError;
             _exit.TrySetResult();
         }
 

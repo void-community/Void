@@ -45,6 +45,19 @@ internal static class CrashReports
             : null;
     }
 
+    internal static string Limit(string cause)
+    {
+        if (cause.Length <= MaximumCauseLength)
+            return cause;
+
+        int length = MaximumCauseLength - 1;
+
+        if (char.IsHighSurrogate(cause[length - 1]))
+            length--;
+
+        return $"{cause[..length]}…";
+    }
+
     /// <summary>
     /// Describes a crash in one line from its report: the description and the error up to its first stack frame, such as
     /// "Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash".
@@ -150,19 +163,6 @@ internal static class CrashReports
     private static bool IsSavedSince(FileInfo file, DateTime launchedAt)
     {
         return file.Exists && file.LinkTarget is null && file.LastWriteTimeUtc >= launchedAt;
-    }
-
-    private static string Limit(string cause)
-    {
-        if (cause.Length <= MaximumCauseLength)
-            return cause;
-
-        int length = MaximumCauseLength - 1;
-
-        if (char.IsHighSurrogate(cause[length - 1]))
-            length--;
-
-        return $"{cause[..length]}…";
     }
 
     private static string? Read(string path, Func<string, string?> summarize)

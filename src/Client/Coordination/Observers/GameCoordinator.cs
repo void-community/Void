@@ -17,7 +17,14 @@ internal sealed partial class GameCoordinator
     {
         await game.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(continueOnCapturedContext: false);
         await WriteCompletionAsync(
-            new ProcessExited(game.Process.Id, game.Process.ExitCode ?? -1, game.Process.WasOutOfMemoryKilled, game.Process.MemoryMb, game.Process.CrashCause)
+            new ProcessExited(
+                game.Process.Id,
+                game.Process.ExitCode ?? -1,
+                game.Process.WasOutOfMemoryKilled,
+                game.Process.MemoryMb,
+                game.Process.CrashCause,
+                game.Process.LastError
+            )
         ).ConfigureAwait(continueOnCapturedContext: false);
     }
 

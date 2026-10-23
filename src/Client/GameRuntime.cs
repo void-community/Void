@@ -94,6 +94,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private readonly AsyncLock _windowOperations = new();
     private readonly ConcurrentDictionary<int, Task> _outputTasks = new();
     private readonly ConcurrentDictionary<int, ChannelReader<string>> _outputWarnings = new();
+    private readonly ConcurrentDictionary<int, GameErrorLog> _outputErrors = new();
     private readonly ConcurrentDictionary<int, CancellationToken> _outputSilenceTokens = new();
     private readonly ConcurrentDictionary<int, string> _launchedProcessGroups = new();
     private long _nextWindowGeneration;
@@ -443,9 +444,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
     /// <summary>
     /// Reports each complete line that starts with <see cref="GameWarningPrefix"/>, and the crash report path of each line with
-    /// <see cref="GameCrashMarker"/>, and returns the unfinished last line.
+    /// <see cref="GameCrashMarker"/>, passes each complete line to <paramref name="errors"/>, and returns the unfinished last line.
     /// </summary>
-    internal static string ReadGameOutput(string text, ChannelWriter<string> warnings, Action<string>? crashReported = null)
+    internal static string ReadGameOutput(string text, ChannelWriter<string> warnings, Action<string>? crashReported = null, GameErrorLog? errors = null)
     {
         int lineStart = 0;
         int lineEnd = text.IndexOf(value: '\n', lineStart);
@@ -465,6 +466,8 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
             if (crashMarker >= 0)
                 crashReported?.Invoke(line[(crashMarker + GameCrashMarker.Length)..].Trim().ToString());
 
+            errors?.Read(line, DateTime.UtcNow);
+
             lineStart = lineEnd + 1;
             lineEnd = text.IndexOf(value: '\n', lineStart);
         }
@@ -481,6 +484,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         ChannelWriter<string>? warnings = null,
         Action<string>? crashReported = null,
         Action? outputRead = null,
+        GameErrorLog? errors = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -501,7 +505,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
                 pending += text;
 
                 if (warnings is not null)
-                    unfinishedLine = ReadGameOutput(unfinishedLine + text, warnings, crashReported);
+                    unfinishedLine = ReadGameOutput(unfinishedLine + text, warnings, crashReported, errors);
 
                 if (sessionId is { } id && diagnostics is not null)
                 {
@@ -732,7 +736,7 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
         }
     }
 
-    private async Task PumpGameOutputAsync(Process process, string gameDirectory, Guid? sessionId, ChannelWriter<string> warnings)
+    private async Task PumpGameOutputAsync(Process process, string gameDirectory, Guid? sessionId, ChannelWriter<string> warnings, GameErrorLog errors)
     {
         DateTime launchedAt = DateTime.UtcNow;
         int crashed = 0;
@@ -758,9 +762,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
 
         try
         {
-            // PortableMC may merge the game's streams, so warnings are read from both.
+            // PortableMC may merge the game's streams, so warnings are read from both. It prints the game's log entries on its own output.
             await Task.WhenAll(
-                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings, CrashReported, OutputRead),
+                PumpOutputAsync(process.StandardOutput, Console.Out, sessionId, stream: "stdout", warnings, CrashReported, OutputRead, errors),
                 PumpOutputAsync(process.StandardError, Console.Error, sessionId, stream: "stderr", warnings, CrashReported, OutputRead)
             ).ConfigureAwait(continueOnCapturedContext: false);
         }

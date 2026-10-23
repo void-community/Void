@@ -6,6 +6,7 @@ internal interface IManagedProcess : IDisposable
     int? ExitCode { get; }
     bool HasExited { get; }
     int Id { get; }
+    string? LastError { get; }
     int? MemoryMb { get; }
     bool WasOutOfMemoryKilled { get; }
     void KillTree();

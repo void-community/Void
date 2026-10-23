@@ -115,8 +115,10 @@ RUN set -e; if [ "$TARGETARCH" = "arm64" ]; then \
       python3 -c 'import sys, zipfile; archive, destination = sys.argv[1:]; open(destination, "wb").write(zipfile.ZipFile(archive).read("liblwjgl64.so"))' \
         "$legacyLwjglNativeArchive" /opt/portableminecraftclient/liblwjgl64.so; \
       rm "$legacyLwjglNativeArchive"; \
-      for lwjglVersion in 3.3.3 3.4.1; do \
+      for lwjglVersion in 3.3.1 3.3.2 3.3.3 3.4.1; do \
         for lwjglModule in lwjgl lwjgl-freetype lwjgl-glfw lwjgl-jemalloc lwjgl-openal lwjgl-opengl lwjgl-stb lwjgl-tinyfd; do \
+          # LWJGL 3.3.1 has no FreeType, which the releases that ship it don't use. \
+          if [ "$lwjglVersion:$lwjglModule" = 3.3.1:lwjgl-freetype ]; then continue; fi; \
           lwjglLibraryDirectory="/root/.minecraft/libraries/org/lwjgl/$lwjglModule/$lwjglVersion"; \
           mkdir -p "$lwjglLibraryDirectory"; \
           for lwjglClassifier in '' '-natives-linux-arm64'; do \

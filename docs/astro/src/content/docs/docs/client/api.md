@@ -104,7 +104,7 @@ The game should only end through `POST /api/game/stop`. If Minecraft quits, cras
 
 - `client.process.crashed` when Minecraft saved a crash report, or its Java runtime an error log. The message says what they say, for example `Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash` or `Minecraft's Java runtime crashed: SIGSEGV (0xb) at pc=…, pid=…, tid=… in C [libc.so.6+0x8f228]`.
 - `client.process.out_of_memory` when it ran out of memory and was killed.
-- `client.process.exited` otherwise.
+- `client.process.exited` otherwise. When Minecraft logged an error shortly before it ended, the message ends with it, for example `Minecraft exited without a stop request, last error: The game failed to start because the currently active LWJGL version is not compatible. …`.
 
 The client also closes a game that can't go on by itself, with the same result: NeoForge showing that mods failed to load, or Minecraft still running 10 seconds after it reported a crash.
 If no operation was running at the time, `operation` and `operationState` still describe the last one.

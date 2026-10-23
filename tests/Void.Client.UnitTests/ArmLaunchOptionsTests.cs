@@ -49,11 +49,14 @@ public sealed class ArmLaunchOptionsTests
     }
 
     [Theory]
-    [InlineData("3.3.3", 21)]
-    [InlineData("3.3.1", 17)]
-    [InlineData("3.2.2", 8)]
-    public void KeepsLwjgl333ForReleasesBeforeLwjgl34(string lwjglVersion, int javaMajorVersion)
+    [InlineData("3.3.3", 21, "3.3.3")]
+    [InlineData("3.3.2", 17, "3.3.2")]
+    [InlineData("3.3.1", 17, "3.3.1")]
+    [InlineData("3.2.2", 8, "3.3.3")]
+    [InlineData("3.1.6", 8, "3.3.3")]
+    public void UsesMinecraftLwjglVersionWhereArmNativesExist(string lwjglVersion, int javaMajorVersion, string expectedFixVersion)
     {
+        // Issue #1620: Sodium for 1.20.1 exits the game unless it runs on LWJGL 3.3.1, which has ARM64 natives. 3.2.2 and older have none.
         var plan = CreatePlan($$"""
             {
               "javaVersion": { "majorVersion": {{javaMajorVersion}} },
@@ -65,7 +68,7 @@ public sealed class ArmLaunchOptionsTests
             }
             """);
 
-        Assert.Equal("3.3.3", plan.FixVersion);
+        Assert.Equal(expectedFixVersion, plan.FixVersion);
         Assert.Equal(["lwjgl", "lwjgl-glfw"], plan.Modules);
         Assert.Equal(javaMajorVersion, plan.JavaMajorVersion);
     }
@@ -121,6 +124,18 @@ public sealed class ArmLaunchOptionsTests
                 "--exclude-lib", "org.lwjgl:lwjgl-vulkan:*:natives-linux-arm64"
             ],
             GameRuntime.CreateArmPortableMinecraftArguments(options, requestedArguments: [], isLaunch: false)
+        );
+    }
+
+    [Fact]
+    public void UsesSystemAllocatorWithLwjgl331()
+    {
+        // LWJGL 3.3.1's ARM64 jemalloc refuses 16 KiB pages, so Minecraft 1.20.1 failed to allocate its render buffers.
+        GameRuntime.ArmLaunchOptions options = new(UsesLegacyJvm: false, FixLwjglVersion: "3.3.1", ExcludedLibraries: [], IncludedClassPaths: []);
+
+        Assert.Equal(
+            ["--fix-lwjgl", "3.3.1", "--jvm-arg=-Dorg.lwjgl.system.allocator=system"],
+            GameRuntime.CreateArmPortableMinecraftArguments(options, requestedArguments: [], isLaunch: true)
         );
     }
 

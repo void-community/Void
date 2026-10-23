@@ -341,6 +341,7 @@ internal sealed partial class GameRuntime
                     initialOutOfMemoryKillCount,
                     DrainOutputAsync(process.Id),
                     TakeOutputWarnings(process.Id),
+                    TakeOutputErrors(process.Id),
                     portableMinecraftVersion,
                     DateTimeOffset.UtcNow,
                     tracker,
@@ -359,7 +360,7 @@ internal sealed partial class GameRuntime
                     await windowCancellationTokenSource.CancelAsync().ConfigureAwait(continueOnCapturedContext: false);
                     await ((Task)windowTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
-                    throw new GameProcessExitException(managedProcess.WasOutOfMemoryKilled, memoryMb, managedProcess.CrashCause);
+                    throw new GameProcessExitException(managedProcess.WasOutOfMemoryKilled, memoryMb, managedProcess.CrashCause, managedProcess.LastError);
                 }
 
                 try
@@ -390,6 +391,9 @@ internal sealed partial class GameRuntime
 
                 if (_outputWarnings.TryRemove(process.Id, out var abandonedWarnings))
                     GC.KeepAlive(abandonedWarnings);
+
+                if (_outputErrors.TryRemove(process.Id, out var abandonedErrors))
+                    GC.KeepAlive(abandonedErrors);
 
                 if (runningGame is null)
                     process.Dispose();
@@ -842,10 +846,17 @@ internal sealed partial class GameRuntime
 
         var sessionId = diagnostics?.CurrentSessionId;
         Channel<string> warnings = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+        GameErrorLog errors = new();
         _outputWarnings[process.Id] = warnings.Reader;
-        _outputTasks[process.Id] = PumpGameOutputAsync(process, gameDirectory, sessionId, warnings.Writer);
+        _outputErrors[process.Id] = errors;
+        _outputTasks[process.Id] = PumpGameOutputAsync(process, gameDirectory, sessionId, warnings.Writer, errors);
 
         return process;
+    }
+
+    private GameErrorLog TakeOutputErrors(int processId)
+    {
+        return _outputErrors.TryRemove(processId, out var errors) ? errors : new GameErrorLog();
     }
 
     private CancellationToken TakeOutputSilenceToken(int processId)

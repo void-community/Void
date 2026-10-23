@@ -45,8 +45,9 @@ internal sealed partial class GameRuntime
             highestComponents = components;
         }
 
-        // LWJGL 3.4 builds are tied to the Minecraft release that ships them, while older releases share the 3.3.3 ARM64 natives.
-        bool usesVersionLwjgl = CompareVersionComponents(highestComponents, [3, 4, 0]) >= 0;
+        // Mods such as Sodium refuse any LWJGL other than the one their release ships, so a release keeps its own wherever Maven Central
+        // has ARM64 natives for it, which starts with 3.2.3. Older releases use the 3.3.3 natives.
+        bool usesVersionLwjgl = CompareVersionComponents(highestComponents, [3, 2, 3]) >= 0;
         string fixVersion = usesVersionLwjgl ? highestVersion : PortableMinecraftArmLwjglMinimumVersion;
         string[] modules = [.. libraries.Where(static library => library.Classifier is null).Select(static library => library.Module).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
         Uri? unsafeCoreDownloadUri = null;
@@ -80,6 +81,10 @@ internal sealed partial class GameRuntime
         if (options.FixLwjglVersion is not null && !HasPortableMinecraftArgument(requestedArguments, argumentName: "--fix-lwjgl"))
         {
             arguments.AddRange(["--fix-lwjgl", options.FixLwjglVersion]);
+
+            // LWJGL 3.3.1's ARM64 jemalloc fails every allocation on hosts with pages larger than 4 KiB, so its releases use the system's.
+            if (options.FixLwjglVersion == "3.3.1")
+                arguments.Add(item: "--jvm-arg=-Dorg.lwjgl.system.allocator=system");
 
             foreach (string classPath in options.IncludedClassPaths)
                 arguments.AddRange(["--include-class", classPath]);

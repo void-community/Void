@@ -28,6 +28,7 @@ internal sealed record RunningGame : IDisposable
         long? initialOutOfMemoryKillCount,
         Task outputTask,
         ChannelReader<string> warnings,
+        GameErrorLog errors,
         string version,
         DateTimeOffset startedAt,
         GameTrackerConnection tracker,
@@ -40,7 +41,8 @@ internal sealed record RunningGame : IDisposable
             initialOutOfMemoryKillCount,
             outputTask,
             minecraftDirectory: minecraftDirectory,
-            launchedAt: startedAt.UtcDateTime
+            launchedAt: startedAt.UtcDateTime,
+            errors: errors
         );
         Version = version;
         StartedAt = startedAt;
