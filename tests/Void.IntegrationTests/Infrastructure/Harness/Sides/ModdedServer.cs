@@ -105,13 +105,9 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             jvmOptions = "-Dforge.logging.mojang.level=debug -Dforge.logging.marker.networking=ACCEPT";
         }
 
-        if (LegacyForgePatcher.LoadsOn(javaMajorVersion))
-        {
-            builder = builder.WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath);
-            jvmOptions = $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}";
-        }
-
-        builder = builder.WithEnvironment("JVM_OPTS", jvmOptions);
+        builder = builder
+            .WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath)
+            .WithEnvironment("JVM_OPTS", $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}");
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
     }
