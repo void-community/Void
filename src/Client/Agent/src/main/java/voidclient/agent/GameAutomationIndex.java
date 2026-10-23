@@ -587,6 +587,12 @@ final class GameAutomationIndex {
                     TypeInsnNode constructed = possibleConstructedTarget
                         ? findPreviousScreenNew(instruction, 48, superTypes, screenBaseName)
                         : null;
+
+                    // A screen the method takes as a parameter is chosen by its caller. The agent has no such screen to pass, only the
+                    // current one, and setting that changes nothing.
+                    if (constructed == null && isParameterReference(method, argument))
+                        continue;
+
                     TransitionTargetKind targetKind = classifyTransitionTarget(method, argument, constructed);
 
                     if (constructed != null)
@@ -653,6 +659,16 @@ final class GameAutomationIndex {
             return TransitionTargetKind.SELF;
 
         return constructed == null ? TransitionTargetKind.PARENT : TransitionTargetKind.CONSTRUCTED;
+    }
+
+    private static boolean isParameterReference(MethodNode method, AbstractInsnNode argument) {
+        if (!(argument instanceof VarInsnNode) || argument.getOpcode() != Opcodes.ALOAD)
+            return false;
+
+        boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
+        int slot = ((VarInsnNode) argument).var;
+        int end = (Type.getArgumentsAndReturnSizes(method.desc) >> 2) - (isStatic ? 1 : 0);
+        return slot >= (isStatic ? 0 : 1) && slot < end;
     }
 
     private static boolean isSelfReference(MethodNode method, AbstractInsnNode argument) {

@@ -2,6 +2,7 @@ package voidclient.agent;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.Assert;
 import org.junit.Test;
@@ -55,6 +56,39 @@ public final class ButtonTransitionTest {
         Assert.assertFalse(closes.targetsParent || closes.targetsSelf);
         Assert.assertTrue(closes.targetScreenNames.isEmpty());
         Assert.assertTrue(stays.targetsSelf);
+    }
+
+    @Test
+    public void screenTakenAsParameterIsNoTransition() {
+        // Issue #1616: Minecraft 1.21.1's accessibility onboarding screen sets the screen its caller passes, which the agent can only fill
+        // with the current screen, so the transition changed nothing.
+        ClassNode screen = new ClassNode();
+        screen.name = "AccessibilityOnboardingScreen";
+        screen.superName = "Screen";
+        MethodNode forward = new MethodNode(Opcodes.ACC_PRIVATE, "lambda$closeAndSetScreen$4", "(LScreen;)V", null, null);
+        forward.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        forward.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, "AccessibilityOnboardingScreen", "minecraft", "LMinecraft;"));
+        forward.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        forward.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "Minecraft", "setScreen", "(LScreen;)V", false));
+        forward.instructions.add(new InsnNode(Opcodes.RETURN));
+        MethodNode back = new MethodNode(Opcodes.ACC_PUBLIC, "onClose", "()V", null, null);
+        back.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        back.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, "AccessibilityOnboardingScreen", "minecraft", "LMinecraft;"));
+        back.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        back.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, "AccessibilityOnboardingScreen", "lastScreen", "LScreen;"));
+        back.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "Minecraft", "setScreen", "(LScreen;)V", false));
+        back.instructions.add(new InsnNode(Opcodes.RETURN));
+        screen.methods.add(forward);
+        screen.methods.add(back);
+
+        List<TransitionPlan> transitions = GameAutomationIndex.discoverTransitions(Collections.singletonMap(screen.name, screen),
+            Collections.singletonMap(screen.name, screen.superName), "Screen", new GameAutomationIndex.ScreenSetter("Minecraft", "setScreen", "(LScreen;)V"))
+            .get(screen.name);
+
+        // A parent the screen keeps in a field is still a way back.
+        Assert.assertEquals(1, transitions.size());
+        Assert.assertEquals("onClose", transitions.get(0).methodName);
+        Assert.assertTrue(transitions.get(0).targetsParent);
     }
 
     private static TransitionPlan castTransition(org.objectweb.asm.tree.AbstractInsnNode argument) {

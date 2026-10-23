@@ -520,8 +520,9 @@ public final class GameAutomationController {
         System.err.println("Void client agent invoking UI transition " + transition.describe());
         consumedScreen = screen;
 
-        // A mod menu can leave out the button an older route clicks, which counts as having no route.
-        if (invokeTransition(screen, transition)) {
+        // A mod menu can leave out the button an older route clicks, which counts as having no route, and so does a transition that
+        // leaves the same screen open.
+        if (invokeTransition(screen, transition) && !isCurrentScreen(screenSetterReceiver.get(), screen, index.plan.screenBaseName)) {
             waitingScreenName = null;
             operation.unroutableSince = 0L;
         } else {
