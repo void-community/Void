@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Mojang;
 using Void.Minecraft.Network;
+using Void.Minecraft.Network.Definitions;
 using Void.Minecraft.Network.Messages.Binary;
 using Void.Minecraft.Network.Messages.Packets;
 using Void.Minecraft.Players.Extensions;
@@ -18,6 +19,7 @@ using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Exceptions;
+using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Api.Plugins.Dependencies;
@@ -25,6 +27,7 @@ using Void.Proxy.Api.Servers;
 using Void.Proxy.Plugins.Common.Events;
 using Void.Proxy.Plugins.Common.Extensions;
 using Void.Proxy.Plugins.Common.Mojang;
+using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Network.Packets.Serverbound;
 
 namespace Void.Proxy.Plugins.Common.Services.Authentication;
@@ -317,6 +320,110 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
     {
         return ValueTask.FromResult(true);
     }
+
+    /// <summary>
+    /// Waits for the Join Game of the server the player joins, forwarding what the server sends the player before it. Forge before 1.13
+    /// handshakes with Plugin Message packets after Login Success, and sends Join Game only once the player has answered them, so the player's
+    /// Plugin Messages reach the server meanwhile.
+    /// </summary>
+    /// <returns>The server's Join Game, or <see langword="null" /> when the server disconnected the player instead, which kicks the player with the server's reason.</returns>
+    protected async ValueTask<JoinGamePacket?> ReceiveJoinGameAsync(ILink link, CancellationToken cancellationToken)
+    {
+        using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var serverPlaying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relay = RelayPlayerPluginMessagesAsync(link, serverPlaying.Task, relayCancellation, cancellationToken);
+
+        IMinecraftClientboundPacket? packet;
+
+        try
+        {
+            // Packets the proxy handles itself, such as Keep Alives it answers, are canceled
+            while ((packet = await ReceiveServerPacketAsync()) is not (JoinGamePacket or DisconnectPacket))
+            {
+                // The server reads the player's packets as play ones only from its first packet after Login Success
+                serverPlaying.TrySetResult();
+
+                if (packet is not null)
+                    await link.SendPacketAsync(packet, cancellationToken);
+            }
+        }
+        finally
+        {
+            await relayCancellation.CancelAsync();
+            await relay;
+        }
+
+        if (packet is DisconnectPacket disconnectPacket)
+        {
+            link.Player.Logger.LogInformation("Player {Player} cannot join {Server}: {Reason}", link.Player, link.Server, disconnectPacket.Reason);
+
+            // As when the server disconnects the player during login, the player leaves with its reason, also because a Forge handshake the
+            // player has started can't continue on another server
+            await link.Player.KickAsync(disconnectPacket.Reason, cancellationToken);
+            return null;
+        }
+
+        return (JoinGamePacket)packet;
+
+
+        async ValueTask<IMinecraftClientboundPacket?> ReceiveServerPacketAsync()
+        {
+            // Forge servers send nothing while the player applies their data, which large modpacks take a while for, so only a packet that has
+            // begun can time out
+            var message = await link.ServerChannel.ReadMessageAsync(relayCancellation.Token, cancellationToken);
+
+            if (message is not IMinecraftClientboundPacket serverPacket)
+                throw new InvalidOperationException($"Received {message} packet is not {typeof(IMinecraftClientboundPacket)} packet");
+
+            var cancelled = await events.ThrowWithResultAsync(new MessageReceivedEvent(Side.Server, Side.Server, Side.Proxy, Direction.Clientbound, serverPacket, link, link.Player), cancellationToken);
+            return cancelled ? null : serverPacket;
+        }
+    }
+
+    private async Task RelayPlayerPluginMessagesAsync(ILink link, Task serverPlaying, CancellationTokenSource relayCancellation, CancellationToken cancellationToken)
+    {
+        var pluginMessageId = PacketIdDefinitions.ServerboundPlayPluginMessage.Last(mapping => mapping.ProtocolVersion <= link.Player.ProtocolVersion).Id;
+
+        try
+        {
+            while (await ReadPlayerMessageAsync() is { } message)
+            {
+                using (message)
+                {
+                    // Anything the player sends before the server starts talking, and anything but plugin messages before Join Game, belongs
+                    // to the world it is leaving, such as messages of its mods while it switches servers
+                    if (!serverPlaying.IsCompleted || message is not IMinecraftBinaryMessage { Id: var id } pluginMessage || id != pluginMessageId)
+                    {
+                        link.Player.Logger.LogTrace("Dropping {Message} that player {Player} sent before joining {Server}", message, link.Player, link.Server);
+                        continue;
+                    }
+
+                    if (await events.ThrowWithResultAsync(new MessageReceivedEvent(Side.Client, Side.Client, Side.Proxy, Direction.Serverbound, message, link, link.Player), cancellationToken))
+                        continue;
+
+                    await link.SendPacketAsync(Side.Server, pluginMessage, cancellationToken);
+                }
+            }
+        }
+        finally
+        {
+            // Without the player's answers the server never sends Join Game, so a relay that failed stops waiting for it
+            await relayCancellation.CancelAsync();
+        }
+
+        async ValueTask<INetworkMessage?> ReadPlayerMessageAsync()
+        {
+            try
+            {
+                return await link.PlayerChannel.ReadMessageAsync(relayCancellation.Token, cancellationToken);
+            }
+            catch (OperationCanceledException) when (relayCancellation.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+    }
+
 
     protected static async ValueTask<bool> VerifyMojangProfile(IPlayer player, CancellationToken cancellationToken)
     {
