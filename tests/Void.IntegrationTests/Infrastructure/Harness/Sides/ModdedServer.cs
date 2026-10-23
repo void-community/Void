@@ -105,7 +105,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             jvmOptions = "-Dforge.logging.mojang.level=debug -Dforge.logging.marker.networking=ACCEPT";
         }
 
-        if (LegacyForgePatcher.AppliesToServer(loader, release))
+        if (LegacyForgePatcher.LoadsOn(javaMajorVersion))
         {
             builder = builder.WithResourceMapping(LegacyForgePatcher.Url, LegacyForgePatcher.ServerPath);
             jvmOptions = $"-javaagent:{LegacyForgePatcher.ServerPath} {jvmOptions}";

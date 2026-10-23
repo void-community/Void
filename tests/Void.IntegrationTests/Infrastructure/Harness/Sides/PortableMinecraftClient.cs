@@ -334,7 +334,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             };
 
             // The client's game jar of Forge for Minecraft 1.7.2 carries no Mojang signature, which its FML refuses to launch unless told to ignore it.
-            if (Setup is { } forgeSetup && LegacyForgePatcher.AppliesTo(forgeSetup.Loader, forgeSetup.MinecraftRelease))
+            if (Setup is { Loader: ModLoader.Forge, MinecraftRelease: { Major: 1, Minor: 7, Patch: 2 } })
                 arguments = [.. arguments, "--jvm-arg=-Dfml.ignoreInvalidMinecraftCertificates=true"];
 
             // The client starts a loader build as the servers report it, with its Minecraft version.

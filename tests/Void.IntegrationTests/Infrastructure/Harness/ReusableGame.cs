@@ -23,8 +23,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => _client?.Logs ?? [];
 
-    // Forge for Minecraft 1.7.2 can't start on the client's Java without LegacyForgePatcher.
-    private IReadOnlyList<Uri> JavaAgents => setup is { } moddedSetup && LegacyForgePatcher.AppliesTo(moddedSetup.Loader, moddedSetup.MinecraftRelease) ? [LegacyForgePatcher.Url] : [];
+    private static IReadOnlyList<Uri> JavaAgents => [LegacyForgePatcher.Url];
 
     private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion.FirstRelease}";
 
