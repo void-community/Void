@@ -38,6 +38,7 @@ public static class Registry
         { PacketIdDefinitions.ClientboundPlayKeepAliveRequest, typeof(KeepAliveRequestPacket) },
         { PacketIdDefinitions.ClientboundStartConfiguration, typeof(StartConfigurationPacket) },
         { PacketIdDefinitions.ClientboundPlayDisconnect, typeof(NbtDisconnectPacket) },
+        { PacketIdDefinitions.ClientboundJoinGame, typeof(JoinGamePacket) },
         { PacketIdDefinitions.ClientboundSystemChatMessage, typeof(SystemChatMessagePacket) },
         { PacketIdDefinitions.ClientboundCommands, typeof(CommandsPacket) },
         { PacketIdDefinitions.ClientboundCommandSuggestionsResponse, typeof(CommandSuggestionsResponsePacket) }

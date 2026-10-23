@@ -354,7 +354,14 @@ public static class PacketIdDefinitions
         new(0x23, ProtocolVersion.MINECRAFT_1_19),
         new(0x25, ProtocolVersion.MINECRAFT_1_19_1),
         new(0x24, ProtocolVersion.MINECRAFT_1_19_3),
-        new(0x28, ProtocolVersion.MINECRAFT_1_19_4)
+        new(0x28, ProtocolVersion.MINECRAFT_1_19_4),
+        new(0x29, ProtocolVersion.MINECRAFT_1_20_2),
+        new(0x2B, ProtocolVersion.MINECRAFT_1_20_5),
+        new(0x2C, ProtocolVersion.MINECRAFT_1_21_2),
+        new(0x2B, ProtocolVersion.MINECRAFT_1_21_5),
+        new(0x30, ProtocolVersion.MINECRAFT_1_21_9),
+        new(0x31, ProtocolVersion.MINECRAFT_26_1),
+        new(0x32, ProtocolVersion.MINECRAFT_26_3)
     ];
 
     /// <summary>Mappings for the clientbound respawn packet.</summary>

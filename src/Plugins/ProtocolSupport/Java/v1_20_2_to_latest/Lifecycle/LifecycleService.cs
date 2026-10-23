@@ -6,6 +6,7 @@ using Void.Minecraft.Network.Channels.Extensions;
 using Void.Minecraft.Players.Extensions;
 using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
+using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
@@ -25,6 +26,12 @@ public class LifecycleService(ILogger<LifecycleService> logger, IEventService ev
     protected override bool IsSupportedVersion(ProtocolVersion protocolVersion)
     {
         return Plugin.SupportedVersions.Contains(protocolVersion);
+    }
+
+    // A player that ends its configuration has no world until the server's Join Game reaches it
+    protected override bool GivesWorld(INetworkMessage message)
+    {
+        return message is JoinGamePacket;
     }
 
     protected override async ValueTask<bool> SendChatMessageAsync(IPlayer player, Component text, CancellationToken cancellationToken)

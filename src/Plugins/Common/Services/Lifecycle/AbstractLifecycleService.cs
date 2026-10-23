@@ -16,6 +16,7 @@ using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Exceptions;
+using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Api.Servers;
@@ -80,9 +81,6 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
 
-        if (_serverKicks.TryGetValue(@event.Player, out var kick) && ReferenceEquals(kick.NextLink, @event.Link) && @event.Direction is Direction.Clientbound)
-            kick.NextServerSpoke = true;
-
         // Plugins such as SlowJoin may answer keep-alives on the player's behalf.
         if (@event.Result)
             return;
@@ -123,8 +121,8 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         if (!IsSupportedVersion(@event.Player.ProtocolVersion))
             return;
 
-        // Before the next server's first packet, such as the Join Game of 1.20.2 and later, the game may have no world to show chat in
-        if (!_serverKicks.TryGetValue(@event.Player, out var kick) || !ReferenceEquals(kick.NextLink, @event.Link) || !kick.NextServerSpoke)
+        // A game shows chat only in a world, which it may not have yet when it joins the next server
+        if (!_serverKicks.TryGetValue(@event.Player, out var kick) || !ReferenceEquals(kick.NextLink, @event.Link) || !GivesWorld(@event.Message))
             return;
 
         if (!_serverKicks.TryRemove(new KeyValuePair<IPlayer, ServerKick>(@event.Player, kick)))
@@ -199,6 +197,15 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     protected abstract bool IsSupportedVersion(ProtocolVersion version);
 
     /// <summary>
+    /// Whether the player has the world of the server it joined once <paramref name="message" /> from that server has reached it. The proxy gives
+    /// a player the world while it joins, unless the protocol passes it on later.
+    /// </summary>
+    protected virtual bool GivesWorld(INetworkMessage message)
+    {
+        return true;
+    }
+
+    /// <summary>
     /// Forwards the backend's keep-alive to the player, so that the backend decides when the player has timed out, as with a
     /// direct connection. A link that is still joining has no player waiting behind it yet, so the proxy answers for the player.
     /// </summary>
@@ -251,7 +258,7 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     }
 
     /// <summary>
-    /// Why a server kicked a player, which the player reads on the server it moves to once that server has sent it something.
+    /// Why a server kicked a player, which the player reads on the server it moves to once it has that server's world.
     /// </summary>
     private sealed class ServerKick(IServer server, Component reason)
     {
@@ -260,8 +267,5 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
 
         /// <summary>The link to the server the player moved to, or <see langword="null"/> while it moves.</summary>
         public ILink? NextLink { get; set; }
-
-        /// <summary>Whether the server the player moved to has sent the player something.</summary>
-        public bool NextServerSpoke { get; set; }
     }
 }
