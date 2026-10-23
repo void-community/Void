@@ -33,11 +33,10 @@ public abstract class ProxiedKickTestBase(ConnectionsFixture fixture) : Integrat
             await fixture.Server1.ExpectLoginAsync(game.Username, game.StartedAt, Timeouts.SetupTimeoutToken);
             await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
-            var kickedAt = DateTime.UtcNow;
             var secondServerReadyTask = fixture.VoidProxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-2", Timeouts.StepTimeoutToken);
             await fixture.Server1.RunCommandAsync($"kick {game.Username} {kickReason}", Timeouts.StepTimeoutToken);
             await secondServerReadyTask;
-            await game.ExpectChatAsync(kickReason, kickedAt, Timeouts.StepTimeoutToken);
+            await game.ExpectChatAsync(kickReason, Timeouts.StepTimeoutToken);
             await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
             await game.LeaveAsync(fixture.Server2, Timeouts.StepTimeoutToken);

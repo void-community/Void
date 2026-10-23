@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -304,6 +305,28 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             await EnsureSuccessAsync(response, "Taking Minecraft screenshot", cancellationToken);
 
             return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads the log the game writes itself. The launcher cuts the game's output short at the first text it takes for markup, such as a chat
+        /// line naming its player in angle brackets on Forge and NeoForge, so only this log keeps everything the game logged.
+        /// </summary>
+        public async Task<string[]> ReadGameLogAsync(CancellationToken cancellationToken = default)
+        {
+            if (_sessionId is not { } sessionId)
+                throw new IntegrationTestException("The client did not return a diagnostic session ID; its image may predate the diagnostics API.");
+
+            using var response = await HttpClient.GetAsync($"/api/game/diagnostics/{sessionId}", cancellationToken);
+            await EnsureSuccessAsync(response, "Reading Minecraft diagnostics", cancellationToken);
+
+            await using var archiveStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read);
+
+            if (archive.GetEntry("logs-latest.log") is not { } entry)
+                return [];
+
+            using var reader = new StreamReader(entry.Open());
+            return (await reader.ReadToEndAsync(cancellationToken)).Split('\n');
         }
 
         public static Task LogAsync(string message, CancellationToken cancellationToken = default)

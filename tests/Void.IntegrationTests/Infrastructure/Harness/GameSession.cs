@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,10 +43,12 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
         await game.JoinServerAsync(endPoint, cancellationToken);
     }
 
-    /// <summary>Waits until the game has shown <paramref name="text"/> in its chat since <paramref name="since"/>.</summary>
-    public async Task ExpectChatAsync(string text, DateTime since, CancellationToken cancellationToken = default)
+    /// <summary>Waits until the game has shown <paramref name="text"/> in its chat.</summary>
+    public async Task ExpectChatAsync(string text, CancellationToken cancellationToken = default)
     {
-        await game.Container.ExpectTextAsync(text, since, cancellationToken);
+        while (!(await game.ReadGameLogAsync(cancellationToken)).Any(line => line.Contains("[CHAT]", StringComparison.Ordinal) && line.Contains(text, StringComparison.Ordinal)))
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+
         await MakeStepAsync("chat", cancellationToken);
     }
 
