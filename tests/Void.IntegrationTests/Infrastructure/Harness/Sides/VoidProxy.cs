@@ -178,7 +178,7 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
             // The player answered a keep-alive of the server: forwarded to it, or the first answer SlowJoin waits for after the join.
             bool answerForwarded = line.Contains("Forwarding Keep Alive response ", StringComparison.Ordinal) && line.Contains($" to {serverName}", StringComparison.Ordinal);
 
-            return answerForwarded || line.Contains($"answered its first Keep Alive on {serverName}", StringComparison.Ordinal);
+            return answerForwarded || line.Contains($"answered a Keep Alive on {serverName}", StringComparison.Ordinal);
         }, waiterCancellationTokenSource.Token);
         var disconnectedTask = LogWriter.WaitForLineAsync(
             line => line.Contains($"Player {username} disconnected", StringComparison.Ordinal),
