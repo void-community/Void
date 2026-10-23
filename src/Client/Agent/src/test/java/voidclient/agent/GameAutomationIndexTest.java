@@ -8,6 +8,9 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+import java.security.cert.Certificate;
 import java.util.Collections;
 import java.util.Map;
 import org.junit.Assert;
@@ -40,6 +43,60 @@ public final class GameAutomationIndexTest {
     public void skipsJdkModulesAndLocationsWithoutAnOpenFileSystem() throws Exception {
         Assert.assertNull(GameAutomationIndex.readTypes(URI.create("jrt:/java.sql")));
         Assert.assertNull(GameAutomationIndex.readTypes(URI.create("jar:file:/missing/void-client.jar!/")));
+    }
+
+    @Test
+    public void jdkClassesNeverWaitForAThreadThatIndexesGameCode() throws Exception {
+        // The JDK loads its own classes while it holds locks that reading a jar needs too, which deadlocked games that were indexing.
+        final ProtectionDomain jdkModule = new ProtectionDomain(new CodeSource(new URL("jrt:/java.sql"), (Certificate[]) null), null);
+        final Object[] indexes = { "not indexed" };
+        final Object locked = new Object();
+        final boolean[] holding = { false };
+        Thread indexing = new Thread(new Runnable() {
+            public void run() {
+                synchronized (GameAutomationIndex.class) {
+                    synchronized (locked) {
+                        holding[0] = true;
+                        locked.notifyAll();
+
+                        while (holding[0])
+                            try {
+                                locked.wait();
+                            } catch (InterruptedException exception) {
+                                return;
+                            }
+                    }
+                }
+            }
+        });
+        Thread jdk = new Thread(new Runnable() {
+            public void run() {
+                indexes[0] = GameAutomationIndex.index(null, "jdk/internal/misc/Unsafe", null) == null
+                    && GameAutomationIndex.index(ClassLoader.getSystemClassLoader().getParent(), "java/sql/Date", jdkModule) == null
+                    && GameAutomationIndex.index(GameAutomationIndexTest.class.getClassLoader(), "voidclient/Hidden", new ProtectionDomain(null, null)) == null
+                    ? null : "indexed";
+            }
+        });
+
+        indexing.start();
+        synchronized (locked) {
+            while (!holding[0])
+                locked.wait();
+        }
+
+        jdk.start();
+        jdk.join(5000L);
+        boolean waited = jdk.isAlive();
+
+        synchronized (locked) {
+            holding[0] = false;
+            locked.notifyAll();
+        }
+        indexing.join();
+        jdk.join();
+
+        Assert.assertFalse("JDK classes waited for the thread that indexes game code", waited);
+        Assert.assertNull(indexes[0]);
     }
 
     @Test

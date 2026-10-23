@@ -43,6 +43,7 @@ final class GameAutomationIndex {
     private static final String ForgeMinecraftLocation = "forge:minecraft";
     private static final Map<String, IndexedCode> IndexedLocations = new HashMap<String, IndexedCode>();
     private static final Set<String> UnreadableLocations = new HashSet<String>();
+    private static final ClassLoader PlatformLoader = ClassLoader.getSystemClassLoader().getParent();
     private static boolean unreadableMinecraftRecorded;
 
     private GameAutomationIndex() {
@@ -53,18 +54,25 @@ final class GameAutomationIndex {
      *
      * @return the index, or {@code null} when that code has no game screens or can't be read yet
      */
-    static synchronized IndexedCode index(final ClassLoader loader, String className, ProtectionDomain domain) {
+    static IndexedCode index(final ClassLoader loader, String className, ProtectionDomain domain) {
         CodeSource codeSource = domain == null ? null : domain.getCodeSource();
         URL location = codeSource == null ? null : codeSource.getLocation();
+
+        // JDK classes hold no game code, and never wait for a thread that indexes it. The JDK loads them while it holds locks of its own,
+        // such as the one a jar's constructor takes, which reading game code needs too, and Forge's loader reads signed jars while the JDK
+        // may still be loading the classes that verify them. Forge 1.13 to 1.16 defines Minecraft's classes without a code source; other
+        // classes without one hold no game code either.
+        if (loader == null || loader == PlatformLoader || location == null && !className.startsWith("net/minecraft/"))
+            return null;
+
+        return index(loader, className, location);
+    }
+
+    private static synchronized IndexedCode index(final ClassLoader loader, String className, URL location) {
         String key;
         IndexedCode indexed;
 
         if (location == null) {
-            // Forge 1.13 to 1.16 defines Minecraft's classes without a code source. JDK classes have none either, and must never reach
-            // Forge's loader, which reads signed jars while the JDK may still be loading the classes that verify them.
-            if (loader == null || !className.startsWith("net/minecraft/"))
-                return null;
-
             key = ForgeMinecraftLocation;
             indexed = index(key, new ModLoaderCode.TypeReader() {
                 public Map<String, ClassNode> read() throws Exception {
