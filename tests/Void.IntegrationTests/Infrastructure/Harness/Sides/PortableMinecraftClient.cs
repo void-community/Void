@@ -195,6 +195,20 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             await EnsureSuccessAsync(response, $"Navigating Minecraft {ProtocolVersion.FirstRelease} to {dockerHost}:{dockerPort}", cancellationToken);
         }
 
+        /// <summary>Waits until the game has left its server, such as after the server kicked it, and returns why, as the game shows it.</summary>
+        public async Task<string?> WaitForLeaveAsync(CancellationToken cancellationToken = default)
+        {
+            var status = await ReadStatusAsync(cancellationToken);
+
+            while (status.State is "connected")
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(ClientStatePollDelayMilliseconds), cancellationToken);
+                status = await ReadStatusAsync(cancellationToken);
+            }
+
+            return status.Disconnect?.Message;
+        }
+
         public async Task JoinServerExpectingFailureAsync(EndPoint endPoint, string expectedReason, CancellationToken cancellationToken = default)
         {
             var (dockerHost, dockerPort) = endPoint.AsDockerHostPort;
@@ -538,7 +552,9 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
         private record ApiProblemDetails(string? Title, int? Status, string? Detail, ApiFailure? Failure);
 
-        private record ApiStatus(string State, long OperationId, string? Operation, string OperationState, int? ProcessId, int? ExitCode, string? Message, string? Error, ApiFailure? Failure, DateTimeOffset UpdatedAt, Guid? SessionId = null);
+        private record ApiStatus(string State, long OperationId, string? Operation, string OperationState, int? ProcessId, int? ExitCode, string? Message, string? Error, ApiFailure? Failure, DateTimeOffset UpdatedAt, Guid? SessionId = null, ApiDisconnect? Disconnect = null);
+
+        private record ApiDisconnect(string? Code, string? Stage, string? Message);
 
         private record StopGameResponse(string Mode, ApiStatus Status);
 

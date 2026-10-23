@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Void.IntegrationTests.Infrastructure.Exceptions;
@@ -40,6 +41,16 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
     public async Task JoinServerAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {
         await game.JoinServerAsync(endPoint, cancellationToken);
+    }
+
+    /// <summary>Waits until the server the game is on has kicked it, and checks that the game shows the reason the server gave.</summary>
+    public async Task ExpectKickAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        var shownReason = await game.WaitForLeaveAsync(cancellationToken);
+        await MakeStepAsync("kicked", cancellationToken);
+
+        if (shownReason?.Contains(reason, StringComparison.Ordinal) is not true)
+            throw new IntegrationTestException($"{game.GameName} left its server showing {JsonSerializer.Serialize(shownReason)} rather than the server's reason {reason}");
     }
 
     public async Task JoinServerExpectingFailureAsync(EndPoint endPoint, string expectedReason, CancellationToken cancellationToken = default)

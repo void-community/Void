@@ -58,6 +58,12 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         await Container.ExpectTextAsync($"{username}[/", since, cancellationToken);
     }
 
+    /// <summary>Runs a command on the server as its operator does, through the image's RCON client.</summary>
+    public async Task RunCommandAsync(string command, CancellationToken cancellationToken = default)
+    {
+        await Container.RunCommandAsync(["rcon-cli", .. command.Split(' ')], cancellationToken);
+    }
+
     public async Task ExpectTextAsync(string text, bool lookupHistory = false, CancellationToken cancellationToken = default)
     {
         if (lookupHistory)

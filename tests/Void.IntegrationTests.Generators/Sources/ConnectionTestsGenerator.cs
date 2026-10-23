@@ -47,6 +47,11 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
             Name: "ProxiedServerRedirectionTests",
             BaseClassName: "ProxiedServerRedirectionTestBase",
             MethodNameFormat: "PortableMinecraftClientMovesBetween{0}ServersThroughProxy"
+        ),
+        new(
+            Name: "ProxiedKickTests",
+            BaseClassName: "ProxiedKickTestBase",
+            MethodNameFormat: "PortableMinecraftClientShows{0}ServerKickReasonsThroughProxy"
         )
     ];
 
