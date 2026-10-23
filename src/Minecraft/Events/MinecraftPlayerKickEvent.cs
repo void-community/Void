@@ -12,4 +12,10 @@ namespace Void.Minecraft.Events;
 /// The optional kick reason. When provided, it is serialized to legacy text and passed to
 /// <see cref="PlayerKickEvent"/>.
 /// </param>
-public record MinecraftPlayerKickEvent(IPlayer Player, Component? Reason = null) : PlayerKickEvent(Player, Reason?.SerializeLegacy());
+public record MinecraftPlayerKickEvent(IPlayer Player, Component? Reason = null) : PlayerKickEvent(Player, Reason?.SerializeLegacy())
+{
+    /// <summary>
+    /// Gets or sets the kick reason that Minecraft players see, which listeners can replace before the player is disconnected.
+    /// </summary>
+    public Component? Reason { get; set; } = Reason;
+}

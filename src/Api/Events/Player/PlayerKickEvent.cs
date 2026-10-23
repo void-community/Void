@@ -10,6 +10,12 @@ namespace Void.Proxy.Api.Events.Player;
 public record PlayerKickEvent(IPlayer Player, string? Text = null) : IScopedEventWithResult<bool>
 {
     /// <summary>
+    /// Gets or sets the disconnect message, which listeners can replace before the player is disconnected.
+    /// </summary>
+    /// <value>The disconnect message, or <see langword="null" /> to use the implementation's default message.</value>
+    public string? Text { get; set; } = Text;
+
+    /// <summary>
     ///     <see langword="true" /> if kick was made; otherwise, <see langword="false" />.
     /// </summary>
     public bool Result { get; set; }
