@@ -30,7 +30,7 @@ public class Plugin(IDependencyService dependencies, IConsoleService console) : 
             services.AddSingleton<ModerationService>();
             services.AddSingleton<PlatformService>();
             services.AddSingleton<TraceService>();
-            services.AddScoped<ServerKickService>();
+            services.AddScoped<FailoverService>();
         });
     }
 }

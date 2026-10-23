@@ -15,7 +15,7 @@ namespace Void.Proxy.Plugins.Essentials.Redirection;
 /// Cancels a kick from the server a player plays on when there is another server, so the proxy moves the player there as when a server stops,
 /// and tells the player there why it was kicked. Without another server, the player is kicked with the server's reason.
 /// </summary>
-public class ServerKickService(IServerService servers) : IEventListener
+public class FailoverService(IServerService servers) : IEventListener
 {
     private (IServer Server, Component Reason)? _kick;
 
