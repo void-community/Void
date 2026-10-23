@@ -98,6 +98,22 @@ public class SlowJoinGraceTests
     }
 
     [Fact]
+    public void DefaultsLastThroughLoadingThatStartsAfterTheFirstMinute()
+    {
+        // Issue #1624: All the Mods 10 answers promptly for 45 s after a join, and then JEI blocks its render thread for 44 s.
+        var settings = new Settings();
+        var grace = new SlowJoinGrace(KeepAliveForwardingTests.CreateLink(), TimeSpan.FromSeconds(settings.FirstKeepAliveTimeout), settings.PromptAnswers, TimeSpan.FromSeconds(settings.PromptAnswerTime));
+
+        Answer(grace, probeId: 1, sentAfterSeconds: 15, waitedSeconds: 0.03, expectedRun: 1);
+        Answer(grace, probeId: 2, sentAfterSeconds: 30, waitedSeconds: 0.03, expectedRun: 2);
+        Answer(grace, probeId: 3, sentAfterSeconds: 45, waitedSeconds: 0.03, expectedRun: 3);
+        Assert.False(grace.IsOver);
+
+        Answer(grace, probeId: 4, sentAfterSeconds: 60, waitedSeconds: 28, expectedRun: 0);
+        Assert.False(grace.IsOver);
+    }
+
+    [Fact]
     public void AnAnswerBeforeTheTimeoutStartsLeavesNothingWaiting()
     {
         // The player can answer before the proxy has finished sending the probe, so the timeout may only start afterwards.
@@ -117,7 +133,7 @@ public class SlowJoinGraceTests
         Assert.Equal(TimeSpan.FromSeconds(300), SlowJoinService.GetTimeout(argumentSeconds: 300, settingSeconds: 180));
         Assert.Equal(TimeSpan.FromSeconds(1), SlowJoinService.GetTimeout(argumentSeconds: 0, settingSeconds: 180));
         Assert.Equal(TimeSpan.FromSeconds(5), SlowJoinService.GetTimeout(argumentSeconds: null, settings.PromptAnswerTime));
-        Assert.Equal(3, SlowJoinService.GetCount(argument: null, settings.PromptAnswers));
+        Assert.Equal(8, SlowJoinService.GetCount(argument: null, settings.PromptAnswers));
         Assert.Equal(6, SlowJoinService.GetCount(argument: 6, setting: 3));
         Assert.Equal(1, SlowJoinService.GetCount(argument: -2, setting: 3));
     }

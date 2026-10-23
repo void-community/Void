@@ -122,13 +122,13 @@ Enabled = true
 FirstKeepAliveTimeout = 180
 
 # How many keep-alives in a row a loading player must answer promptly before keep-alives are forwarded again
-PromptAnswers = 3
+PromptAnswers = 8
 
 # How soon a loading player must answer a keep-alive for the answer to count as prompt, in seconds
 PromptAnswerTime = 5
 ```
 
-The plugin sends a probe with each keep-alive from the server, which vanilla servers send every 15 seconds, so the defaults need about half a minute of prompt answers.
+The plugin sends a probe with each keep-alive from the server, which vanilla servers send every 15 seconds, so the defaults need about two minutes of prompt answers.
 
 :::tip
 You can also set these via [**program arguments**](/docs/configuration/program-arguments/#slow-join) using the `--slow-join-timeout`, `--slow-join-prompt-answers` and `--slow-join-prompt-answer-time` flags, which take precedence over the file.

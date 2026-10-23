@@ -6,7 +6,7 @@ public class Settings
 
     public int FirstKeepAliveTimeout { get; set; } = 180;
 
-    public int PromptAnswers { get; set; } = 3;
+    public int PromptAnswers { get; set; } = 8;
 
     public int PromptAnswerTime { get; set; } = 5;
 }
