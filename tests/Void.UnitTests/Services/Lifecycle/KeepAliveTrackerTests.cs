@@ -27,7 +27,8 @@ public class KeepAliveTrackerTests
             return Task.CompletedTask;
         }, TimeSpan.FromMilliseconds(20));
 
-        Assert.True(await requestSent.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
+        // A busy runner can take seconds to run the tracker's first timer, while the test is about the requests that would follow it.
+        Assert.True(await requestSent.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
         await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, Volatile.Read(ref requestsSent));
