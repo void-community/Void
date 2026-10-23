@@ -86,6 +86,8 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithEnvironment("VIEW_DISTANCE", "3")
             .WithEnvironment("SIMULATION_DISTANCE", "2")
             .WithEnvironment("ONLINE_MODE", "FALSE")
+            // Tests run commands on the console through a pipe
+            .WithEnvironment("CREATE_CONSOLE_IN_PIPE", "TRUE")
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
 

@@ -41,6 +41,8 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             .WithEnvironment("VIEW_DISTANCE", "3")
             .WithEnvironment("SIMULATION_DISTANCE", "2")
             .WithEnvironment("ONLINE_MODE", "FALSE")
+            // Tests run commands on the console through a pipe, which also keeps Paper before Minecraft 1.14 from spinning on an empty input.
+            .WithEnvironment("CREATE_CONSOLE_IN_PIPE", "TRUE")
             // Paper before Minecraft 1.17 patches Mojang's server on its first start, which takes minutes when servers start side by side.
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
@@ -53,9 +55,7 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             // Paper for Minecraft 1.17 refuses any Java but 16, which the image has no variant for, while it runs on Java 17 too.
             jvmOptions += " -Dpaper.playerconnection.keepalive=120 -DPaper.IgnoreJavaVersion=true";
 
-            // Paper before Minecraft 1.14 reads commands from a console the container doesn't attach, and spins on its empty input otherwise.
             builder = builder
-                .WithEnvironment("CONSOLE", "FALSE")
                 .WithEnvironment("PATCH_DEFINITIONS", "patches")
                 // The image starts from default configs, which it has no bukkit.yml for on some releases, such as 1.7.10 and 1.18.1. There an
                 // empty one takes its place, so the throttle can still be patched.

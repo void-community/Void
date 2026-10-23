@@ -17,6 +17,8 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
 {
     private const int MaximumStartupAttempts = 3;
     private const int StartupFailureLogLines = 200;
+    // Where the image feeds the console from when it creates the console pipe
+    private const string ConsolePipePath = "/tmp/minecraft-console-in";
     // The image downloads the server and its mods while it starts, and lookups and downloads can fail for a moment.
     private static readonly string[] TransientStartupFailureMarkers =
     [
@@ -58,10 +60,17 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         await Container.ExpectTextAsync($"{username}[/", since, cancellationToken);
     }
 
-    /// <summary>Runs a command on the server as its operator does, through the image's RCON client.</summary>
+    /// <summary>
+    /// Runs a command on the server's console, through the pipe the image feeds the console from, and waits until the server has run it. The
+    /// console runs commands in order and answers none of them, so a say of a marker right after the command shows when the command has run.
+    /// </summary>
     public async Task RunCommandAsync(string command, CancellationToken cancellationToken = default)
     {
-        await Container.RunCommandAsync(["rcon-cli", .. command.Split(' ')], cancellationToken);
+        var sentAt = DateTime.UtcNow;
+        var marker = $"ran-{Guid.NewGuid():N}";
+
+        await Container.RunCommandAsync(["sh", "-c", $"printf '%s\\n' \"$0\" \"$1\" > {ConsolePipePath}", command, $"say {marker}"], cancellationToken);
+        await Container.ExpectTextAsync(marker, sentAt, cancellationToken);
     }
 
     public async Task ExpectTextAsync(string text, bool lookupHistory = false, CancellationToken cancellationToken = default)
