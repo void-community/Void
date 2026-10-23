@@ -44,6 +44,7 @@ public final class VoidClientAgent {
             instrumentation.addTransformer(new NettyReadInterestTransformer(), true);
             instrumentation.addTransformer(new DataFixerWarmupTransformer(), true);
             instrumentation.addTransformer(new FatalErrorWindowTransformer(), true);
+            instrumentation.addTransformer(new ModLoadingErrorScreenTransformer(), true);
 
             if (installGameHooks()) {
                 instrumentation.addTransformer(new PlayerTransformer());
@@ -141,7 +142,8 @@ public final class VoidClientAgent {
             try {
                 String className = type.getName().replace('.', '/');
                 if (NettyReadInterestTransformer.ChannelName.equals(className) || DataFixerWarmupTransformer.BuilderName.equals(className)
-                    || FatalErrorWindowTransformer.HandlerName.equals(className) || FatalErrorReportTransformer.ReportingName.equals(className)) {
+                    || FatalErrorWindowTransformer.HandlerName.equals(className) || FatalErrorReportTransformer.ReportingName.equals(className)
+                    || ModLoadingErrorScreenTransformer.isExtender(className)) {
                     instrumentation.retransformClasses(type);
                     continue;
                 }

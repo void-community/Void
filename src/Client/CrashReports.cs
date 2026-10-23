@@ -8,11 +8,14 @@ internal static class CrashReports
     private const string DescriptionPrefix = "Description:";
     // System Details follow this heading and list the JVM arguments, which include the agent's token, so reading stops there.
     private const string DetailsHeading = "A detailed walkthrough";
+    // Forge and NeoForge describe each mod that failed to load in a section of its own, below the details heading.
+    private const string FailureMessagePrefix = "\tFailure message:";
     private const string JavaErrorHeading = "A fatal error has been detected by the Java Runtime Environment:";
     private const string JavaErrorReasonsHeading = "Possible reasons:";
     private const string JavaProblematicFrameHeading = "Problematic frame:";
     private const int MaximumCauseLength = 1024;
     private const int MaximumReadBytes = 32 * 1024;
+    private const string SystemDetailsHeading = "-- System Details --";
 
     /// <summary>Tells whether a path is a crash report the game saved in its crash-reports directory since it launched.</summary>
     public static bool IsReport(string reportPath, string minecraftDirectory, DateTime launchedAt)
@@ -60,7 +63,8 @@ internal static class CrashReports
 
     /// <summary>
     /// Describes a crash in one line from its report: the description and the error up to its first stack frame, such as
-    /// "Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash".
+    /// "Minecraft crashed (Manually triggered debug crash): java.lang.Throwable: Manually triggered debug crash". The error of a mod
+    /// loading report is a placeholder, so the failure messages of its mods take its place.
     /// </summary>
     /// <returns>The description, or <see langword="null"/> when the report has no description.</returns>
     internal static string? Summarize(string report)
@@ -95,8 +99,11 @@ internal static class CrashReports
             return null;
 
         string crash = description.Length is 0 ? "Minecraft crashed" : $"Minecraft crashed ({description})";
+        List<string> failures = ReadFailureMessages(report);
 
-        return Limit(error.Count is 0 ? crash : $"{crash}: {string.Join(separator: ' ', error)}");
+        return failures.Count is not 0
+            ? Limit($"{crash}: {string.Join(separator: "; ", failures)}")
+            : Limit(error.Count is 0 ? crash : $"{crash}: {string.Join(separator: ' ', error)}");
     }
 
     /// <summary>
@@ -183,5 +190,38 @@ internal static class CrashReports
 
             return null;
         }
+    }
+
+    private static List<string> ReadFailureMessages(string report)
+    {
+        List<string> messages = [];
+        bool continued = false;
+
+        foreach (string reportLine in report.Split(separator: '\n'))
+        {
+            string line = reportLine.TrimEnd(trimChar: '\r');
+
+            // System Details list the JVM arguments, which include the agent's token, so reading stops there.
+            if (line.StartsWith(SystemDetailsHeading, StringComparison.Ordinal))
+                break;
+
+            // A message's later lines are indented one tab further.
+            if (line.StartsWith(FailureMessagePrefix, StringComparison.Ordinal))
+            {
+                messages.Add(line[FailureMessagePrefix.Length..].Trim());
+                continued = true;
+            }
+            else if (continued && line.StartsWith(value: "\t\t", StringComparison.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                    messages[^1] = $"{messages[^1]} {line.Trim()}";
+            }
+            else
+            {
+                continued = false;
+            }
+        }
+
+        return messages;
     }
 }

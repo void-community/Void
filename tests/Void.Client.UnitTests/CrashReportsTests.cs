@@ -102,6 +102,44 @@ public sealed class CrashReportsTests
             + "- Mod missingstub requires nonexistentmod 1 or above Currently, nonexistentmod is not installed"
         },
         {
+            // NeoForge 1.21.1, a mod with a missing dependency (issue #1617)
+            """
+            ---- Minecraft Crash Report ----
+            // Don't be sad. I'll do better next time, I promise!
+
+            Time: 2026-10-23 14:07:27
+            Description: Mod loading failures have occurred; consult the issue messages for more details
+
+            net.neoforged.neoforge.logging.CrashReportExtender$ModLoadingCrashException: Mod loading has failed
+
+
+            A detailed walkthrough of the error, its code path and all known details is as follows:
+            ---------------------------------------------------------------------------------------
+
+            -- Mod loading issue for: missingstub --
+            Details:
+            	Mod file: /root/.minecraft/mods/missingstub.jar
+            	Failure message: Mod missingstub requires nonexistentmod 1 or above
+            		Currently, nonexistentmod is not installed
+            		
+            	Mod version: 1.0
+            	Mod issues URL: <No issues URL found>
+            	Exception message: <No associated exception found>
+
+            -- Mod loading issue for: otherstub --
+            Details:
+            	Failure message: Mod otherstub requires anothermod 2 or above
+            	Mod version: 1.0
+
+            -- System Details --
+            Details:
+            	Failure message: secret-token
+            	JVM Flags: 2 total; -Xmx2048M -javaagent:/opt/portableminecraftclient/void-client-agent.jar=descriptor=ZA;token=secret-token
+            """,
+            "Minecraft crashed (Mod loading failures have occurred; consult the issue messages for more details): "
+            + "Mod missingstub requires nonexistentmod 1 or above Currently, nonexistentmod is not installed; Mod otherstub requires anothermod 2 or above"
+        },
+        {
             // An error without stack frames ends before the details, which list the agent's token
             "---- Minecraft Crash Report ----\nDescription: Unexpected error\n\njava.lang.OutOfMemoryError: Java heap space" + Walkthrough,
             "Minecraft crashed (Unexpected error): java.lang.OutOfMemoryError: Java heap space"

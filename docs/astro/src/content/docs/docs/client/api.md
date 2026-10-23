@@ -106,7 +106,7 @@ The game should only end through `POST /api/game/stop`. If Minecraft quits, cras
 - `client.process.out_of_memory` when it ran out of memory and was killed.
 - `client.process.exited` otherwise. When Minecraft logged an error shortly before it ended, the message ends with it, for example `Minecraft exited without a stop request, last error: The game failed to start because the currently active LWJGL version is not compatible. …`.
 
-The client also closes a game that can't go on by itself, with the same result: NeoForge showing that mods failed to load, or Minecraft still running 10 seconds after it reported a crash.
+The client also closes a game that can't go on by itself, with the same result: Forge or NeoForge showing that mods failed to load, or Minecraft still running 10 seconds after it reported a crash.
 If no operation was running at the time, `operation` and `operationState` still describe the last one.
 A failed game can be started again.
 
