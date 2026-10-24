@@ -14,6 +14,11 @@ namespace Void.Proxy.Plugins.Dependencies;
 
 public class DependencyService(ILogger<DependencyService> logger, IContainer rootContainer) : IDependencyService
 {
+    // DryIoc gives its static empty request a stack of dependency requests once a collection resolves from it, which every resolution after
+    // shares, and which keeps the container each of its requests came from, that of an unloaded plugin too. DryIoc can't drop it.
+    private static readonly FieldInfo EmptyRequestStackField = typeof(Request).GetField("DepRequestStack", BindingFlags.NonPublic | BindingFlags.Instance)
+        ?? throw new InvalidOperationException("DryIoc has no dependency request stack to drop the containers of unloaded plugins from");
+
     private readonly ConcurrentDictionary<Assembly, PluginContainer> _plugins = [];
 
     public TService CreateInstance<TService>(CancellationToken cancellationToken = default, params object[] parameters)
@@ -220,6 +225,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
         foreach (var scope in container.Scopes.Values)
             scope.Dispose();
+
+        // DryIoc starts another stack as it next needs one, while resolutions under way keep the one they hold.
+        EmptyRequestStackField.SetValue(Request.Empty, null);
     }
 
     private IEnumerable<IServiceProvider> GetScopedContainers(int playerStableHashCode, Assembly? preferredAssembly = null)
@@ -324,8 +332,10 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
         object? ResolveService(Type serviceType, Func<IEnumerable<IServiceProvider>> getServiceProviders, IContainer entryPointContainer)
         {
+            var ownerContainer = AdoptOpenGenericRegistrations(serviceType);
             var serviceProviders = getServiceProviders()
-                .OrderByDescending(serviceProvider => GetServiceProviderPriority(serviceProvider.Container, serviceType));
+                .OrderByDescending(serviceProvider => GetServiceProviderPriority(serviceProvider.Container, serviceType))
+                .ThenByDescending(serviceProvider => serviceProvider.Container == ownerContainer);
 
             foreach (var serviceProvider in serviceProviders)
             {
@@ -405,6 +415,63 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         {
             return requestedServiceType == registeredServiceType || requestedServiceType.IsConstructedGenericType && requestedServiceType.GetGenericTypeDefinition() == registeredServiceType;
         }
+    }
+
+    /// <summary>
+    /// Registers in a plugin's own container the open generics of other containers that a closed generic over the plugin's types, such as
+    /// <c>ILogger&lt;T&gt;</c> of a plugin's service, is resolved from. A container caches each closed generic it generates, and its singletons,
+    /// for as long as the container lives, which would keep the plugin alive after it unloads, so the plugin's container generates them, and
+    /// disposes of them as the plugin unloads.
+    /// </summary>
+    /// <returns>The container of the plugin whose types the service type is closed over, or <see langword="null" /> when it's closed over none.</returns>
+    private IContainer? AdoptOpenGenericRegistrations(Type serviceType)
+    {
+        if (!serviceType.IsConstructedGenericType || FindOwnerContainer(serviceType) is not { } ownerContainer)
+            return null;
+
+        var definition = serviceType.GetGenericTypeDefinition();
+
+        if (ownerContainer.IsRegistered(definition))
+            return ownerContainer;
+
+        foreach (var serviceProvider in GetRootContainers())
+        {
+            var container = serviceProvider.Container;
+
+            if (container == ownerContainer)
+                continue;
+
+            foreach (var registration in container.GetServiceRegistrations())
+            {
+                if (registration.ServiceType != definition || registration.Factory is not ReflectionFactory factory)
+                    continue;
+
+                // Concurrent resolutions adopt the same registrations, which append once per implementation.
+                ownerContainer.Register(ReflectionFactory.Of(factory.ImplementationType, factory.Reuse, factory.Made, factory.Setup), definition, registration.OptionalServiceKey, IfAlreadyRegistered.AppendNewImplementation, isStaticallyChecked: true);
+            }
+        }
+
+        return ownerContainer;
+    }
+
+    private IContainer? FindOwnerContainer(Type type)
+    {
+        if (_plugins.TryGetValue(type.Assembly, out var pluginContainer))
+            return pluginContainer.Root.Container;
+
+        if (type.HasElementType && type.GetElementType() is { } elementType && FindOwnerContainer(elementType) is { } elementOwnerContainer)
+            return elementOwnerContainer;
+
+        if (!type.IsGenericType)
+            return null;
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            if (FindOwnerContainer(argument) is { } argumentOwnerContainer)
+                return argumentOwnerContainer;
+        }
+
+        return null;
     }
 
     // Players join and leave on threads of their own, each opening or disposing its scopes.
