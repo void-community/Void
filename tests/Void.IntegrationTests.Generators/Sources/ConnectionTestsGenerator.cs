@@ -52,6 +52,71 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
             Name: "ProxiedKickTests",
             BaseClassName: "ProxiedKickTestBase",
             MethodNameFormat: "PortableMinecraftClientShows{0}ServerKickReasonsThroughProxy"
+        ),
+        new(
+            Name: "ReloadedPluginsTests",
+            BaseClassName: "ReloadedPluginsTestBase",
+            MethodNameFormat: "PortableMinecraftClientPlaysOn{0}ServersAfterEveryPluginReloads"
+        ),
+        new(
+            Name: "UnloadedPluginsTests",
+            BaseClassName: "UnloadedPluginsTestBase",
+            MethodNameFormat: "PortableMinecraftClientPlaysOn{0}ServerAfterAllPluginsUnloadAndLoad"
+        ),
+        new(
+            Name: "RepeatedlyReloadedPluginsTests",
+            BaseClassName: "RepeatedlyReloadedPluginsTestBase",
+            MethodNameFormat: "PluginReloadsBehind{0}ServersLeaveNoContextsOrMemory"
+        ),
+        new(
+            Name: "ReorderedPluginsTests",
+            BaseClassName: "ReorderedPluginsTestBase",
+            MethodNameFormat: "PortableMinecraftClientPlaysOn{0}ServerAfterPluginsReloadInAnyOrder"
+        ),
+        new(
+            Name: "ProxiedPluginReloadTests",
+            BaseClassName: "ProxiedPluginReloadTestBase",
+            MethodNameFormat: "PortableMinecraftClientKeepsPlayingOn{0}ServersWhilePluginsReload"
+        ),
+        new(
+            Name: "ProxiedProtocolUnloadTests",
+            BaseClassName: "ProxiedProtocolUnloadTestBase",
+            MethodNameFormat: "PortableMinecraftClientIsKickedFrom{0}ServerWhenItsProtocolUnloads"
+        ),
+        new(
+            Name: "ProxiedLoginPluginReloadTests",
+            BaseClassName: "ProxiedLoginPluginReloadTestBase",
+            MethodNameFormat: "PortableMinecraftClientJoins{0}ServerWhilePluginsReload"
+        ),
+        new(
+            Name: "ProxiedRedirectionPluginReloadTests",
+            BaseClassName: "ProxiedRedirectionPluginReloadTestBase",
+            MethodNameFormat: "PortableMinecraftClientMovesBetween{0}ServersWhilePluginsReload"
+        ),
+        new(
+            Name: "ProxiedPluginsCommandTests",
+            BaseClassName: "ProxiedPluginsCommandTestBase",
+            MethodNameFormat: "PortableMinecraftClientReloadsEssentialsOn{0}ServersWithPluginsCommand"
+        ),
+        new(
+            Name: "PluginLeftoversTests",
+            BaseClassName: "PluginLeftoversTestBase",
+            MethodNameFormat: "PluginReloadsBehind{0}ServersLeaveNothingBehind"
+        ),
+        new(
+            Name: "PluginContainerConflictsTests",
+            BaseClassName: "PluginContainerConflictsTestBase",
+            MethodNameFormat: "PluginContainersBehind{0}ServersRefuseConflictingOperations"
+        ),
+        new(
+            Name: "ServerStatusPluginReloadTests",
+            BaseClassName: "ServerStatusPluginReloadTestBase",
+            MethodNameFormat: "ProxyAnswers{0}ServerStatusWhilePluginsReload"
+        ),
+        new(
+            Name: "ProxyRestartPluginReloadTests",
+            BaseClassName: "ProxyRestartPluginReloadTestBase",
+            MethodNameFormat: "ProxyRestartedAfterPluginReloadsPlaysOn{0}Servers"
         )
     ];
 
