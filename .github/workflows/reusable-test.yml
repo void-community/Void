@@ -134,8 +134,23 @@ jobs:
         run: dotnet build --configuration Release /p:Version=${{ inputs.void-version }}
 
       - name: Pull portable-minecraft-client image
+        shell: bash
         if: ${{ matrix.test-kind == 'integration' }}
-        run: docker pull "$VOID_CLIENT_IMAGE"
+        run: |
+          # The registry sometimes resets a layer download, which a new pull gets past.
+          for (( attempt = 1; attempt <= 3; attempt++ )); do
+            if docker pull "$VOID_CLIENT_IMAGE"; then
+              exit 0
+            fi
+
+            if (( attempt == 3 )); then
+              echo "Failed to pull $VOID_CLIENT_IMAGE after 3 attempts."
+              exit 1
+            fi
+
+            echo "Attempt $attempt failed for $VOID_CLIENT_IMAGE. Retrying in $(( 10 * attempt )) seconds."
+            sleep $(( 10 * attempt ))
+          done
 
       - name: Create shard filter
         shell: bash
