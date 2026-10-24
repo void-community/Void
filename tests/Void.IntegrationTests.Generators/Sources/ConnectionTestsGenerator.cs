@@ -54,6 +54,16 @@ public sealed class ConnectionTestsGenerator : IIncrementalGenerator
             MethodNameFormat: "PortableMinecraftClientShows{0}ServerKickReasonsThroughProxy"
         ),
         new(
+            Name: "EssentialsCommandsTests",
+            BaseClassName: "EssentialsCommandsTestBase",
+            MethodNameFormat: "PortableMinecraftClientUsesEssentialsCommandsOn{0}ServersThroughProxy"
+        ),
+        new(
+            Name: "EssentialsStopTests",
+            BaseClassName: "EssentialsStopTestBase",
+            MethodNameFormat: "PortableMinecraftClientStopsProxyOf{0}ServersWithEssentials"
+        ),
+        new(
             Name: "ReloadedPluginsTests",
             BaseClassName: "ReloadedPluginsTestBase",
             MethodNameFormat: "PortableMinecraftClientPlaysOn{0}ServersAfterEveryPluginReloads"
