@@ -105,8 +105,8 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         }
 
         builder = builder
-            .WithResourceMapping(ModLoaderFixes.Url, ModLoaderFixes.ServerPath)
-            .WithEnvironment("JVM_OPTS", $"-javaagent:{ModLoaderFixes.ServerPath} {jvmOptions}");
+            .WithEnvironment("JAVA_AGENTS", ModLoaderFixes.Url.ToString())
+            .WithEnvironment("JVM_OPTS", jvmOptions);
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
     }

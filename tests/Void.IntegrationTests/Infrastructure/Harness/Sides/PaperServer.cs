@@ -47,15 +47,12 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
 
-        var jvmOptions = $"-javaagent:{ModLoaderFixes.ServerPath}";
-
         // Paper's own settings: a longer keep-alive, and no throttle on players that reconnect at once, which vanilla servers don't have.
         if (!vanilla)
         {
-            // Paper for Minecraft 1.17 refuses any Java but 16, which the image has no variant for, while it runs on Java 17 too.
-            jvmOptions += " -Dpaper.playerconnection.keepalive=120 -DPaper.IgnoreJavaVersion=true";
-
             builder = builder
+                // Paper for Minecraft 1.17 refuses any Java but 16, which the image has no variant for, while it runs on Java 17 too.
+                .WithEnvironment("JVM_OPTS", "-Dpaper.playerconnection.keepalive=120 -DPaper.IgnoreJavaVersion=true")
                 .WithEnvironment("PATCH_DEFINITIONS", "patches")
                 // The image starts from default configs, which it has no bukkit.yml for on some releases, such as 1.7.10 and 1.18.1. There an
                 // empty one takes its place, so the throttle can still be patched.
@@ -64,9 +61,7 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
                 .WithEnvironment("CFG_BUKKIT_CONNECTION_THROTTLE", "-1");
         }
 
-        builder = builder
-            .WithResourceMapping(ModLoaderFixes.Url, ModLoaderFixes.ServerPath)
-            .WithEnvironment("JVM_OPTS", jvmOptions);
+        builder = builder.WithEnvironment("JAVA_AGENTS", ModLoaderFixes.Url.ToString());
 
         if (maximumPlayers is { } value)
             builder = builder.WithEnvironment("MAX_PLAYERS", value.ToString());

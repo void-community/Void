@@ -9,9 +9,6 @@ namespace Void.IntegrationTests.Infrastructure.Harness;
 /// </summary>
 internal static class ModLoaderFixes
 {
-    /// <summary>Where servers keep the agent.</summary>
-    public const string ServerPath = "/opt/modloaderfixes/modloaderfixes.jar";
-
     /// <summary>The Java agent of the latest release, a jar that loads with <c>-javaagent</c> on every architecture.</summary>
     public static Uri Url { get; } = new("https://github.com/void-community/ModLoaderFixes/releases/latest/download/modloaderfixes.jar");
 }
