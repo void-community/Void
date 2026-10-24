@@ -6,12 +6,15 @@ namespace Void.Proxy.Plugins.Containers;
 
 public class WeakPluginContainer
 {
-    private const int Loading = 0;
-    private const int Loaded = 1;
-    private const int Unloading = 2;
-
     private readonly CopyOnWriteCollection<WeakReference<IPlugin>> _references = new();
-    private int _state = Loading;
+    private State _state = State.Loading;
+
+    private enum State
+    {
+        Loading,
+        Loaded,
+        Unloading
+    }
 
     [SuppressMessage("Style", "IDE0290:Use primary constructor", Justification = "They keep a strict reference to parameters")]
     public WeakPluginContainer(PluginAssemblyLoadContext context, params IPlugin[] plugins)
@@ -32,7 +35,7 @@ public class WeakPluginContainer
     /// </summary>
     public void MarkLoaded()
     {
-        Interlocked.CompareExchange(ref _state, Loaded, Loading);
+        Interlocked.CompareExchange(ref _state, State.Loaded, State.Loading);
     }
 
     /// <summary>
@@ -41,7 +44,7 @@ public class WeakPluginContainer
     /// <returns><see langword="true" /> for the caller that claimed it; <see langword="false" /> while it loads, or once another caller claimed it.</returns>
     public bool TryBeginUnload()
     {
-        return Interlocked.CompareExchange(ref _state, Unloading, Loaded) is Loaded;
+        return Interlocked.CompareExchange(ref _state, State.Unloading, State.Loaded) is State.Loaded;
     }
 
     public void Add(IPlugin plugin)
