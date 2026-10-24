@@ -11,8 +11,8 @@ using Xunit;
 namespace Void.IntegrationTests.Connections;
 
 /// <summary>
-/// A game stops a proxy of its own with the <c>/stop</c> command of Essentials, which answers in the game's chat, kicks the game as it shuts
-/// down, and exits cleanly.
+/// A game stops a proxy of its own with the <c>/stop</c> command of Essentials, which kicks the game with why as it shuts down, and exits
+/// cleanly. The game shows the kick rather than the command's answer, which it skips as the kick disconnects it right after.
 /// </summary>
 public abstract class EssentialsStopTestBase(ConnectionsFixture fixture) : IntegrationUnitBase
 {
@@ -36,7 +36,6 @@ public abstract class EssentialsStopTestBase(ConnectionsFixture fixture) : Integ
                 var kickTask = game.ExpectKickAsync("Proxy is shutting down", Timeouts.StepTimeoutToken);
                 await game.SendTextMessageAsync("/stop", Timeouts.StepTimeoutToken);
                 await kickTask;
-                await game.ExpectChatAsync("Stopping proxy...", Timeouts.StepTimeoutToken);
 
                 await game.EndAsync(joinedServer: null, Timeouts.StepTimeoutToken);
             }
