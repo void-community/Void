@@ -114,20 +114,14 @@ public class CommandService(ILogger<ICommandService> logger, IEventService event
             {
                 foreach (var invocation in node.Executor.GetInvocationList().Cast<CommandExecutor>())
                 {
-                    if (invocation.Target is null)
-                        continue;
-
-                    var target = invocation.Target.GetFieldValue("command") switch
+                    Delegate command = invocation.Target?.GetFieldValue("command") switch
                     {
-                        CommandExecutorSync value => value.Target,
-                        CommandExecutor value => value.Target,
-                        _ => invocation.Target
+                        CommandExecutorSync value => value,
+                        CommandExecutor value => value,
+                        _ => invocation
                     };
 
-                    if (target is null)
-                        continue;
-
-                    if (target.GetType().Assembly != assembly)
+                    if (!IsFromAssembly(command, assembly))
                         continue;
 
                     node.Executor -= invocation;
@@ -138,26 +132,26 @@ public class CommandService(ILogger<ICommandService> logger, IEventService event
             {
                 foreach (var invocation in argumentCommandNode.CustomSuggestions.GetInvocationList().Cast<SuggestionProvider>())
                 {
-                    if (invocation.Target is null)
-                        continue;
-
-                    var target = invocation.Target.GetFieldValue("provider") switch
+                    Delegate provider = invocation.Target?.GetFieldValue("provider") switch
                     {
-                        SuggestionProviderSync value => value.Target,
-                        SuggestionProvider value => value.Target,
-                        _ => invocation.Target
+                        SuggestionProviderSync value => value,
+                        SuggestionProvider value => value,
+                        _ => invocation
                     };
 
-                    if (target is null)
-                        continue;
-
-                    if (target.GetType().Assembly != assembly)
+                    if (!IsFromAssembly(provider, assembly))
                         continue;
 
                     argumentCommandNode.CustomSuggestions -= invocation;
                 }
             }
         }
+    }
+
+    // A static method has no target, so its declaring type tells where it's from, as it does for a lambda's closure.
+    private static bool IsFromAssembly(Delegate value, Assembly assembly)
+    {
+        return value.Target?.GetType().Assembly == assembly || value.Method.DeclaringType?.Assembly == assembly;
     }
 
     private record CommandSuggestion(int Start, string Text, string? Tooltip) : ICommandSuggestion;
