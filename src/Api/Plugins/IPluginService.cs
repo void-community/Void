@@ -64,7 +64,9 @@ public interface IPluginService
     /// </summary>
     /// <param name="name">The exact name of the container, such as <c>Void.Proxy.Plugins.Essentials.dll</c>.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <exception cref="InvalidOperationException">The container is already loaded, or no container has that name.</exception>
+    /// <exception cref="InvalidOperationException">
+    ///     The container is already loaded, or no container has that name. Of concurrent loads of one name, all but one throw.
+    /// </exception>
     ValueTask LoadContainerAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -118,7 +120,8 @@ public interface IPluginService
     /// <param name="name">The name of the container to unload, as returned by <see cref="Containers" />.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <exception cref="Exception">
-    ///     Thrown when the container is not found, is already unloaded, or refuses to unload within the timeout.
+    ///     Thrown when the container is not found, is still loading, is already unloading or unloaded, or refuses to unload within the
+    ///     timeout. Of concurrent unloads of one container, all but one throw.
     /// </exception>
     ValueTask UnloadContainerAsync(string name, CancellationToken cancellationToken = default);
 }

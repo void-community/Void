@@ -35,9 +35,6 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     private readonly TimeSpan _gcRate = TimeSpan.FromMilliseconds(500);
 
     private readonly AsyncLock _lock = new();
-
-    // One command operation at a time, so concurrent requests can't unload a container twice or load one while it unloads.
-    private readonly AsyncLock _commandLock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
 
     public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.Plugins);
@@ -198,10 +195,12 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public async ValueTask LoadContainerAsync(string name, CancellationToken cancellationToken = default)
     {
+        // Saves reading the assembly of a loaded container, which TryLoadContainer would refuse anyway.
         if (Containers.Contains(name))
             throw new InvalidOperationException($"Plugin container {name} is already loaded");
 
-        IEnumerable<Type> plugins;
+        bool loaded;
+        IReadOnlyList<Type> plugins;
         var path = Path.Combine(GetDirectoryPath(DefaultPluginsPath), name);
 
         // A plugin file takes the place of the embedded plugin of the same name.
@@ -210,35 +209,58 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             logger.LogTrace("Found {Name} plugin", name);
 
             await using var stream = File.OpenRead(path);
-            plugins = LoadContainer(name, stream);
+            loaded = TryLoadContainer(name, stream, ignoreEmpty: false, out plugins);
         }
         else if (GetEmbeddedPluginNames().Contains(name) && Assembly.GetExecutingAssembly().GetManifestResourceStream(name) is { } stream)
         {
             logger.LogTrace("Found {Name} embedded plugin", name);
 
             await using (stream)
-                plugins = LoadContainer(name, stream);
+                loaded = TryLoadContainer(name, stream, ignoreEmpty: false, out plugins);
         }
         else
         {
             throw new InvalidOperationException($"Plugin container {name} not found");
         }
 
+        if (!loaded)
+            throw new InvalidOperationException($"Plugin container {name} is already loaded");
+
         await LoadPluginsAsync(plugins, cancellationToken);
     }
 
     public async ValueTask LoadPluginsAsync(IEnumerable<Type> plugins, CancellationToken cancellationToken = default)
     {
-        plugins = plugins.OrderByDescending(plugin => plugin.IsAssignableTo(typeof(IApiPlugin)));
+        Type[] orderedPlugins = [.. plugins.OrderByDescending(plugin => plugin.IsAssignableTo(typeof(IApiPlugin)))];
 
-        foreach (var plugin in plugins)
-            await LoadPluginAsync(plugin, cancellationToken);
+        try
+        {
+            foreach (var plugin in orderedPlugins)
+                await LoadPluginInstanceAsync(plugin, cancellationToken);
+        }
+        finally
+        {
+            // A container can unload once all its plugins loaded, or failed to, so a failed load doesn't keep it from unloading.
+            foreach (var plugin in orderedPlugins)
+                FindContainer(plugin)?.MarkLoaded();
+        }
     }
 
     public async ValueTask LoadPluginAsync(Type pluginType, CancellationToken cancellationToken = default)
     {
-        var container = _containers.Snapshot.FirstOrDefault(reference => reference.Context.PluginAssembly == pluginType.Assembly) ??
-                        throw new Exception($"No container found for {pluginType.Name} plugin");
+        try
+        {
+            await LoadPluginInstanceAsync(pluginType, cancellationToken);
+        }
+        finally
+        {
+            FindContainer(pluginType)?.MarkLoaded();
+        }
+    }
+
+    private async ValueTask LoadPluginInstanceAsync(Type pluginType, CancellationToken cancellationToken)
+    {
+        var container = FindContainer(pluginType) ?? throw new Exception($"No container found for {pluginType.Name} plugin");
 
         var plugin = dependencies.CreateInstance<IPlugin>(pluginType, container.CancellationTokenSource.Token);
 
@@ -273,6 +295,10 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         if (!container.IsAlive)
             throw new Exception("Plugin context already unloaded");
+
+        // Concurrent unloads of a container find it alike, so only the one that claims it unloads it.
+        if (!container.TryBeginUnload())
+            throw new InvalidOperationException($"Plugin container {name} is loading or already unloading");
 
         var count = container.Plugins.Count();
 
@@ -316,29 +342,47 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public IEnumerable<Type> LoadContainer(string name, Stream stream, bool ignoreEmpty = false)
     {
+        if (TryLoadContainer(name, stream, ignoreEmpty, out var plugins))
+            return plugins;
+
+        logger.LogWarning("Plugin container {Name} is already loaded", name);
+        return [];
+    }
+
+    /// <summary>
+    /// Loads a container under a name no other container holds, which concurrent loads of one name take for one of them only.
+    /// </summary>
+    /// <returns><see langword="false" /> when another container holds the name; otherwise, <see langword="true" />, with the plugins found, if any.</returns>
+    private bool TryLoadContainer(string name, Stream stream, bool ignoreEmpty, out IReadOnlyList<Type> plugins)
+    {
         logger.LogTrace("Loading {Name} plugins", name);
+
+        PluginAssemblyLoadContext context;
 
         try
         {
-            var context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers);
-
-            var plugins = GetPlugins(context.PluginAssembly);
-
-            if (plugins.Count is 0)
-            {
-                logger.Log(ignoreEmpty ? LogLevel.Trace : LogLevel.Warning, "Plugin {ContextName} has no IPlugin implementations", context.Name);
-                return plugins;
-            }
-
-            _containers.Add(new WeakPluginContainer(context));
-
-            return plugins;
+            context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers);
+            plugins = GetPlugins(context.PluginAssembly);
         }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Plugin {Name} couldn't be loaded", name);
-            return [];
+            plugins = [];
+            return true;
         }
+
+        if (plugins.Count is 0)
+        {
+            logger.Log(ignoreEmpty ? LogLevel.Trace : LogLevel.Warning, "Plugin {ContextName} has no IPlugin implementations", context.Name);
+            return true;
+        }
+
+        if (_containers.TryAdd(new WeakPluginContainer(context), static (existing, added) => existing.Context.Name == added.Context.Name))
+            return true;
+
+        context.Unload();
+        plugins = [];
+        return false;
     }
 
     public IReadOnlyList<Type> GetPlugins(Assembly assembly)
@@ -418,8 +462,6 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private async ValueTask<int> LoadContainerAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        using var _ = await _commandLock.LockAsync(cancellationToken);
-
         if (await FindContainerAsync(context, LoadableContainers, cancellationToken) is not { } name)
             return 1;
 
@@ -435,8 +477,6 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private async ValueTask<int> UnloadContainerAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        using var _ = await _commandLock.LockAsync(cancellationToken);
-
         if (await FindContainerAsync(context, Containers, cancellationToken) is not { } name)
             return 1;
 
@@ -451,8 +491,6 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private async ValueTask<int> ReloadContainerAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        using var _ = await _commandLock.LockAsync(cancellationToken);
-
         if (await FindContainerAsync(context, Containers, cancellationToken) is not { } name)
             return 1;
 
@@ -547,6 +585,11 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             .Where(name => name.Contains(builder.Remaining, StringComparison.OrdinalIgnoreCase))
             .Aggregate(builder, (suggestionsBuilder, name) => suggestionsBuilder.Suggest(name))
             .Build();
+    }
+
+    private WeakPluginContainer? FindContainer(Type pluginType)
+    {
+        return _containers.Snapshot.FirstOrDefault(reference => reference.Context.PluginAssembly == pluginType.Assembly);
     }
 
     private static IEnumerable<string> GetEmbeddedPluginNames()

@@ -59,11 +59,6 @@ public abstract class PluginContainerConflictsTestBase(ConnectionsFixture fixtur
             await Proxy.RunConsoleCommandAsync("plugins unload essentials", line => line.Contains($"Unloaded {essentials}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
             await Proxy.RunConsoleCommandAsync("plugins unload essentials", line => line.Contains("No plugin container matches essentials", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
             await Proxy.RunConsoleCommandAsync("plugins load essentials", line => line.Contains($"Loaded {essentials}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
-
-            // The command runs one operation at a time, so both reloads at once reload the container.
-            var firstReloadTask = Proxy.RunConsoleCommandAsync("plugins reload essentials", line => line.Contains($"Reloaded {essentials}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
-            var secondReloadTask = Proxy.RunConsoleCommandAsync("plugins reload essentials", line => line.Contains($"Reloaded {essentials}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
-            await Task.WhenAll(firstReloadTask, secondReloadTask);
             Assert.Single(Plugins.Containers, name => name == essentials);
 
             await PlayAsync(nameof(PluginContainerConflictsTestBase));
