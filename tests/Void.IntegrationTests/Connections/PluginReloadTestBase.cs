@@ -39,7 +39,10 @@ public abstract class PluginReloadTestBase(ConnectionsFixture fixture) : Integra
     /// <summary>The containers the proxy loaded as it started, which tests unload and load, and leave loaded.</summary>
     protected IReadOnlyList<string> StartupContainers => Proxy.StartupContainers;
 
-    /// <summary>Runs a test on the collection's proxy, and loads the containers it left unloaded afterwards.</summary>
+    /// <summary>
+    /// Runs a test on the collection's proxy, and loads the containers it left unloaded afterwards. A test that failed, or whose containers
+    /// didn't load back, replaces the proxy, so the tests after it don't fail for what it left behind.
+    /// </summary>
     protected Task RunReloadingAsync(Func<Task> function)
     {
         return RunReloadingAsync(function, LogLevel.Warning);
@@ -50,30 +53,46 @@ public abstract class PluginReloadTestBase(ConnectionsFixture fixture) : Integra
     {
         fixture.SkipIfUnavailable();
 
-        await LoggedExecutorAsync(async () =>
+        var restored = false;
+
+        try
         {
-            try
+            await LoggedExecutorAsync(async () =>
             {
-                await function();
-            }
-            finally
-            {
-                await RestoreAsync();
-            }
-        }, minimumFailureLogLevel, fixture.Game1, Proxy, fixture.Server1, fixture.Server2);
+                try
+                {
+                    await function();
+                }
+                finally
+                {
+                    await RestoreAsync();
+                }
+
+                restored = true;
+            }, minimumFailureLogLevel, fixture.Game1, Proxy, fixture.Server1, fixture.Server2);
+        }
+        finally
+        {
+            if (!restored)
+                await fixture.ReplaceVoidProxyAsync();
+        }
     }
 
     /// <summary>The container of the protocol plugin that the games of the collection's protocol version play with.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     protected string FindProtocolContainer()
     {
-        // Each container loads its own copy of the protocol plugins' interface, so the plugin is found by the versions it supports.
+        // Each container loads its own copy of the protocol plugins' interface, so the plugin is found by the versions it supports. Other
+        // plugins, such as Essentials, declare versions too, so only protocol support containers count.
         foreach (var plugin in Plugins.All)
         {
             var pluginType = plugin.GetType();
 
+            if (AssemblyLoadContext.GetLoadContext(pluginType.Assembly)?.Name is not { } name || !name.Contains(".ProtocolSupport.", StringComparison.Ordinal))
+                continue;
+
             if (pluginType.GetProperty("SupportedVersions", BindingFlags.Public | BindingFlags.Static)?.GetValue(null) is IEnumerable<ProtocolVersion> versions && versions.Contains(fixture.ProtocolVersion))
-                return AssemblyLoadContext.GetLoadContext(pluginType.Assembly)?.Name ?? throw new IntegrationTestException($"Plugin {plugin.Name} has no named load context");
+                return name;
         }
 
         throw new IntegrationTestException($"No loaded plugin supports {fixture.ProtocolVersion}");
