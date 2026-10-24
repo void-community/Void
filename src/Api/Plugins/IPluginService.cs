@@ -19,6 +19,12 @@ public interface IPluginService
     IEnumerable<string> Containers { get; }
 
     /// <summary>
+    ///     Gets the names of the plugin containers that <see cref="LoadContainerAsync" /> can load: the <c>.dll</c> files in the
+    ///     <c>plugins</c> directory and the plugins embedded in the proxy. Loaded containers are included.
+    /// </summary>
+    IEnumerable<string> LoadableContainers { get; }
+
+    /// <summary>
     ///     Loads plugins specified via the <c>--plugin</c>/<c>-p</c> command-line arguments
     ///     or the <c>VOID_PLUGINS</c> environment variable.
     ///     Each entry may be a local file path, a directory path, or an HTTP/HTTPS URL.
@@ -51,6 +57,15 @@ public interface IPluginService
     /// </param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     ValueTask LoadPluginsAsync(string path = "plugins", CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     Loads the plugin container with the given name from <see cref="LoadableContainers" /> and loads its plugins.
+    ///     A <c>.dll</c> file in the <c>plugins</c> directory is loaded in place of the embedded plugin of the same name.
+    /// </summary>
+    /// <param name="name">The exact name of the container, such as <c>Void.Proxy.Plugins.Essentials.dll</c>.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <exception cref="InvalidOperationException">The container is already loaded, or no container has that name.</exception>
+    ValueTask LoadContainerAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     ///     Instantiates and registers each of the supplied plugin types as live plugins.

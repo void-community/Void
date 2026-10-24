@@ -34,6 +34,8 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         .Select(container => container.Context.Name)
         .WhereNotNull();
 
+    public IEnumerable<string> LoadableContainers => GetDirectoryPluginNames().Concat(GetEmbeddedPluginNames()).Distinct();
+
     public async ValueTask LoadPluginsAsync(string path = DefaultPluginsPath, CancellationToken cancellationToken = default)
     {
         logger.LogDebug("Loading environment plugins");
@@ -134,9 +136,8 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     public async ValueTask LoadEmbeddedPluginsAsync(CancellationToken cancellationToken = default)
     {
         var assembly = Assembly.GetExecutingAssembly();
-        var resources = assembly.GetManifestResourceNames().Where(name => name.Contains(nameof(Plugins)));
 
-        var plugins = resources.SelectMany(name =>
+        var plugins = GetEmbeddedPluginNames().SelectMany(name =>
         {
             logger.LogTrace("Found {Name} embedded plugin", name);
 
@@ -161,8 +162,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public async ValueTask LoadDirectoryPluginsAsync(string path = DefaultPluginsPath, CancellationToken cancellationToken = default)
     {
-        if (!Path.IsPathRooted(path))
-            path = Path.Combine(runOptions.WorkingDirectory, path);
+        path = GetDirectoryPath(path);
 
         var pluginsDirectoryInfo = new DirectoryInfo(path);
 
@@ -181,6 +181,37 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         }
 
         var plugins = await LoadDirectoryPluginTypesAsync(pluginsDirectoryInfo, cancellationToken);
+        await LoadPluginsAsync(plugins, cancellationToken);
+    }
+
+    public async ValueTask LoadContainerAsync(string name, CancellationToken cancellationToken = default)
+    {
+        if (Containers.Contains(name))
+            throw new InvalidOperationException($"Plugin container {name} is already loaded");
+
+        IEnumerable<Type> plugins;
+        var path = Path.Combine(GetDirectoryPath(DefaultPluginsPath), name);
+
+        // A plugin file takes the place of the embedded plugin of the same name.
+        if (File.Exists(path))
+        {
+            logger.LogTrace("Found {Name} plugin", name);
+
+            await using var stream = File.OpenRead(path);
+            plugins = LoadContainer(name, stream);
+        }
+        else if (GetEmbeddedPluginNames().Contains(name) && Assembly.GetExecutingAssembly().GetManifestResourceStream(name) is { } stream)
+        {
+            logger.LogTrace("Found {Name} embedded plugin", name);
+
+            await using (stream)
+                plugins = LoadContainer(name, stream);
+        }
+        else
+        {
+            throw new InvalidOperationException($"Plugin container {name} not found");
+        }
+
         await LoadPluginsAsync(plugins, cancellationToken);
     }
 
@@ -335,5 +366,21 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             })
             .WhenAll()
             .ContinueWith(task => task.Result.SelectMany(plugins => plugins), cancellationToken);
+    }
+
+    private static IEnumerable<string> GetEmbeddedPluginNames()
+    {
+        return Assembly.GetExecutingAssembly().GetManifestResourceNames().Where(name => name.Contains(nameof(Plugins)));
+    }
+
+    private IEnumerable<string> GetDirectoryPluginNames()
+    {
+        var directoryInfo = new DirectoryInfo(GetDirectoryPath(DefaultPluginsPath));
+        return directoryInfo.Exists ? directoryInfo.GetFiles("*.dll").Select(fileInfo => fileInfo.Name) : [];
+    }
+
+    private string GetDirectoryPath(string path)
+    {
+        return Path.IsPathRooted(path) ? path : Path.Combine(runOptions.WorkingDirectory, path);
     }
 }
