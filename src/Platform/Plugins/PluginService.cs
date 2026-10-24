@@ -385,7 +385,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     {
         commands.Register(builder => builder
             .Literal("plugins")
-            .Executes(ListContainers)
+            .Executes(ListContainersAsync)
             .Then(builder => builder
                 .Literal("load")
                 .Then(builder => builder
@@ -406,12 +406,12 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
                     .Executes(ReloadContainerAsync))));
     }
 
-    private int ListContainers(CommandContext context)
+    private async ValueTask<int> ListContainersAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Loaded plugins:");
+        await context.Source.SendMessageAsync("Loaded plugins:", cancellationToken);
 
         foreach (var name in Containers)
-            logger.LogInformation("- {Name}", name);
+            await context.Source.SendMessageAsync($"- {name}", cancellationToken);
 
         return 0;
     }
@@ -420,32 +420,32 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     {
         using var _ = await _commandLock.LockAsync(cancellationToken);
 
-        if (FindContainer(context, LoadableContainers) is not { } name)
+        if (await FindContainerAsync(context, LoadableContainers, cancellationToken) is not { } name)
             return 1;
 
         if (Containers.Contains(name))
         {
-            logger.LogWarning("Plugin container {ContainerName} is already loaded", name);
+            await context.Source.SendMessageAsync($"Plugin container {name} is already loaded", cancellationToken);
             return 1;
         }
 
         logger.LogInformation("Loading {ContainerName} container requested by {Source}", name, context.Source);
-        return await TryLoadContainerAsync(name, "Loaded", cancellationToken);
+        return await TryLoadContainerAsync(context, name, "Loaded", cancellationToken);
     }
 
     private async ValueTask<int> UnloadContainerAsync(CommandContext context, CancellationToken cancellationToken)
     {
         using var _ = await _commandLock.LockAsync(cancellationToken);
 
-        if (FindContainer(context, Containers) is not { } name)
+        if (await FindContainerAsync(context, Containers, cancellationToken) is not { } name)
             return 1;
 
         logger.LogInformation("Unloading {ContainerName} container requested by {Source}", name, context.Source);
 
-        if (!await TryUnloadContainerAsync(name, cancellationToken))
+        if (!await TryUnloadContainerAsync(context, name, cancellationToken))
             return 1;
 
-        logger.LogInformation("Unloaded {ContainerName}", name);
+        await context.Source.SendMessageAsync($"Unloaded {name}", cancellationToken);
         return 0;
     }
 
@@ -453,18 +453,18 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     {
         using var _ = await _commandLock.LockAsync(cancellationToken);
 
-        if (FindContainer(context, Containers) is not { } name)
+        if (await FindContainerAsync(context, Containers, cancellationToken) is not { } name)
             return 1;
 
         logger.LogInformation("Reloading {ContainerName} container requested by {Source}", name, context.Source);
 
-        if (!await TryUnloadContainerAsync(name, cancellationToken))
+        if (!await TryUnloadContainerAsync(context, name, cancellationToken))
             return 1;
 
-        return await TryLoadContainerAsync(name, "Reloaded", cancellationToken);
+        return await TryLoadContainerAsync(context, name, "Reloaded", cancellationToken);
     }
 
-    private async ValueTask<bool> TryUnloadContainerAsync(string name, CancellationToken cancellationToken)
+    private async ValueTask<bool> TryUnloadContainerAsync(CommandContext context, string name, CancellationToken cancellationToken)
     {
         try
         {
@@ -474,11 +474,12 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(exception, "Plugin container {ContainerName} couldn't be unloaded", name);
+            await context.Source.SendMessageAsync($"Plugin container {name} couldn't be unloaded: {exception.Message}", cancellationToken);
             return false;
         }
     }
 
-    private async ValueTask<int> TryLoadContainerAsync(string name, string verb, CancellationToken cancellationToken)
+    private async ValueTask<int> TryLoadContainerAsync(CommandContext context, string name, string verb, CancellationToken cancellationToken)
     {
         try
         {
@@ -487,25 +488,26 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(exception, "Plugin container {ContainerName} couldn't be loaded", name);
+            await context.Source.SendMessageAsync($"Plugin container {name} couldn't be loaded: {exception.Message}", cancellationToken);
             return 1;
         }
 
         // A container that holds no plugins, such as a library, isn't kept.
         if (!Containers.Contains(name))
         {
-            logger.LogWarning("Plugin container {ContainerName} has no plugins to load", name);
+            await context.Source.SendMessageAsync($"Plugin container {name} has no plugins to load", cancellationToken);
             return 1;
         }
 
-        logger.LogInformation("{Verb} {ContainerName}", verb, name);
+        await context.Source.SendMessageAsync($"{verb} {name}", cancellationToken);
         return 0;
     }
 
     /// <summary>
     /// Finds the container a name means: the one named exactly so, ignoring case, or else the only one whose name contains it, such as
-    /// <c>essentials</c> for <c>Void.Proxy.Plugins.Essentials.dll</c>. Logs why when none or several match.
+    /// <c>essentials</c> for <c>Void.Proxy.Plugins.Essentials.dll</c>. Answers why when none or several match.
     /// </summary>
-    private string? FindContainer(CommandContext context, IEnumerable<string> containers)
+    private async ValueTask<string?> FindContainerAsync(CommandContext context, IEnumerable<string> containers, CancellationToken cancellationToken)
     {
         var name = context.GetArgument<string>(ContainerArgument);
         var candidates = containers.ToArray();
@@ -520,10 +522,10 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             case 1:
                 return matches[0];
             case 0:
-                logger.LogWarning("No plugin container matches {Name}", name);
+                await context.Source.SendMessageAsync($"No plugin container matches {name}", cancellationToken);
                 return null;
             default:
-                logger.LogWarning("{Name} matches several plugin containers: {Containers}", name, string.Join(", ", matches));
+                await context.Source.SendMessageAsync($"{name} matches several plugin containers: {string.Join(", ", matches)}", cancellationToken);
                 return null;
         }
     }
@@ -538,7 +540,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         return SuggestContainers(builder, Containers);
     }
 
-    // Suggests the containers whose names contain what was typed, as FindContainer matches them.
+    // Suggests the containers whose names contain what was typed, as FindContainerAsync matches them.
     private static Suggestions SuggestContainers(SuggestionsBuilder builder, IEnumerable<string> containers)
     {
         return containers

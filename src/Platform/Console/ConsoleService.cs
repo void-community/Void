@@ -135,6 +135,12 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         _reader.ShowCursor();
     }
 
+    public ValueTask SendMessageAsync(string message, CancellationToken cancellationToken = default)
+    {
+        logger.LogInformation("{Message}", message);
+        return ValueTask.CompletedTask;
+    }
+
     public override string ToString()
     {
         return nameof(Console);

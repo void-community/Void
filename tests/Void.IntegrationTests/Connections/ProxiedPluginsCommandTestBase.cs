@@ -7,8 +7,8 @@ using Xunit;
 namespace Void.IntegrationTests.Connections;
 
 /// <summary>
-/// A game reloads Essentials with the proxy's <c>/plugins</c> command from its chat, which the proxy answers in its log, and moves to the other
-/// server with the command that the reloaded Essentials registered again.
+/// A game reloads Essentials with the proxy's <c>/plugins</c> command from its chat, which answers there, and moves to the other server with
+/// the command that the reloaded Essentials registered again.
 /// </summary>
 public abstract class ProxiedPluginsCommandTestBase(ConnectionsFixture fixture) : PluginReloadTestBase(fixture)
 {
@@ -28,9 +28,8 @@ public abstract class ProxiedPluginsCommandTestBase(ConnectionsFixture fixture) 
                 await Fixture.Server1.ExpectLoginAsync(game.Username, game.StartedAt, Timeouts.SetupTimeoutToken);
                 await game.EnsureStableAsync(Timeouts.SetupTimeoutToken);
 
-                var reloadedTask = Proxy.LogWriter.WaitForLineAsync(line => line.Contains($"Reloaded {essentials}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
                 await game.SendTextMessageAsync("/plugins reload essentials", Timeouts.StepTimeoutToken);
-                await reloadedTask;
+                await game.ExpectChatAsync($"Reloaded {essentials}", Timeouts.StepTimeoutToken);
                 await AssertCollectedAsync(essentials, context, Timeouts.StepTimeoutToken);
 
                 var secondServerReadyTask = Proxy.WaitForServerConnectionAndKeepAliveAsync(game.Username, "args-server-2", Timeouts.StepTimeoutToken);

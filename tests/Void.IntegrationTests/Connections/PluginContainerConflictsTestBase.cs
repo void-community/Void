@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Void.IntegrationTests.Infrastructure.Fixtures;
 using Void.IntegrationTests.Infrastructure.Harness;
 using Void.Proxy.Api.Commands;
@@ -14,14 +13,12 @@ namespace Void.IntegrationTests.Connections;
 /// <summary>
 /// Containers refuse what can't be done with them, and stay usable after: unloading or loading one that doesn't exist, loading one that's
 /// loaded, unloading one that's unloaded, and unloading or loading the same one twice at once, which does it once. The <c>/plugins</c> command
-/// of the console answers each with why, as a warning, and nothing else warns. The command suggests the containers each of its subcommands
-/// takes.
+/// of the console answers each with why, and suggests the containers each of its subcommands takes.
 /// </summary>
 public abstract class PluginContainerConflictsTestBase(ConnectionsFixture fixture) : PluginReloadTestBase(fixture)
 {
     protected Task RunAsync()
     {
-        var startedAt = DateTime.UtcNow;
         var unknown = $"missing-{Guid.NewGuid():N}.dll";
 
         return RunReloadingAsync(async () =>
@@ -70,12 +67,7 @@ public abstract class PluginContainerConflictsTestBase(ConnectionsFixture fixtur
             Assert.Single(Plugins.Containers, name => name == essentials);
 
             await PlayAsync(nameof(PluginContainerConflictsTestBase));
-
-            string[] expectedWarnings = [$"No plugin container matches {unknown}", $"Plugin container {essentials} is already loaded", "No plugin container matches essentials"];
-            var warnings = Proxy.LogWriter.GetLinesSince(startedAt).Where(line => line.Contains(" WRN] ", StringComparison.Ordinal)).ToArray();
-
-            Assert.All(warnings, warning => Assert.Contains(expectedWarnings, expectedWarning => warning.Contains(expectedWarning, StringComparison.Ordinal)));
-        }, LogLevel.Error);
+        });
     }
 
     private async Task<string[]> SuggestAsync(string input)

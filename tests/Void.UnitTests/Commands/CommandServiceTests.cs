@@ -51,7 +51,13 @@ public class CommandServiceTests
         Assert.Empty(logger.Critical);
     }
 
-    private sealed class CommandSource : ICommandSource;
+    private sealed class CommandSource : ICommandSource
+    {
+        public ValueTask SendMessageAsync(string message, CancellationToken cancellationToken = default)
+        {
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class CapturingLogger : ILogger<ICommandService>
     {
