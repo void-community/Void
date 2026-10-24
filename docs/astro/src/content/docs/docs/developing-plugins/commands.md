@@ -52,7 +52,7 @@ class MyService(ICommandService commands, ILogger<MyService> logger) : ICommandS
 ```
 
 ## Command suggestions
-You can request suggestions for a command with the `CompleteAsync` method.
+You can request suggestions for a command with the `SuggestAsync` method.
 ```csharp
 class MyService(ICommandService commands) : ICommandSource
 {
@@ -61,8 +61,9 @@ class MyService(ICommandService commands) : ICommandSource
         ICommandSource commandSource = this;
         string command = "he";
         
-        var variants = await commands.CompleteAsync(command, commandSource, cancellationToken);
-        // variants value is string[] { "hello" }
+        var suggestions = await commands.SuggestAsync(command, commandSource, cancellationToken);
+        var variants = suggestions.Select(suggestion => suggestion.Text);
+        // variants contain "hello"
     }
 
     public ValueTask SendMessageAsync(string message, CancellationToken cancellationToken)
