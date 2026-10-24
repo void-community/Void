@@ -13,6 +13,11 @@ namespace Void.Proxy.Configurations.Serializers;
 
 public class ConfigurationTomlSerializer : IConfigurationSerializer
 {
+    // Tomlet caches a serializer and a deserializer of every type it maps in static dictionaries, which it neither guards nor lets anyone
+    // remove from. Every proxy in the process shares them, so one lock guards them all.
+    private static readonly Lock TomletLock = new();
+    private static readonly Dictionary<Type, Delegate>[] TomletCaches = [GetTomletCache("Serializers"), GetTomletCache("Deserializers")];
+
     private readonly Dictionary<Type, Type> _typeTomlMappedCache = [];
     private readonly TomlSerializerOptions _options = new()
     {
@@ -23,15 +28,32 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
         MaxTableEntriesCountToInline = 5
     };
 
+    /// <summary>
+    /// Forgets the types of an assembly, and the types mapped from them, so no cache keeps the assembly alive once its plugin unloads.
+    /// </summary>
     public void RemoveAssemblyCache(Assembly assembly)
     {
-        var queue = new Queue<Type>(_typeTomlMappedCache.Keys);
-        while (queue.TryDequeue(out var type))
+        lock (TomletLock)
         {
-            if (type.Assembly != assembly)
-                continue;
+            var assemblies = new HashSet<Assembly> { assembly };
 
-            _typeTomlMappedCache.Remove(type);
+            foreach (var (type, mappedType) in _typeTomlMappedCache.ToArray())
+            {
+                if (!IsFromAssemblies(type, assemblies))
+                    continue;
+
+                _typeTomlMappedCache.Remove(type);
+                assemblies.Add(mappedType.Assembly);
+            }
+
+            foreach (var cache in TomletCaches)
+            {
+                foreach (var type in cache.Keys.ToArray())
+                {
+                    if (IsFromAssemblies(type, assemblies))
+                        cache.Remove(type);
+                }
+            }
         }
     }
 
@@ -60,7 +82,9 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
         try
         {
             configuration ??= CreateInstanceWithDefaults(configurationType);
-            document = MapTomlDocument(configuration);
+
+            lock (TomletLock)
+                document = MapTomlDocument(configuration);
         }
         catch (TomlException exception)
         {
@@ -90,8 +114,8 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
 
         try
         {
-            var configuration = TomletMain.To(configurationType, document, _options);
-            return configuration;
+            lock (TomletLock)
+                return TomletMain.To(configurationType, document, _options);
         }
         catch (TomlException exception)
         {
@@ -122,7 +146,8 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
         if (moduleBuilder is null)
         {
             var name = $"{type.FullName}TomletMappedByVoidAssembly";
-            var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run);
+            // Collected once RemoveAssemblyCache forgets the types mapped into it, so mapping again after a plugin reloads leaves nothing behind.
+            var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.RunAndCollect);
 
             moduleBuilder = assemblyBuilder.DefineDynamicModule(name);
         }
@@ -251,6 +276,24 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
         _typeTomlMappedCache[type] = extendedType;
 
         return cache[type] = extendedType;
+    }
+
+    private static Dictionary<Type, Delegate> GetTomletCache(string name)
+    {
+        return typeof(TomlSerializationMethods).GetField(name, BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Dictionary<Type, Delegate>
+            ?? throw new InvalidOperationException($"Tomlet has no {name} cache to remove the types of unloaded plugins from");
+    }
+
+    // A type is from an assembly when it, its element type or any of its generic arguments is, as List<T> is from the assembly of T.
+    private static bool IsFromAssemblies(Type type, HashSet<Assembly> assemblies)
+    {
+        if (assemblies.Contains(type.Assembly))
+            return true;
+
+        if (type.HasElementType && type.GetElementType() is { } elementType && IsFromAssemblies(elementType, assemblies))
+            return true;
+
+        return type.IsGenericType && type.GetGenericArguments().Any(argument => IsFromAssemblies(argument, assemblies));
     }
 
     private static void SwapTomletConfiguration(TomlTable table1, TomlTable table2)
