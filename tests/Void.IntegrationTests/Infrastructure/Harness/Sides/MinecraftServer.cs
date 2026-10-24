@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Docker.DotNet;
@@ -124,10 +122,6 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         return exception switch
         {
             ContainerNotRunningException => Array.Exists(TransientStartupFailureMarkers, marker => exception.ToString().Contains(marker, StringComparison.OrdinalIgnoreCase)),
-
-            // Files Testcontainers downloads into the container, such as ModLoaderFixes
-            HttpRequestException { StatusCode: null or HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError } => true,
-            TaskCanceledException { InnerException: TimeoutException } => true,
 
             // An image pull that a registry failed, such as with a 502, leaves no image to create the container from.
             DockerImageNotFoundException => true,
