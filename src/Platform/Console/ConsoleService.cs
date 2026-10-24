@@ -5,7 +5,9 @@ using Void.Proxy.Api;
 using Void.Proxy.Api.Commands;
 using Void.Proxy.Api.Console;
 using Void.Proxy.Api.Events;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Events.Proxy;
+using Void.Proxy.Api.Plugins;
 using Void.Terminal;
 using SystemConsole = System.Console;
 
@@ -14,6 +16,10 @@ namespace Void.Proxy.Console;
 public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration consoleConfiguration, IRunOptions runOptions, ICommandService commands) : IConsoleService, IEventListener
 {
     private readonly AsyncLock _optionDiscoveryLock = new();
+
+    // Options a plugin discovers while it loads belong to it and leave with it, so the plugin can discover them again when it loads again.
+    private readonly Dictionary<IPlugin, List<Option>> _pluginOptions = [];
+    private IPlugin? _loadingPlugin;
 
     private readonly PromptReader _reader = new();
     public static bool IsEnabled => !SystemConsole.IsInputRedirected && !SystemConsole.IsOutputRedirected;
@@ -76,6 +82,46 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 
         var insertIndex = options.TakeWhile(existing => (-(existing.Aliases?.Count ?? 0), existing.Name?.ToLowerInvariant() ?? string.Empty).CompareTo((-(option.Aliases?.Count ?? 0), option.Name?.ToLowerInvariant() ?? string.Empty)) < 0).Count();
         options.Insert(insertIndex, option);
+
+        if (_loadingPlugin is not { } plugin)
+            return;
+
+        if (!_pluginOptions.TryGetValue(plugin, out var pluginOptions))
+            _pluginOptions[plugin] = pluginOptions = [];
+
+        pluginOptions.Add(option);
+    }
+
+    // Plugins load one at a time, so the options discovered until a plugin has loaded are its own.
+    [Subscribe(PostOrder.First)]
+    public void OnPluginLoading(PluginLoadingEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+        _loadingPlugin = @event.Plugin;
+    }
+
+    [Subscribe]
+    public void OnPluginLoaded(PluginLoadedEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+
+        if (_loadingPlugin == @event.Plugin)
+            _loadingPlugin = null;
+    }
+
+    [Subscribe]
+    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+
+        if (_loadingPlugin == @event.Plugin)
+            _loadingPlugin = null;
+
+        if (!_pluginOptions.Remove(@event.Plugin, out var pluginOptions))
+            return;
+
+        foreach (var option in pluginOptions)
+            consoleConfiguration.RootCommand.Options.Remove(option);
     }
 
     public async ValueTask HandleCommandsAsync(CancellationToken cancellationToken = default)
