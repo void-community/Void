@@ -12,7 +12,6 @@ using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Plugins;
 using Void.Proxy.Api.Settings;
-using Void.Proxy.Plugins;
 
 namespace Void.Proxy;
 
@@ -22,7 +21,6 @@ public class Platform(
     IRunOptions runOptions,
     IConsoleService console,
     IPluginService plugins,
-    PluginsCommand pluginsCommand,
     IEventService events,
     IPlayerService players,
     ISettings settings,
@@ -63,9 +61,6 @@ public class Platform(
 
         if (settings.Offline)
             logger.LogWarning("Offline mode is enabled. Players will be able to connect without Mojang authentication.");
-
-        // Registered before the plugins, so the console can load them even when they fail to load now
-        pluginsCommand.Register();
 
         logger.LogInformation("Loading plugins");
         await plugins.LoadPluginsAsync(cancellationToken: cancellationToken);

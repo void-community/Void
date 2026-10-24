@@ -3,9 +3,16 @@ using System.Diagnostics;
 using System.Reflection;
 using Nito.AsyncEx;
 using Nito.Disposables.Internals;
+using Void.Minecraft.Commands.Brigadier;
+using Void.Minecraft.Commands.Brigadier.Context;
+using Void.Minecraft.Commands.Brigadier.Extensions;
+using Void.Minecraft.Commands.Brigadier.Suggestion;
 using Void.Proxy.Api;
+using Void.Proxy.Api.Commands;
 using Void.Proxy.Api.Console;
+using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Plugins;
+using Void.Proxy.Api.Events.Proxy;
 using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Plugins;
 using Void.Proxy.Api.Plugins.Dependencies;
@@ -15,9 +22,11 @@ using Void.Proxy.Plugins.Context;
 
 namespace Void.Proxy.Plugins;
 
-public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions, IEventService events, IDependencyService dependencies, IConsoleService consoleService, HttpClient httpClient) : IPluginService
+public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions, IEventService events, IDependencyService dependencies, IConsoleService consoleService, ICommandService commands, HttpClient httpClient) : IPluginService, IEventListener
 {
     public const string DefaultPluginsPath = "plugins";
+
+    private const string ContainerArgument = "name";
 
     private static readonly Option<string[]> PluginsOption = new("--plugin", "-p") { Description = "Provides a path to the file, directory or URL to load plugin." };
 
@@ -26,6 +35,9 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     private readonly TimeSpan _gcRate = TimeSpan.FromMilliseconds(500);
 
     private readonly AsyncLock _lock = new();
+
+    // One command operation at a time, so concurrent requests can't unload a container twice or load one while it unloads.
+    private readonly AsyncLock _commandLock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
 
     public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.Plugins);
@@ -366,6 +378,173 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             })
             .WhenAll()
             .ContinueWith(task => task.Result.SelectMany(plugins => plugins), cancellationToken);
+    }
+
+    [Subscribe]
+    public void OnProxyStarting(ProxyStartingEvent @event)
+    {
+        commands.Register(builder => builder
+            .Literal("plugins")
+            .Executes(ListContainers)
+            .Then(builder => builder
+                .Literal("load")
+                .Then(builder => builder
+                    .Argument(ContainerArgument, Arguments.String())
+                    .Suggests(SuggestUnloadedContainers)
+                    .Executes(LoadContainerAsync)))
+            .Then(builder => builder
+                .Literal("unload")
+                .Then(builder => builder
+                    .Argument(ContainerArgument, Arguments.String())
+                    .Suggests(SuggestLoadedContainers)
+                    .Executes(UnloadContainerAsync)))
+            .Then(builder => builder
+                .Literal("reload")
+                .Then(builder => builder
+                    .Argument(ContainerArgument, Arguments.String())
+                    .Suggests(SuggestLoadedContainers)
+                    .Executes(ReloadContainerAsync))));
+    }
+
+    private int ListContainers(CommandContext context)
+    {
+        logger.LogInformation("Loaded plugins:");
+
+        foreach (var name in Containers)
+            logger.LogInformation("- {Name}", name);
+
+        return 0;
+    }
+
+    private async ValueTask<int> LoadContainerAsync(CommandContext context, CancellationToken cancellationToken)
+    {
+        using var _ = await _commandLock.LockAsync(cancellationToken);
+
+        if (FindContainer(context, LoadableContainers) is not { } name)
+            return 1;
+
+        if (Containers.Contains(name))
+        {
+            logger.LogWarning("Plugin container {ContainerName} is already loaded", name);
+            return 1;
+        }
+
+        logger.LogInformation("Loading {ContainerName} container requested by {Source}", name, context.Source);
+        return await TryLoadContainerAsync(name, "Loaded", cancellationToken);
+    }
+
+    private async ValueTask<int> UnloadContainerAsync(CommandContext context, CancellationToken cancellationToken)
+    {
+        using var _ = await _commandLock.LockAsync(cancellationToken);
+
+        if (FindContainer(context, Containers) is not { } name)
+            return 1;
+
+        logger.LogInformation("Unloading {ContainerName} container requested by {Source}", name, context.Source);
+
+        if (!await TryUnloadContainerAsync(name, cancellationToken))
+            return 1;
+
+        logger.LogInformation("Unloaded {ContainerName}", name);
+        return 0;
+    }
+
+    private async ValueTask<int> ReloadContainerAsync(CommandContext context, CancellationToken cancellationToken)
+    {
+        using var _ = await _commandLock.LockAsync(cancellationToken);
+
+        if (FindContainer(context, Containers) is not { } name)
+            return 1;
+
+        logger.LogInformation("Reloading {ContainerName} container requested by {Source}", name, context.Source);
+
+        if (!await TryUnloadContainerAsync(name, cancellationToken))
+            return 1;
+
+        return await TryLoadContainerAsync(name, "Reloaded", cancellationToken);
+    }
+
+    private async ValueTask<bool> TryUnloadContainerAsync(string name, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await UnloadContainerAsync(name, cancellationToken);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Plugin container {ContainerName} couldn't be unloaded", name);
+            return false;
+        }
+    }
+
+    private async ValueTask<int> TryLoadContainerAsync(string name, string verb, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await LoadContainerAsync(name, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Plugin container {ContainerName} couldn't be loaded", name);
+            return 1;
+        }
+
+        // A container that holds no plugins, such as a library, isn't kept.
+        if (!Containers.Contains(name))
+        {
+            logger.LogWarning("Plugin container {ContainerName} has no plugins to load", name);
+            return 1;
+        }
+
+        logger.LogInformation("{Verb} {ContainerName}", verb, name);
+        return 0;
+    }
+
+    /// <summary>
+    /// Finds the container a name means: the one named exactly so, ignoring case, or else the only one whose name contains it, such as
+    /// <c>essentials</c> for <c>Void.Proxy.Plugins.Essentials.dll</c>. Logs why when none or several match.
+    /// </summary>
+    private string? FindContainer(CommandContext context, IEnumerable<string> containers)
+    {
+        var name = context.GetArgument<string>(ContainerArgument);
+        var candidates = containers.ToArray();
+
+        if (candidates.FirstOrDefault(candidate => candidate.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } exactMatch)
+            return exactMatch;
+
+        var matches = candidates.Where(candidate => candidate.Contains(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        switch (matches.Length)
+        {
+            case 1:
+                return matches[0];
+            case 0:
+                logger.LogWarning("No plugin container matches {Name}", name);
+                return null;
+            default:
+                logger.LogWarning("{Name} matches several plugin containers: {Containers}", name, string.Join(", ", matches));
+                return null;
+        }
+    }
+
+    private Suggestions SuggestUnloadedContainers(CommandContext context, SuggestionsBuilder builder)
+    {
+        return SuggestContainers(builder, LoadableContainers.Except(Containers));
+    }
+
+    private Suggestions SuggestLoadedContainers(CommandContext context, SuggestionsBuilder builder)
+    {
+        return SuggestContainers(builder, Containers);
+    }
+
+    // Suggests the containers whose names contain what was typed, as FindContainer matches them.
+    private static Suggestions SuggestContainers(SuggestionsBuilder builder, IEnumerable<string> containers)
+    {
+        return containers
+            .Where(name => name.Contains(builder.Remaining, StringComparison.OrdinalIgnoreCase))
+            .Aggregate(builder, (suggestionsBuilder, name) => suggestionsBuilder.Suggest(name))
+            .Build();
     }
 
     private static IEnumerable<string> GetEmbeddedPluginNames()

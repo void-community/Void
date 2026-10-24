@@ -125,7 +125,6 @@ public static class VoidEntryPoint
                 .AddSingletonAndListen<ICryptoService, RsaCryptoService>()
                 .AddSingletonAndListen<IEventService, EventService>()
                 .AddSingletonAndListen<IPluginService, PluginService>()
-                .AddSingleton<PluginsCommand>()
                 .AddSingletonAndListen<IPlayerService, PlayerService>()
                 .AddSingletonAndListen<IServerService, ServerService>()
                 .AddSingletonAndListen<ILinkService, LinkService>()
