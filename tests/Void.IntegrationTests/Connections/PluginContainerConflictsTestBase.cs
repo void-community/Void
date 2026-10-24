@@ -1,9 +1,12 @@
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Void.IntegrationTests.Infrastructure.Fixtures;
 using Void.IntegrationTests.Infrastructure.Harness;
+using Void.Proxy.Api.Commands;
+using Void.Proxy.Api.Console;
 using Xunit;
 
 namespace Void.IntegrationTests.Connections;
@@ -11,7 +14,8 @@ namespace Void.IntegrationTests.Connections;
 /// <summary>
 /// Containers refuse what can't be done with them, and stay usable after: unloading or loading one that doesn't exist, loading one that's
 /// loaded, unloading one that's unloaded, and unloading or loading the same one twice at once, which does it once. The <c>/plugins</c> command
-/// of the console answers each with why, as a warning, and nothing else warns.
+/// of the console answers each with why, as a warning, and nothing else warns. The command suggests the containers each of its subcommands
+/// takes.
 /// </summary>
 public abstract class PluginContainerConflictsTestBase(ConnectionsFixture fixture) : PluginReloadTestBase(fixture)
 {
@@ -44,6 +48,15 @@ public abstract class PluginContainerConflictsTestBase(ConnectionsFixture fixtur
             Assert.Single(loads, loaded => loaded);
             Assert.Single(Plugins.Containers, name => name == essentials);
 
+            Assert.Contains(essentials, await SuggestAsync("plugins unload ess"));
+            Assert.Contains(essentials, await SuggestAsync("plugins reload ESS"));
+            Assert.DoesNotContain(essentials, await SuggestAsync("plugins load "));
+
+            await UnloadAsync(essentials, Timeouts.StepTimeoutToken);
+            Assert.Contains(essentials, await SuggestAsync("plugins load essentials"));
+            Assert.DoesNotContain(essentials, await SuggestAsync("plugins unload "));
+            await LoadAsync(essentials, Timeouts.StepTimeoutToken);
+
             await Proxy.RunConsoleCommandAsync($"plugins unload {unknown}", line => line.Contains($"No plugin container matches {unknown}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
             await Proxy.RunConsoleCommandAsync("plugins load essentials", line => line.Contains($"Plugin container {essentials} is already loaded", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
             await Proxy.RunConsoleCommandAsync("plugins unload essentials", line => line.Contains($"Unloaded {essentials}", StringComparison.Ordinal), Timeouts.StepTimeoutToken);
@@ -63,6 +76,14 @@ public abstract class PluginContainerConflictsTestBase(ConnectionsFixture fixtur
 
             Assert.All(warnings, warning => Assert.Contains(expectedWarnings, expectedWarning => warning.Contains(expectedWarning, StringComparison.Ordinal)));
         }, LogLevel.Error);
+    }
+
+    private async Task<string[]> SuggestAsync(string input)
+    {
+        var services = Proxy.RunResult.Services;
+        var suggestions = await services.GetRequiredService<ICommandService>().SuggestAsync(input, services.GetRequiredService<IConsoleService>(), Timeouts.StepTimeoutToken);
+
+        return [.. suggestions.Select(suggestion => suggestion.Text)];
     }
 
     private static async Task<bool> TryAsync(ValueTask operation)

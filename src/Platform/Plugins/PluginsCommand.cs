@@ -2,6 +2,7 @@ using Nito.AsyncEx;
 using Void.Minecraft.Commands.Brigadier;
 using Void.Minecraft.Commands.Brigadier.Context;
 using Void.Minecraft.Commands.Brigadier.Extensions;
+using Void.Minecraft.Commands.Brigadier.Suggestion;
 using Void.Minecraft.Players.Extensions;
 using Void.Proxy.Api.Commands;
 using Void.Proxy.Api.Players;
@@ -29,16 +30,19 @@ public class PluginsCommand(ILogger<PluginsCommand> logger, IPluginService plugi
                 .Literal("load")
                 .Then(builder => builder
                     .Argument(NameArgument, Arguments.String())
+                    .Suggests(SuggestUnloaded)
                     .Executes(LoadAsync)))
             .Then(builder => builder
                 .Literal("unload")
                 .Then(builder => builder
                     .Argument(NameArgument, Arguments.String())
+                    .Suggests(SuggestLoaded)
                     .Executes(UnloadAsync)))
             .Then(builder => builder
                 .Literal("reload")
                 .Then(builder => builder
                     .Argument(NameArgument, Arguments.String())
+                    .Suggests(SuggestLoaded)
                     .Executes(ReloadAsync))));
     }
 
@@ -147,6 +151,25 @@ public class PluginsCommand(ILogger<PluginsCommand> logger, IPluginService plugi
 
         await AnswerAsync(context, $"{verb} {name}", succeeded: true, cancellationToken);
         return 0;
+    }
+
+    private Suggestions SuggestUnloaded(CommandContext context, SuggestionsBuilder builder)
+    {
+        return Suggest(builder, plugins.LoadableContainers.Except(plugins.Containers));
+    }
+
+    private Suggestions SuggestLoaded(CommandContext context, SuggestionsBuilder builder)
+    {
+        return Suggest(builder, plugins.Containers);
+    }
+
+    // Suggests the containers whose names contain what was typed, as FindAsync matches them.
+    private static Suggestions Suggest(SuggestionsBuilder builder, IEnumerable<string> containers)
+    {
+        return containers
+            .Where(name => name.Contains(builder.Remaining, StringComparison.OrdinalIgnoreCase))
+            .Aggregate(builder, (suggestionsBuilder, name) => suggestionsBuilder.Suggest(name))
+            .Build();
     }
 
     /// <summary>
