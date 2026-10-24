@@ -54,7 +54,8 @@ public static class VoidEntryPoint
         public TextWriter? LogWriter { get; init; } = null;
     }
 
-    public record RunResult(Task<int> CompletionTask, int ListeningPort) : IAsyncDisposable
+    /// <param name="Services">The services of the running proxy, such as its <see cref="IPluginService" />, until it stops.</param>
+    public record RunResult(Task<int> CompletionTask, int ListeningPort, IServiceProvider Services) : IAsyncDisposable
     {
         public int ExitCode => !CompletionTask.IsCompleted
                 ? throw new InvalidOperationException("Cannot get exit code before completion.")
@@ -176,7 +177,7 @@ public static class VoidEntryPoint
                 host.Dispose();
                 logger.Dispose();
             }
-        }), ListeningPort: port);
+        }), ListeningPort: port, Services: host.Services);
     }
 
     private static Logger CreateLogger(LoggingLevelSwitch loggingLevelSwitch, TextWriter? logWriter)
