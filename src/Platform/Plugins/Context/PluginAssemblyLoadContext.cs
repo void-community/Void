@@ -11,7 +11,11 @@ public class PluginAssemblyLoadContext : AssemblyLoadContext
     private readonly ILogger<PluginAssemblyLoadContext> _logger;
     private readonly ManagedResolver _resolver;
 
-    public Assembly PluginAssembly { get; }
+    /// <summary>
+    /// The plugin assembly, until the context starts unloading. The runtime keeps an unloading context alive until its assemblies are
+    /// collected, so a context that kept its assembly would never unload.
+    /// </summary>
+    public Assembly? PluginAssembly { get; private set; }
 
     public PluginAssemblyLoadContext(ILogger<PluginAssemblyLoadContext> logger, IDependencyService dependencies, string name, Stream assemblyStream, CopyOnWriteCollection<WeakPluginContainer> containers) : base(name, true)
     {
@@ -19,6 +23,7 @@ public class PluginAssemblyLoadContext : AssemblyLoadContext
         _resolver = dependencies.CreateInstance<ManagedResolver>(default, this, containers);
 
         PluginAssembly = LoadFromStream(assemblyStream);
+        Unloading += context => PluginAssembly = null;
     }
 
     protected override Assembly Load(AssemblyName assemblyName)

@@ -275,7 +275,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             await events.ThrowAsync(new PluginLoadedEvent(plugin), cancellationToken);
         }
 
-        logger.LogDebug("Loaded {Name} plugin from {AssemblyName} ", plugin.Name, container.Context.PluginAssembly.GetName().Name);
+        logger.LogDebug("Loaded {Name} plugin from {AssemblyName} ", plugin.Name, pluginType.Assembly.GetName().Name);
     }
 
     public async ValueTask UnloadContainersAsync(CancellationToken cancellationToken = default)
@@ -362,7 +362,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         try
         {
             context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers);
-            plugins = GetPlugins(context.PluginAssembly);
+            plugins = GetPlugins(context.PluginAssembly ?? throw new InvalidOperationException($"Plugin context {name} unloaded as it loaded"));
         }
         catch (Exception exception)
         {
