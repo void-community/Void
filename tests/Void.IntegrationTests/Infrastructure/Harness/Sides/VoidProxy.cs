@@ -25,7 +25,9 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
     public string LogFileName => "void-proxy.log";
     public IEnumerable<string> Logs => LogWriter.Lines;
     public int Port => RunResult.ListeningPort;
-    public IPluginService Plugins => RunResult.Services.GetRequiredService<IPluginService>();
+
+    /// <summary>The plugin service of the proxy, kept from its start, so a proxy that stopped still prints.</summary>
+    public required IPluginService Plugins { get; init; }
 
     /// <summary>The directory the proxy keeps its settings and plugins in.</summary>
     public string WorkingDirectory { get; private init; } = string.Empty;
@@ -80,7 +82,9 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
             Assert.Fail($"{nameof(VoidProxy)} failed to start. Logs:\n{logWriter.Text}\n{exception}");
         }
 
-        return new VoidProxy(logWriter, result, cancellationTokenSource) { WorkingDirectory = workingDirectory, StartupContainers = [.. result.Services.GetRequiredService<IPluginService>().Containers] };
+        var plugins = result.Services.GetRequiredService<IPluginService>();
+
+        return new VoidProxy(logWriter, result, cancellationTokenSource) { Plugins = plugins, WorkingDirectory = workingDirectory, StartupContainers = [.. plugins.Containers] };
     }
 
     /// <summary>Runs a command on the proxy's console, and waits until the proxy logged a line that answers it.</summary>

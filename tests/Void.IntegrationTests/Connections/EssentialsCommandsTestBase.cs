@@ -44,8 +44,8 @@ public abstract class EssentialsCommandsTestBase(ConnectionsFixture fixture) : I
 
             var joinLogs = proxy.LogWriter.GetLinesSince(game.StartedAt);
             Assert.Contains(joinLogs, line => line.Contains($"Player {game.Username} connected to args-server-1 ({fixture.ProtocolVersion})", StringComparison.Ordinal));
-            Assert.Contains(joinLogs, line => line.Contains($"from Client {game.Username}", StringComparison.Ordinal));
-            Assert.Contains(joinLogs, line => line.Contains($"to Client {game.Username}", StringComparison.Ordinal));
+            Assert.Contains(joinLogs, line => line.Contains($"from \"Client\" {game.Username}", StringComparison.Ordinal));
+            Assert.Contains(joinLogs, line => line.Contains($"to \"Client\" {game.Username}", StringComparison.Ordinal));
 
             Assert.Contains("args-server-2", await SuggestAsync("server "));
             Assert.Contains(game.Username, await SuggestAsync("kick "));
