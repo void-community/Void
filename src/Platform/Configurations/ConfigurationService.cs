@@ -30,8 +30,9 @@ public class ConfigurationService(ILogger<ConfigurationService> logger, IPluginS
     private readonly ConcurrentDictionary<string, object> _configurations = [];
     private readonly ConcurrentDictionary<string, DateTime> _updatesCooldown = [];
 
-    [Subscribe(PostOrder.First)]
-    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    // After the plugin's own unloading listeners, which may still read or save its configurations.
+    [Subscribe]
+    public void OnPluginUnloaded(PluginUnloadedEvent @event)
     {
         var assembly = @event.Plugin.GetType().Assembly;
 

@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using Tomlet;
 using Tomlet.Attributes;
 using Tomlet.Exceptions;
@@ -17,6 +18,10 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
     // remove from. Every proxy in the process shares them, so one lock guards them all.
     private static readonly Lock TomletLock = new();
     private static readonly Dictionary<Type, Delegate>[] TomletCaches = [GetTomletCache("Serializers"), GetTomletCache("Deserializers")];
+
+    // Held weakly, so forgetting an assembly doesn't keep it alive. A serialization under way as its plugin unloads caches its types again,
+    // which are forgotten again once it's done.
+    private static readonly ConditionalWeakTable<Assembly, object> ForgottenAssemblies = new();
 
     private readonly Dictionary<Type, Type> _typeTomlMappedCache = [];
     private readonly TomlSerializerOptions _options = new()
@@ -35,25 +40,8 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
     {
         lock (TomletLock)
         {
-            var assemblies = new HashSet<Assembly> { assembly };
-
-            foreach (var (type, mappedType) in _typeTomlMappedCache.ToArray())
-            {
-                if (!IsFromAssemblies(type, assemblies))
-                    continue;
-
-                _typeTomlMappedCache.Remove(type);
-                assemblies.Add(mappedType.Assembly);
-            }
-
-            foreach (var cache in TomletCaches)
-            {
-                foreach (var type in cache.Keys.ToArray())
-                {
-                    if (IsFromAssemblies(type, assemblies))
-                        cache.Remove(type);
-                }
-            }
+            ForgottenAssemblies.AddOrUpdate(assembly, assembly);
+            ForgetTypes();
         }
     }
 
@@ -84,7 +72,12 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
             configuration ??= CreateInstanceWithDefaults(configurationType);
 
             lock (TomletLock)
+            {
                 document = MapTomlDocument(configuration);
+
+                if (IsForgotten(configuration.GetType()))
+                    ForgetTypes();
+            }
         }
         catch (TomlException exception)
         {
@@ -115,7 +108,14 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
         try
         {
             lock (TomletLock)
-                return TomletMain.To(configurationType, document, _options);
+            {
+                var configuration = TomletMain.To(configurationType, document, _options);
+
+                if (IsForgotten(configurationType))
+                    ForgetTypes();
+
+                return configuration;
+            }
         }
         catch (TomlException exception)
         {
@@ -284,16 +284,42 @@ public class ConfigurationTomlSerializer : IConfigurationSerializer
             ?? throw new InvalidOperationException($"Tomlet has no {name} cache to remove the types of unloaded plugins from");
     }
 
-    // A type is from an assembly when it, its element type or any of its generic arguments is, as List<T> is from the assembly of T.
-    private static bool IsFromAssemblies(Type type, HashSet<Assembly> assemblies)
+    // Removes the types of forgotten assemblies, and the types mapped from them, from every cache. Called under TomletLock.
+    private void ForgetTypes()
     {
-        if (assemblies.Contains(type.Assembly))
+        foreach (var (type, mappedType) in _typeTomlMappedCache.ToArray())
+        {
+            if (!IsForgotten(type))
+                continue;
+
+            _typeTomlMappedCache.Remove(type);
+            ForgottenAssemblies.AddOrUpdate(mappedType.Assembly, mappedType.Assembly);
+        }
+
+        foreach (var cache in TomletCaches)
+        {
+            foreach (var type in cache.Keys.ToArray())
+            {
+                if (IsForgotten(type))
+                    cache.Remove(type);
+            }
+
+            // Tomlet registers the serializer of every class it maps under object rather than its type, so the last class mapped stays
+            // there, whichever plugin it's from. Tomlet maps object again when it needs to.
+            cache.Remove(typeof(object));
+        }
+    }
+
+    // A type is forgotten when it, its element type or any of its generic arguments is from a forgotten assembly, as List<T> is with T.
+    private static bool IsForgotten(Type type)
+    {
+        if (ForgottenAssemblies.TryGetValue(type.Assembly, out _))
             return true;
 
-        if (type.HasElementType && type.GetElementType() is { } elementType && IsFromAssemblies(elementType, assemblies))
+        if (type.HasElementType && type.GetElementType() is { } elementType && IsForgotten(elementType))
             return true;
 
-        return type.IsGenericType && type.GetGenericArguments().Any(argument => IsFromAssemblies(argument, assemblies));
+        return type.IsGenericType && type.GetGenericArguments().Any(IsForgotten);
     }
 
     private static void SwapTomletConfiguration(TomlTable table1, TomlTable table2)
