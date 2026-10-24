@@ -8,6 +8,7 @@ using Void.Minecraft.Players.Extensions;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Links;
 using Void.Proxy.Api.Events.Network;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Events.Player;
 using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
@@ -23,7 +24,7 @@ using Void.Proxy.Plugins.Common.Players.Contexts;
 
 namespace Void.Proxy.Plugins.Common.Services.Lifecycle;
 
-public abstract class AbstractLifecycleService(ILogger logger, IEventService events) : IPluginCommonService
+public abstract class AbstractLifecycleService(ILogger logger, IEventService events, IPlayerService players) : IPluginCommonService
 {
     private const string DefaultKickMessage = "You were kicked from proxy";
 
@@ -34,6 +35,29 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     {
         @event.Result ??= new SimplePlayer(@event.Client, instance => new PlayerContext(@event.GetServices) { Player = instance });
         logger.LogTrace("Player connecting: {Player}", @event.Result);
+    }
+
+    // Players of the versions the plugin supports can't play without it, so they leave with why rather than with a game that stops working.
+    [Subscribe]
+    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event.Plugin.GetType().Assembly != GetType().Assembly)
+            return;
+
+        await players.ForEachAsync(async (player, cancellationToken) =>
+        {
+            if (!player.IsMinecraft || !IsSupportedVersion(player.ProtocolVersion))
+                return;
+
+            try
+            {
+                await player.KickAsync($"Void unloaded support for your Minecraft version ({player.ProtocolVersion})", cancellationToken);
+            }
+            catch (StreamClosedException)
+            {
+                // Player disconnected before we could kick them, ignore
+            }
+        }, cancellationToken);
     }
 
     [Subscribe]

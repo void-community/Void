@@ -15,7 +15,7 @@ using Void.Proxy.Plugins.ProtocolSupport.Java.v1_20_2_to_latest.Packets.Clientbo
 
 namespace Void.Proxy.Plugins.ProtocolSupport.Java.v1_20_2_to_latest.Lifecycle;
 
-public class LifecycleService(ILogger<LifecycleService> logger, IEventService events) : AbstractLifecycleService(logger, events)
+public class LifecycleService(ILogger<LifecycleService> logger, IEventService events, IPlayerService players) : AbstractLifecycleService(logger, events, players)
 {
     protected override async ValueTask EnableCompressionAsync(ILink link, CancellationToken cancellationToken)
     {
