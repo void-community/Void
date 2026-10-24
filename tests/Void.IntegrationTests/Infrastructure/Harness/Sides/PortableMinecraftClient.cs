@@ -222,6 +222,23 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             await EnsureSuccessAsync(response, $"Disconnecting {GameName}", cancellationToken);
         }
 
+        /// <summary>Waits until the server the game plays on removes it, and fails unless the game shows <paramref name="expectedReason"/> as why.</summary>
+        public async Task ExpectKickAsync(string expectedReason, CancellationToken cancellationToken = default)
+        {
+            var status = await ReadStatusAsync(cancellationToken);
+
+            while (status.State is "connected")
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                status = await ReadStatusAsync(cancellationToken);
+            }
+
+            if (status.Disconnect is not { Code: "client.connection.lost" } disconnect || disconnect.Message?.Contains(expectedReason, StringComparison.Ordinal) is not true)
+                throw new IntegrationTestException($"{GameName} did not show the expected kick reason {expectedReason}: {JsonSerializer.Serialize(status)}");
+
+            await LogAsync($"{GameName} was kicked: {disconnect.Message}", cancellationToken);
+        }
+
         public async Task SendChatAsync(string text, CancellationToken cancellationToken = default)
         {
             await LogAsync($"Sending chat input: {text}", cancellationToken);
@@ -561,7 +578,9 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
         private record ApiProblemDetails(string? Title, int? Status, string? Detail, ApiFailure? Failure);
 
-        private record ApiStatus(string State, long OperationId, string? Operation, string OperationState, int? ProcessId, int? ExitCode, string? Message, string? Error, ApiFailure? Failure, DateTimeOffset UpdatedAt, Guid? SessionId = null);
+        private record ApiDisconnect(string Code, string? Stage, string? Message);
+
+        private record ApiStatus(string State, long OperationId, string? Operation, string OperationState, int? ProcessId, int? ExitCode, string? Message, string? Error, ApiFailure? Failure, DateTimeOffset UpdatedAt, Guid? SessionId = null, ApiDisconnect? Disconnect = null);
 
         private record StopGameResponse(string Mode, ApiStatus Status);
 

@@ -57,6 +57,13 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
         await game.JoinServerExpectingFailureAsync(endPoint, expectedReason, cancellationToken);
     }
 
+    /// <summary>Waits until the server the game plays on removes it with <paramref name="expectedReason"/>.</summary>
+    public async Task ExpectKickAsync(string expectedReason, CancellationToken cancellationToken = default)
+    {
+        await game.ExpectKickAsync(expectedReason, cancellationToken);
+        await MakeStepAsync("kicked", cancellationToken);
+    }
+
     public async Task SendTextMessageAsync(string text, CancellationToken cancellationToken = default)
     {
         await SendTextMessagesAsync([text], cancellationToken);
