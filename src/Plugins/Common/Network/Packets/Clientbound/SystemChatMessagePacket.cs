@@ -12,13 +12,13 @@ public class SystemChatMessagePacket : IMinecraftClientboundPacket<SystemChatMes
 
     public void Encode(ref MinecraftBuffer buffer, ProtocolVersion protocolVersion)
     {
-        buffer.WriteComponent(Message);
+        buffer.WriteComponent(Message, asNbt: protocolVersion >= ProtocolVersion.MINECRAFT_1_20_3);
         buffer.WriteBoolean(Overlay);
     }
 
     public static SystemChatMessagePacket Decode(ref MinecraftBuffer buffer, ProtocolVersion protocolVersion)
     {
-        var message = buffer.ReadComponent();
+        var message = buffer.ReadComponent(asNbt: protocolVersion >= ProtocolVersion.MINECRAFT_1_20_3);
         var overlay = buffer.ReadBoolean();
 
         return new SystemChatMessagePacket
