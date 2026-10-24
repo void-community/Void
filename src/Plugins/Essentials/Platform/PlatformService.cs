@@ -27,12 +27,12 @@ public class PlatformService(ILogger<PlatformService> logger, IHostApplicationLi
 
         commands.Register(builder => builder
             .Literal("stop")
-            .Executes(StopServer));
+            .Executes(StopServerAsync));
     }
 
-    private int StopServer(CommandContext context)
+    private async ValueTask<int> StopServerAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Stopping proxy...");
+        await context.Source.SendMessageAsync("Stopping proxy...", cancellationToken);
         hostApplicationLifetime.StopApplication();
         return 0;
     }
