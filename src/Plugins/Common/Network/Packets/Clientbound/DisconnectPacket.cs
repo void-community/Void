@@ -21,18 +21,12 @@ public class DisconnectPacket<TDisconnectPacketKind> : DisconnectPacket, IMinecr
 {
     public void Encode(ref MinecraftBuffer buffer, ProtocolVersion protocolVersion)
     {
-        buffer.WriteComponent(Reason, asNbt: IsNbt(protocolVersion));
+        buffer.WriteComponent(Reason, asNbt: TDisconnectPacketKind.IsNbt);
     }
 
     public static TDisconnectPacketKind Decode(ref MinecraftBuffer buffer, ProtocolVersion protocolVersion)
     {
-        return TDisconnectPacketKind.Create(buffer.ReadComponent(asNbt: IsNbt(protocolVersion)));
-    }
-
-    // Disconnects outside of login carry their reason as NBT from Minecraft 1.20.3, and as JSON before, as in 1.20.2.
-    private static bool IsNbt(ProtocolVersion protocolVersion)
-    {
-        return TDisconnectPacketKind.IsNbt && protocolVersion >= ProtocolVersion.MINECRAFT_1_20_3;
+        return TDisconnectPacketKind.Create(buffer.ReadComponent(asNbt: TDisconnectPacketKind.IsNbt));
     }
 
     public void Dispose()
