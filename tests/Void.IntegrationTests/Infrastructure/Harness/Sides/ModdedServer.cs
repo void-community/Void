@@ -53,9 +53,6 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         </Configuration>
         """;
 
-    // Later builds resolve NeoForge servers' mods as Forge ones (itzg/docker-minecraft-server@625b10ae), which NeoForge from 1.20.2 can't load.
-    private const string ImageRelease = "2026.10.0";
-
     private static readonly ReleaseVersion LargerMemoryRelease = new(Major: 1, Minor: 17, Patch: 0);
 
     /// <param name="loaderVersion">The loader build as the image selects it, such as beta for NeoForge's newest beta, or <see langword="null"/> for its newest stable build.</param>
@@ -66,7 +63,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
         var javaMajorVersion = await MojangVersionCatalog.FindJavaMajorVersionAsync(release, cancellationToken);
         javaMajorVersion = javaMajorVersion is 16 ? 17 : javaMajorVersion;
 
-        var builder = new ContainerBuilder($"itzg/minecraft-server:{ImageRelease}-java{javaMajorVersion}")
+        var builder = new ContainerBuilder($"itzg/minecraft-server:java{javaMajorVersion}")
             .WithImagePullPolicy(PullPolicy.Missing)
             .WithPortBinding(port: 25565, assignRandomHostPort: true)
             .WithEnvironment("EULA", "TRUE")
