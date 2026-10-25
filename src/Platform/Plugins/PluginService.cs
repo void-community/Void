@@ -329,7 +329,9 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         {
             await ThrowUnloadEventsAsync(container, cancellationToken);
 
-            events.UnregisterListeners(container.Plugins);
+            // The plugin's own listeners are gone by now, so a collection that other containers unloading meanwhile force may already have
+            // collected it, and left nothing of it to unregister
+            events.UnregisterListeners(container.AlivePlugins);
 
             await container.CancellationTokenSource.CancelAsync();
             container.Context.Unload();
