@@ -2,8 +2,11 @@
 using Void.Minecraft.Network;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Plugins;
+using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Plugins.Dependencies;
+using Void.Proxy.Plugins.Common.Crypto;
 using Void.Proxy.Plugins.Common.Network.Bundles;
+using Void.Proxy.Plugins.Common.Network.Channels.Services;
 using Void.Proxy.Plugins.Common.Plugins;
 using Void.Proxy.Plugins.ProtocolSupport.Java.v1_13_to_1_20_1.Authentication;
 using Void.Proxy.Plugins.ProtocolSupport.Java.v1_13_to_1_20_1.Channels;
@@ -44,6 +47,9 @@ public class Plugin(IDependencyService dependencies) : IProtocolPlugin
             services.AddSingleton<BundleService>();
             services.AddSingleton<LifecycleService>();
 
+            // Each protocol plugin registers the services its players need, which another may not be loaded to register
+            services.AddScoped<IChannelBuilderService, SimpleMinecraftChannelBuilderService>();
+            services.AddScoped<ITokenHolder, SimpleTokenHolder>();
             services.AddScoped<IBundleService, Common.Network.Bundles.BundleService>();
         });
     }
