@@ -98,11 +98,22 @@ public abstract class PluginReloadTestBase(ConnectionsFixture fixture) : Integra
         throw new IntegrationTestException($"No loaded plugin supports {fixture.ProtocolVersion}");
     }
 
-    /// <summary>The startup containers other than the one of the collection's protocol version, which a playing game doesn't need to stay.</summary>
+    /// <summary>
+    ///     The startup containers that a playing game doesn't need to stay: all but the one of the collection's protocol version, and for a
+    ///     modded game the one of its mods, whose unloading kicks the game as its protocol's does.
+    /// </summary>
     protected IReadOnlyList<string> FindContainersBesidesProtocol()
     {
         var protocolContainer = FindProtocolContainer();
-        return [.. StartupContainers.Where(name => name != protocolContainer)];
+        var modsContainer = fixture is ModdedConnectionsFixture ? FindModsContainer() : null;
+
+        return [.. StartupContainers.Where(name => name != protocolContainer && name != modsContainer)];
+    }
+
+    /// <summary>The startup container that supports modded games.</summary>
+    protected string FindModsContainer()
+    {
+        return Assert.Single(StartupContainers, name => name.Contains(".ModsSupport.Forge.", StringComparison.Ordinal));
     }
 
     /// <summary>Unloads a container, and fails unless its load context is collected afterwards.</summary>

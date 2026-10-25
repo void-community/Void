@@ -161,6 +161,13 @@ The `/plugins` command manages plugins while the proxy runs, from the console or
 
 A name matches the container named exactly so, ignoring case, or else the only container whose name contains it, so `/plugins reload essentials` reloads `Void.Proxy.Plugins.Essentials.dll`. Pressing Tab suggests the names each subcommand takes.
 
+Players who can't keep playing without a plugin are kicked as it unloads, with the reason:
+
+- Unloading the plugin that supports a player's Minecraft version kicks the player with "Void unloaded support for your Minecraft version (…)".
+- Unloading `Void.Proxy.Plugins.ModsSupport.Forge.dll` kicks players who joined with Forge or NeoForge with "Void unloaded support for your mods". Players without mods keep playing.
+
+Other players keep playing through a reload.
+
 ## Plugin Configurations (configs/\<Plugin\>/*.toml)
 
 Each plugin may [**define one or a subset of keyed configuration files**](/docs/developing-plugins/configuration/) in its own directory. 

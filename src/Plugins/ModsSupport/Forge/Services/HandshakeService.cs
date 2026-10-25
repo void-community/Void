@@ -9,7 +9,9 @@ using Void.Minecraft.Players.Extensions;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Network;
 using Void.Proxy.Api.Events.Player;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Network;
+using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Contexts;
 using Void.Proxy.Plugins.Common.Events;
@@ -26,6 +28,27 @@ public class HandshakeService(IPlayerContext context) : IEventListener
     private readonly ConcurrentDictionary<IPlayer, PlayerCachedMods> _playerMods = [];
     private readonly LegacyHandshake _legacyHandshake = new();
     private bool _joinedServer;
+
+    // The handshake recorded here is how a modded player joins the next server, which a plugin loaded again has no record of, so the player
+    // leaves with why rather than with a switch that fails. First, as the kick needs the packet registries that unloading disposes of.
+    [Subscribe(PostOrder.First)]
+    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event.Plugin.GetType().Assembly != GetType().Assembly)
+            return;
+
+        if (!_playerMods.ContainsKey(context.Player) && !_legacyHandshake.IsComplete)
+            return;
+
+        try
+        {
+            await context.Player.KickAsync("Void unloaded support for your mods", cancellationToken);
+        }
+        catch (StreamClosedException)
+        {
+            // The player left before the kick
+        }
+    }
 
     [Subscribe]
     public void OnPlayerDisconnect(PlayerDisconnectedEvent @event)
