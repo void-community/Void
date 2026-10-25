@@ -133,7 +133,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     public void ActivatePlayerScope(IPlayerContext context)
     {
         var playerStableHashCode = context.Player.GetStableHashCode();
-        var plugins = new Queue<KeyValuePair<Assembly, PluginContainer>>(_plugins);
+        // A snapshot, as the queue would copy the dictionary by its count and its items apart while plugins load and unload meanwhile
+        var plugins = new Queue<KeyValuePair<Assembly, PluginContainer>>(_plugins.ToArray());
 
         while (plugins.TryDequeue(out var plugin))
         {
