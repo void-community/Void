@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using Void.Minecraft.Network;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Channels;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Players;
@@ -16,10 +17,21 @@ namespace Void.Proxy.Plugins.Common.Services.Channels;
 
 public abstract class AbstractChannelService : IPluginCommonService
 {
+    private volatile bool _unloading;
+
+    // A plugin that unloads takes no new players, which are forwarded as players of a version no plugin supports, while those it took
+    // finish with it. First, before its lifecycle waits for them.
+    [Subscribe(PostOrder.First)]
+    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    {
+        if (@event.Plugin.GetType().Assembly == GetType().Assembly)
+            _unloading = true;
+    }
+
     [Subscribe]
     public async ValueTask OnSearchChannelBuilder(SearchChannelBuilderEvent @event, CancellationToken cancellationToken)
     {
-        if (!IsSupportedHandshake(@event.Buffer, out var protocolVersion))
+        if (_unloading || !IsSupportedHandshake(@event.Buffer, out var protocolVersion))
             return;
         
         // This is definitely a Minecraft connection
