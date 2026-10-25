@@ -17,7 +17,15 @@ namespace Void.Proxy.Plugins.Common.Services.Channels;
 
 public abstract class AbstractChannelService : IPluginCommonService
 {
-    private volatile bool _unloading;
+    // The plugin's services register their listeners one at a time as it loads, so a player it took before it loaded would meet only some
+    private volatile bool _accepting;
+
+    [Subscribe]
+    public void OnPluginLoaded(PluginLoadedEvent @event)
+    {
+        if (@event.Plugin.GetType().Assembly == GetType().Assembly)
+            _accepting = true;
+    }
 
     // A plugin that unloads takes no new players, which are forwarded as players of a version no plugin supports, while those it took
     // finish with it. First, before its lifecycle waits for them.
@@ -25,13 +33,13 @@ public abstract class AbstractChannelService : IPluginCommonService
     public void OnPluginUnloading(PluginUnloadingEvent @event)
     {
         if (@event.Plugin.GetType().Assembly == GetType().Assembly)
-            _unloading = true;
+            _accepting = false;
     }
 
     [Subscribe]
     public async ValueTask OnSearchChannelBuilder(SearchChannelBuilderEvent @event, CancellationToken cancellationToken)
     {
-        if (_unloading || !IsSupportedHandshake(@event.Buffer, out var protocolVersion))
+        if (!_accepting || !IsSupportedHandshake(@event.Buffer, out var protocolVersion))
             return;
         
         // This is definitely a Minecraft connection
