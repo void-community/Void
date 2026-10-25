@@ -15,6 +15,10 @@ internal static class PluginRetentionInspector
 
     private static readonly TimeSpan AnalysisTimeout = TimeSpan.FromMinutes(2);
 
+    // Yama lets a Linux process trace only its own descendants unless the traced one allows another, as the runtime does for its createdump
+    private const int SetPtracer = 0x59616d61;
+    private const nint AnyPtracer = -1;
+
     /// <summary>Describes the chains of references that keep the plugin alive.</summary>
     /// <param name="pluginType">A weak handle to a type of the plugin.</param>
     /// <returns>The chains as code reads them, and the same chains as the runtime names their frames.</returns>
@@ -49,8 +53,8 @@ internal static class PluginRetentionInspector
         return 0;
     }
 
-    // The runtime writes the dump itself, with the createdump next to it. A single-file build has none there, so it runs the one it carries
-    // on itself, which the system lets a process do to the one that started it.
+    // The runtime writes the dump itself, with the createdump next to it, on every system. A single-file build has none there, so it runs the
+    // one it carries on itself.
     private static async ValueTask WriteDumpAsync(string dumpPath, CancellationToken cancellationToken)
     {
         if (File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), CreateDumpFileName)))
@@ -71,15 +75,37 @@ internal static class PluginRetentionInspector
         startInfo.ArgumentList.Add(dumpPath);
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
 
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("createdump didn't start");
+        // The pid of createdump is known only once it runs, when it may trace the proxy already, so any process may trace it meanwhile
+        if (OperatingSystem.IsLinux())
+            AllowPtracer(AnyPtracer);
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
+        try
+        {
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("createdump didn't start");
 
-        if (process.ExitCode is not 0 || !File.Exists(dumpPath))
-            throw new InvalidOperationException($"createdump failed with exit code {process.ExitCode}: {await errorTask}{await outputTask}");
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+
+            if (process.ExitCode is not 0 || !File.Exists(dumpPath))
+                throw new InvalidOperationException($"createdump failed with exit code {process.ExitCode}: {await errorTask}{await outputTask}");
+        }
+        finally
+        {
+            if (OperatingSystem.IsLinux())
+                AllowPtracer(0);
+        }
     }
+
+    // Fails where Yama isn't there to restrict tracing, which leaves nothing to allow
+    private static void AllowPtracer(nint ptracer)
+    {
+        SetProcessOption(SetPtracer, ptracer, 0, 0, 0);
+    }
+
+    // Linux only, which binds it on its first call
+    [DllImport("libc", EntryPoint = "prctl")]
+    private static extern int SetProcessOption(int option, nint argument2, nint argument3, nint argument4, nint argument5);
 
     private static async ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, CancellationToken cancellationToken)
     {
