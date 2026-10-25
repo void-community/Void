@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Void.Minecraft.Buffers.Exceptions;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Mojang;
 using Void.Minecraft.Network;
@@ -174,7 +175,17 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         if (channel.IsPausedRead)
             channel.Resume(Operation.Read);
 
-        var handshake = await channel.ReceivePacketAsync<HandshakePacket>(cancellationToken);
+        HandshakePacket handshake;
+
+        try
+        {
+            handshake = await channel.ReceivePacketAsync<HandshakePacket>(cancellationToken);
+        }
+        catch (EndOfBufferException)
+        {
+            // The player's handshake was read already, as the search for its protocol does, so the player is closed without why
+            return;
+        }
 
         if (!handshake.IsStatusQuery)
             await @event.Player.SetPhaseAsync(link: null, Side.Client, Phase.Login, await @event.Player.GetChannelAsync(cancellationToken), cancellationToken);
