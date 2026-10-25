@@ -139,17 +139,24 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
             var (assembly, container) = plugin;
 
             if (GetPlayerScope(container, playerStableHashCode, context) is not { } playerScope)
-                return;
+                continue;
 
-            foreach (var registration in playerScope.Container.GetServiceRegistrations())
+            try
             {
-                if (registration.ServiceType.IsOpenGeneric())
-                    continue;
+                foreach (var registration in playerScope.Container.GetServiceRegistrations())
+                {
+                    if (registration.ServiceType.IsOpenGeneric())
+                        continue;
 
-                if (registration.Factory?.Reuse is not CurrentScopeReuse)
-                    continue;
+                    if (registration.Factory?.Reuse is not CurrentScopeReuse)
+                        continue;
 
-                _ = GetEntryPoint(context.Player, assembly).GetRequiredService(registration.ServiceType);
+                    _ = GetEntryPoint(context.Player, assembly).GetRequiredService(registration.ServiceType);
+                }
+            }
+            catch (ContainerException) when (container.Root.Container.IsDisposed)
+            {
+                // The plugin unloaded meanwhile, and has no services for the player any more
             }
         }
     }
@@ -299,11 +306,19 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         if (container.Scopes.TryGetValue(playerStableHashCode, out var playerScope))
             return playerScope;
 
-        // A player that left keeps no scopes, which would keep it and the plugins of its services alive
-        if (context.IsDisposed)
+        // A player that left keeps no scopes, which would keep it and the plugins of its services alive, and a plugin that unloaded has none
+        if (context.IsDisposed || container.Root.Container.IsDisposed)
             return null;
 
-        playerScope = container.Root.Container.OpenScope(nameof(IPlayer));
+        try
+        {
+            playerScope = container.Root.Container.OpenScope(nameof(IPlayer));
+        }
+        catch (ContainerException) when (container.Root.Container.IsDisposed)
+        {
+            return null;
+        }
+
         playerScope.Use(context);
 
         if (!container.Scopes.TryAdd(playerStableHashCode, playerScope))
