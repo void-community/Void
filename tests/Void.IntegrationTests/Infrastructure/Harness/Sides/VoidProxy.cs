@@ -202,13 +202,13 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
             if (!line.Contains(username, StringComparison.Ordinal))
                 return false;
 
-            // Told on failure only, as a plugin that tells the connection may be reloading as the player joins
-            if (line.Contains($"connected to {serverName}", StringComparison.Ordinal) || line.Contains($"player to a {serverName} server", StringComparison.Ordinal))
+            if (line.Contains($"connected to {serverName}", StringComparison.Ordinal))
                 connected = true;
 
-            // The player answered a keep-alive of the server, which names the server: forwarded to it, or the first answer SlowJoin waits for
-            // after the join.
-            bool answerForwarded = line.Contains("Forwarding Keep Alive response ", StringComparison.Ordinal) && line.Contains($" to {serverName}", StringComparison.Ordinal);
+            // The proxy tells the player answered a keep-alive of the server once it loaded into the server, which no plugin a test reloads
+            // as the player joins tells. A keep-alive forwarded to the server tells it too once the player joined, as a player configuring
+            // forwards them as well.
+            bool answerForwarded = connected && line.Contains("Forwarding Keep Alive response ", StringComparison.Ordinal) && line.Contains($" to {serverName}", StringComparison.Ordinal);
 
             return answerForwarded || line.Contains($"answered a Keep Alive on {serverName}", StringComparison.Ordinal);
         }, waiterCancellationTokenSource.Token);
