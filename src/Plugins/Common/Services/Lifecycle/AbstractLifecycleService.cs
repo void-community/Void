@@ -50,8 +50,9 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
             if (!player.IsMinecraft || !IsSupportedVersion(player.ProtocolVersion))
                 return;
 
-            // A player that asks for the server's status can't be told why, and leaves as soon as it's answered
-            if (player.Phase is Phase.Status)
+            // A player that asks for the server's status can't be told why, and leaves as soon as it's answered, as one that hasn't said yet
+            // what it asks for may be about to
+            if (player.Phase is Phase.Status or Phase.Handshake)
                 return;
 
             try

@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Void.Minecraft.Buffers.Exceptions;
+using Void.Minecraft.Network.Streams.Packet;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Mojang;
 using Void.Minecraft.Network;
@@ -175,6 +176,11 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         if (channel.IsPausedRead)
             channel.Resume(Operation.Read);
 
+        // The player's handshake may be read already, as the search for its protocol does, or its channel may not read one, and then the
+        // player is closed without why
+        if (!channel.TryGet<IMinecraftPacketMessageStream>(out var stream) || !stream.Registries.PacketIdSystem.Contains<HandshakePacket>())
+            return;
+
         HandshakePacket handshake;
 
         try
@@ -183,7 +189,6 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         }
         catch (EndOfBufferException)
         {
-            // The player's handshake was read already, as the search for its protocol does, so the player is closed without why
             return;
         }
 
