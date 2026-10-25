@@ -30,7 +30,8 @@ public abstract class AbstractChannelService : IPluginCommonService
 
     protected abstract bool IsSupportedHandshake(Memory<byte> memory, [MaybeNullWhen(false)] out ProtocolVersion protocolVersion);
 
-    private async ValueTask<INetworkChannel> ChannelBuilderAsync(IPlayer player, Side side, NetworkStream stream, CancellationToken cancellationToken)
+    // Static, as a player keeps the builder that read its handshake, which would otherwise keep the protocol plugin whose service built it alive
+    private static async ValueTask<INetworkChannel> ChannelBuilderAsync(IPlayer player, Side side, NetworkStream stream, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
