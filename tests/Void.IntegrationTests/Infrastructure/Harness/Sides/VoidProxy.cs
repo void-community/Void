@@ -113,7 +113,7 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
 
     public void AssertNoLogsAtOrAboveSince(DateTime since, LogLevel minimumLogLevel)
     {
-        var unexpectedLogs = LogWriter.GetLinesSince(since).Where(line => GetLogLevel(line) is { } logLevel && logLevel >= minimumLogLevel).ToArray();
+        var unexpectedLogs = SelectEntriesAtOrAbove(LogWriter.GetLinesSince(since), minimumLogLevel);
 
         if (unexpectedLogs.Length > 0)
             Assert.Fail($"Void emitted {minimumLogLevel} or higher logs:\n{string.Join('\n', unexpectedLogs)}");
@@ -134,12 +134,28 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
         lock (_checkedWindows)
             checkedWindows = [.. _checkedWindows];
 
-        var unexpectedLogs = LogWriter.GetLinesSince(since, timestamp => Array.Exists(checkedWindows, window => timestamp >= window.From && timestamp <= window.Until))
-            .Where(line => GetLogLevel(line) is >= LogLevel.Warning)
-            .ToArray();
+        var unexpectedLogs = SelectEntriesAtOrAbove(LogWriter.GetLinesSince(since, timestamp => Array.Exists(checkedWindows, window => timestamp >= window.From && timestamp <= window.Until)), LogLevel.Warning);
 
         if (unexpectedLogs.Length > 0)
             Assert.Fail($"Void emitted Warning or higher logs outside of tests:\n{string.Join('\n', unexpectedLogs)}");
+    }
+
+    // An entry's exception follows it on lines of no level of their own, which tell why it was logged
+    private static string[] SelectEntriesAtOrAbove(IEnumerable<string> lines, LogLevel minimumLogLevel)
+    {
+        var selected = new List<string>();
+        var selecting = false;
+
+        foreach (var line in lines)
+        {
+            if (GetLogLevel(line) is { } logLevel)
+                selecting = logLevel >= minimumLogLevel;
+
+            if (selecting)
+                selected.Add(line);
+        }
+
+        return [.. selected];
     }
 
     private static LogLevel? GetLogLevel(string line)
