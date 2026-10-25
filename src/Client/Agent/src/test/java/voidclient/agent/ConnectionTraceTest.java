@@ -27,4 +27,13 @@ public final class ConnectionTraceTest {
         Assert.assertTrue(line, line.startsWith("Void client agent connection " + Integer.toHexString(System.identityHashCode(connection)) + " at "));
         Assert.assertTrue(line, line.endsWith(" on " + Thread.currentThread().getName() + " (channel open: false): channel inactive"));
     }
+
+    @Test
+    public void tellsWhereACaughtExceptionWasThrown() {
+        String stackTrace = ConnectionTrace.stackTrace(new IllegalStateException("Can't serialize unregistered packet"));
+
+        Assert.assertTrue(stackTrace, stackTrace.startsWith("java.lang.IllegalStateException: Can't serialize unregistered packet"));
+        Assert.assertTrue(stackTrace, stackTrace.contains("at voidclient.agent.ConnectionTraceTest.tellsWhereACaughtExceptionWasThrown"));
+        Assert.assertEquals("not thrown", ConnectionTrace.stackTrace("not thrown"));
+    }
 }
