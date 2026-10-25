@@ -212,7 +212,8 @@ public class HandshakeService(IPlayerContext context) : IEventListener
         }
     }
 
-    [Subscribe(PostOrder.First)]
+    // After the protocol sets up the registries of the channel, which listeners of the same order would run after once the protocol reloads
+    [Subscribe(PostOrder.First + 1)]
     public void OnPhaseChanged(PhaseChangedEvent @event)
     {
         switch (@event)
