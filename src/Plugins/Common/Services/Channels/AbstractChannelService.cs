@@ -17,8 +17,11 @@ namespace Void.Proxy.Plugins.Common.Services.Channels;
 
 public abstract class AbstractChannelService : IPluginCommonService
 {
+    private static readonly TimeSpan AcceptingPollInterval = TimeSpan.FromMilliseconds(10);
+
     // The plugin's services register their listeners one at a time as it loads, so a player it took before it loaded would meet only some
     private volatile bool _accepting;
+    private int _searches;
 
     [Subscribe]
     public void OnPluginLoaded(PluginLoadedEvent @event)
@@ -28,24 +31,43 @@ public abstract class AbstractChannelService : IPluginCommonService
     }
 
     // A plugin that unloads takes no new players, which are forwarded as players of a version no plugin supports, while those it took
-    // finish with it. First, before its lifecycle waits for them.
+    // finish with it. First, before its lifecycle waits for them, which it can only do for players it has already taken, so it finishes
+    // taking those it was taking meanwhile.
     [Subscribe(PostOrder.First)]
-    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
     {
-        if (@event.Plugin.GetType().Assembly == GetType().Assembly)
-            _accepting = false;
+        if (@event.Plugin.GetType().Assembly != GetType().Assembly)
+            return;
+
+        _accepting = false;
+
+        // A full fence, so that a search that still found it accepting is counted by then
+        Interlocked.MemoryBarrier();
+
+        while (Volatile.Read(ref _searches) > 0)
+            await Task.Delay(AcceptingPollInterval, cancellationToken);
     }
 
     [Subscribe]
     public async ValueTask OnSearchChannelBuilder(SearchChannelBuilderEvent @event, CancellationToken cancellationToken)
     {
-        if (!_accepting || !IsSupportedHandshake(@event.Buffer, out var protocolVersion))
-            return;
-        
-        // This is definitely a Minecraft connection
-        var player = await @event.Player.UpgradeToMinecraftAsync(protocolVersion, cancellationToken);
+        // Counted before it reads whether it accepts, so the plugin unloading waits for a player it found itself accepting
+        Interlocked.Increment(ref _searches);
 
-        @event.Result = ChannelBuilderAsync;
+        try
+        {
+            if (!_accepting || !IsSupportedHandshake(@event.Buffer, out var protocolVersion))
+                return;
+
+            // This is definitely a Minecraft connection
+            var player = await @event.Player.UpgradeToMinecraftAsync(protocolVersion, cancellationToken);
+
+            @event.Result = ChannelBuilderAsync;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _searches);
+        }
     }
 
     protected abstract bool IsSupportedHandshake(Memory<byte> memory, [MaybeNullWhen(false)] out ProtocolVersion protocolVersion);
