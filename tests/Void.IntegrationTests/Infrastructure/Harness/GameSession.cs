@@ -18,6 +18,9 @@ namespace Void.IntegrationTests.Infrastructure.Harness;
 public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game game, string testName, IReadOnlyList<IIntegrationSide> logSides) : IAsyncDisposable
 {
     private readonly string _workingDirectory = PortableMinecraftClient.Game.StepsDirectory(testName, game.ProtocolVersion, game.Setup, game.Username);
+
+    // A step can run alongside another, as a kick the game's own command causes does with the command's, while the game takes one screenshot at a time
+    private readonly SemaphoreSlim _stepLock = new(1, 1);
     private bool _ended;
     private int _step;
 
@@ -142,8 +145,17 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
 
     private async Task MakeStepAsync(string action, CancellationToken cancellationToken = default)
     {
-        Directory.CreateDirectory(_workingDirectory);
-        await File.WriteAllBytesAsync(Path.Combine(_workingDirectory, $"step-{++_step}-{action}.png"), await game.TakeScreenshotAsync(cancellationToken), cancellationToken);
+        await _stepLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            Directory.CreateDirectory(_workingDirectory);
+            await File.WriteAllBytesAsync(Path.Combine(_workingDirectory, $"step-{++_step}-{action}.png"), await game.TakeScreenshotAsync(cancellationToken), cancellationToken);
+        }
+        finally
+        {
+            _stepLock.Release();
+        }
     }
 
     private async Task TryMakeStepAsync(string action, CancellationToken cancellationToken = default)
