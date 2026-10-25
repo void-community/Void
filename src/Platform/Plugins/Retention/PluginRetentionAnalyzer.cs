@@ -10,12 +10,13 @@ internal static class PluginRetentionAnalyzer
 {
     private const int MaximumChains = 8;
     private const int MaximumLinks = 16;
+    private const string Indentation = "    ";
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromMinutes(1);
 
     /// <param name="dumpPath">The dump of the proxy.</param>
     /// <param name="typeHandleAddress">The address of the weak handle to a type of the plugin, in the dumped proxy.</param>
     /// <param name="dacPath">The DAC of the dumped runtime, or <see langword="null" /> to find it next to the runtime the dump names.</param>
-    /// <param name="output">Where the chains are written, one per line.</param>
+    /// <param name="output">Where the chains are written, each a line of its root followed by a line per link, apart by a blank line.</param>
     public static void Analyze(string dumpPath, ulong typeHandleAddress, string? dacPath, TextWriter output)
     {
         using var dump = DataTarget.LoadDump(dumpPath);
@@ -57,10 +58,24 @@ internal static class PluginRetentionAnalyzer
             var (origin, steps) = Describe(root, links, staticFields);
 
             // A chain is reached from several roots at once, such as a static field that a thread uses too, which tell nothing more.
-            if (!chains.Add(steps))
+            if (!chains.Add(string.Join('\n', steps.Select(step => step.Text))))
                 continue;
 
-            output.WriteLine($"{origin}: {steps}");
+            if (chains.Count > 1)
+                output.WriteLine();
+
+            output.WriteLine($"{origin}:");
+
+            // Each link goes a step to the right of the one that references it, unless it's of the same type, as the nodes of a list are.
+            var depth = 1;
+
+            for (var index = 0; index < steps.Count; index++)
+            {
+                if (index > 0 && steps[index].TypeName != steps[index - 1].TypeName)
+                    depth++;
+
+                output.WriteLine($"{string.Concat(Enumerable.Repeat(Indentation, depth))}{steps[index].Text}");
+            }
 
             if (chains.Count is MaximumChains)
                 break;
@@ -70,9 +85,9 @@ internal static class PluginRetentionAnalyzer
             output.WriteLine("Nothing outside of the plugin references it");
     }
 
-    private static (string Origin, string Steps) Describe(ClrRoot root, List<ClrObject> links, Lazy<Dictionary<ulong, string>> staticFields)
+    private static (string Origin, List<(string TypeName, string Text)> Steps) Describe(ClrRoot root, List<ClrObject> links, Lazy<Dictionary<ulong, string>> staticFields)
     {
-        var steps = new List<string>(links.Count);
+        var steps = new List<(string TypeName, string Text)>(links.Count);
 
         for (var index = 0; index < links.Count; index++)
         {
@@ -82,18 +97,18 @@ internal static class PluginRetentionAnalyzer
             // The array the runtime keeps static fields in references their values, so the step names the static field instead.
             if (index is 0 && links.Count > 1 && staticFields.Value.TryGetValue(links[1].Address, out var staticField))
             {
-                steps.Add($"static {staticField}");
+                steps.Add((typeName, $"static {staticField}"));
                 continue;
             }
 
             if (index + 1 < links.Count && FindField(link, links[index + 1].Address) is { } field)
-                steps.Add($"{typeName}.{field}");
+                steps.Add((typeName, $"{typeName}.{field}"));
             else
-                steps.Add(typeName);
+                steps.Add((typeName, typeName));
         }
 
         if (steps.Count > MaximumLinks)
-            steps = [.. steps.Take(MaximumLinks / 2), "…", .. steps.TakeLast(MaximumLinks / 2)];
+            steps = [.. steps.Take(MaximumLinks / 2), ("…", "…"), .. steps.TakeLast(MaximumLinks / 2)];
 
         var origin = root switch
         {
@@ -101,7 +116,7 @@ internal static class PluginRetentionAnalyzer
             _ => root.RootKind.ToString()
         };
 
-        return (origin, string.Join(" → ", steps));
+        return (origin, steps);
     }
 
     // The loader allocator keeps the arrays that hold the static fields of the plugin's types, which roots of the heap reach too.

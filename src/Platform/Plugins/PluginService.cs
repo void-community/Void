@@ -392,7 +392,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         try
         {
-            return $"It is kept alive by:\n{await PluginRetentionInspector.DescribeAsync(pluginType, cancellationToken)}";
+            return $"It is kept alive by:\n\n{await PluginRetentionInspector.DescribeAsync(pluginType, cancellationToken)}";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
