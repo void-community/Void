@@ -114,9 +114,13 @@ public interface IPluginService
 
     /// <summary>
     ///     Fires <c>PluginUnloadingEvent</c> and <c>PluginUnloadedEvent</c> for every plugin in the named
-    ///     container, cancels the container's cancellation token, initiates assembly unload, and then forces
-    ///     garbage collection until the weak reference is collected or a 10-second timeout expires.
+    ///     container, cancels the container's cancellation token, and unloads its assemblies, waiting up to 10 seconds
+    ///     until nothing references the container's types or objects any more.
     /// </summary>
+    /// <remarks>
+    ///     A container that something still references after that refuses to unload, and the exception tells what references
+    ///     it: each chain of references, by type and field, from a static field, a thread or a handle to the container.
+    /// </remarks>
     /// <param name="name">The name of the container to unload, as returned by <see cref="Containers" />.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <exception cref="Exception">

@@ -1,6 +1,8 @@
 ﻿using System.CommandLine;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Nito.AsyncEx;
 using Nito.Disposables.Internals;
 using Void.Minecraft.Commands.Brigadier;
@@ -19,6 +21,7 @@ using Void.Proxy.Api.Plugins.Dependencies;
 using Void.Proxy.Extensions;
 using Void.Proxy.Plugins.Containers;
 using Void.Proxy.Plugins.Context;
+using Void.Proxy.Plugins.Retention;
 
 namespace Void.Proxy.Plugins;
 
@@ -284,7 +287,18 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         await _containers.Snapshot
             .Select(reference => reference.Context.Name)
             .WhereNotNull()
-            .Select(async name => await UnloadContainerAsync(name, cancellationToken))
+            .Select(async name =>
+            {
+                // A container that refuses to unload is told of, and doesn't keep the others from unloading.
+                try
+                {
+                    await UnloadContainerAsync(name, cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    logger.LogError(exception, "Plugin container {ContainerName} couldn't be unloaded", name);
+                }
+            })
             .WhenAll();
     }
 
@@ -304,40 +318,84 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         logger.LogTrace("Unloading {ContextName} {Count} plugin(s)", name, count);
 
-        using (var _ = await _lock.LockAsync(cancellationToken))
+        // The types of the plugin live as long as anything references the plugin, which its instances alone don't tell.
+        var pluginType = TrackPluginType(container);
+
+        try
         {
-            foreach (var plugin in container.Plugins)
+            await ThrowUnloadEventsAsync(container, cancellationToken);
+
+            events.UnregisterListeners(container.Plugins);
+
+            await container.CancellationTokenSource.CancelAsync();
+            container.Context.Unload();
+
+            var collectionTime = Stopwatch.GetTimestamp();
+
+            do
             {
-                logger.LogTrace("Unloading {PluginName} plugin", plugin.Name);
-                await events.ThrowAsync(new PluginUnloadingEvent(plugin), cancellationToken);
-                await events.ThrowAsync(new PluginUnloadedEvent(plugin), cancellationToken);
-            }
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+
+                if (IsCollected(container, pluginType))
+                    break;
+
+                await Task.Delay(_gcRate, cancellationToken);
+            } while (Stopwatch.GetElapsedTime(collectionTime) < _unloadTimeout);
+
+            if (!IsCollected(container, pluginType))
+                throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(pluginType, cancellationToken)}");
         }
-
-        events.UnregisterListeners(container.Plugins);
-
-        await container.CancellationTokenSource.CancelAsync();
-        container.Context.Unload();
-
-        var collectionTime = Stopwatch.GetTimestamp();
-
-        do
+        finally
         {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-
-            if (!container.IsAlive)
-                break;
-
-            await Task.Delay(_gcRate, cancellationToken);
-        } while (Stopwatch.GetElapsedTime(collectionTime) < _unloadTimeout);
-
-        if (container.IsAlive)
-            throw new Exception($"Plugins context {name} refuses to unload");
+            if (pluginType.IsAllocated)
+                pluginType.Free();
+        }
 
         logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
 
         _containers.RemoveAll(reference => !reference.IsAlive);
+    }
+
+    // Its own state machine, so the last plugin it throws the events for isn't kept by the one that waits for the plugin to be collected.
+    private async ValueTask ThrowUnloadEventsAsync(WeakPluginContainer container, CancellationToken cancellationToken)
+    {
+        using var _ = await _lock.LockAsync(cancellationToken);
+
+        foreach (var plugin in container.Plugins)
+        {
+            logger.LogTrace("Unloading {PluginName} plugin", plugin.Name);
+            await events.ThrowAsync(new PluginUnloadingEvent(plugin), cancellationToken);
+            await events.ThrowAsync(new PluginUnloadedEvent(plugin), cancellationToken);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static GCHandle TrackPluginType(WeakPluginContainer container)
+    {
+        return container.Plugins.FirstOrDefault() is { } plugin ? GCHandle.Alloc(plugin.GetType(), GCHandleType.Weak) : default;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool IsCollected(WeakPluginContainer container, GCHandle pluginType)
+    {
+        return pluginType.IsAllocated ? pluginType.Target is null : !container.IsAlive;
+    }
+
+    private async ValueTask<string> DescribeRetentionAsync(GCHandle pluginType, CancellationToken cancellationToken)
+    {
+        if (!pluginType.IsAllocated)
+            return "It has no plugins to tell what keeps them alive";
+
+        try
+        {
+            return $"It is kept alive by:\n{await PluginRetentionInspector.DescribeAsync(pluginType, cancellationToken)}";
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Couldn't tell what keeps the plugin alive");
+            return $"What keeps it alive couldn't be told: {exception.Message}";
+        }
     }
 
     public IEnumerable<Type> LoadContainer(string name, Stream stream, bool ignoreEmpty = false)

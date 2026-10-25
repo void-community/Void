@@ -34,6 +34,7 @@ using Void.Proxy.Plugins.Dependencies.Embedded;
 using Void.Proxy.Plugins.Dependencies.Extensions;
 using Void.Proxy.Plugins.Dependencies.File;
 using Void.Proxy.Plugins.Dependencies.Nuget;
+using Void.Proxy.Plugins.Retention;
 using Void.Proxy.Servers;
 using Logger = Serilog.Core.Logger;
 
@@ -86,6 +87,10 @@ public static class VoidEntryPoint
 
     private static async Task<int> Main(string[] args)
     {
+        // The proxy starts its own executable to analyze a dump of itself, as it does for a plugin that refuses to unload.
+        if (args is [PluginRetentionInspector.AnalyzeArgument, ..])
+            return PluginRetentionInspector.Analyze(args);
+
         var options = new RunOptions { Arguments = args };
         var result = await RunAsync(options);
 
