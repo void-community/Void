@@ -3,6 +3,7 @@ using Void.Minecraft.Commands.Brigadier;
 using Void.Minecraft.Commands.Brigadier.Context;
 using Void.Minecraft.Commands.Brigadier.Exceptions;
 using Void.Minecraft.Commands.Brigadier.Suggestion;
+using Void.Minecraft.Commands.Brigadier.Tree;
 using Void.Minecraft.Commands.Brigadier.Tree.Nodes;
 using Void.Minecraft.Events.Chat;
 using Void.Minecraft.Players.Extensions;
@@ -103,7 +104,23 @@ public class CommandService(ILogger<ICommandService> logger, IEventService event
     public void OnPluginUnloading(PluginUnloadingEvent @event)
     {
         lock (this)
+        {
             ClearByAssembly(@event.Plugin.GetType().Assembly);
+            RemoveUnusableNodes(_dispatcher.Root);
+        }
+    }
+
+    // A command left with nothing to run once its plugin's handlers are gone is removed, so the plugin registers it anew as it loads again,
+    // with its suggestions, rather than merging into the remains of the old one.
+    private static bool RemoveUnusableNodes(CommandNode node)
+    {
+        foreach (var child in node.Children.ToArray())
+        {
+            if (!RemoveUnusableNodes(child))
+                node.RemoveChild(child.Name);
+        }
+
+        return node.Executor is not null || node.RedirectTarget is not null || node.Children.Any();
     }
 
     private void ClearByAssembly(Assembly assembly)

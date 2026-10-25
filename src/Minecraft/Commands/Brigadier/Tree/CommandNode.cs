@@ -122,12 +122,14 @@ public abstract class CommandNode(CommandExecutor? executor = null, CommandRequi
         return _children[name];
     }
 
-    /// <summary>Removes a child from the general child map.</summary>
+    /// <summary>Removes a child, which parsing then no longer matches.</summary>
     /// <param name="name">The child name.</param>
-    /// <returns>Whether the general child map contained the name.</returns>
-    /// <remarks>The specialized literal and argument lookup maps are not updated.</remarks>
+    /// <returns>Whether the node had a child of that name.</returns>
     public bool RemoveChild(string name)
     {
+        _literals.Remove(name);
+        _arguments.Remove(name);
+
         return _children.Remove(name);
     }
 
