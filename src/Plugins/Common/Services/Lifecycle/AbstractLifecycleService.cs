@@ -50,6 +50,10 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
             if (!player.IsMinecraft || !IsSupportedVersion(player.ProtocolVersion))
                 return;
 
+            // A player that asks for the server's status can't be told why, and leaves as soon as it's answered
+            if (player.Phase is Phase.Status)
+                return;
+
             try
             {
                 await player.KickAsync($"Void unloaded support for your Minecraft version ({player.ProtocolVersion})", cancellationToken);
