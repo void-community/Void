@@ -14,16 +14,18 @@ public final class GameHooks {
     private static volatile MethodHandle clientFrame;
     private static volatile MethodHandle connectionListener;
     private static volatile MethodHandle connectionRejection;
+    private static volatile MethodHandle connectionTrace;
     private static volatile MethodHandle fatalError;
 
     private GameHooks() {
     }
 
-    public static void install(MethodHandle player, MethodHandle frame, MethodHandle listener, MethodHandle rejection, MethodHandle fatal) {
+    public static void install(MethodHandle player, MethodHandle frame, MethodHandle listener, MethodHandle rejection, MethodHandle trace, MethodHandle fatal) {
         playerRegistration = player;
         clientFrame = frame;
         connectionListener = listener;
         connectionRejection = rejection;
+        connectionTrace = trace;
         fatalError = fatal;
     }
 
@@ -87,6 +89,19 @@ public final class GameHooks {
 
         try {
             target.invokeExact(listener, reason);
+        } catch (Throwable exception) {
+            // The agent only observes the game, so its failures must never break the game code that called it.
+        }
+    }
+
+    public static void connectionEvent(String event, Object connection, Object detail) {
+        MethodHandle target = connectionTrace;
+
+        if (target == null)
+            return;
+
+        try {
+            target.invokeExact(event, connection, detail);
         } catch (Throwable exception) {
             // The agent only observes the game, so its failures must never break the game code that called it.
         }

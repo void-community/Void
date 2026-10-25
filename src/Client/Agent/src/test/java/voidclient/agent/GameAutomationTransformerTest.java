@@ -119,6 +119,69 @@ public final class GameAutomationTransformerTest {
         Assert.assertSame(connection, observed.getField("connection").get(listener));
     }
 
+    @Test
+    public void tracesHowAConnectionEnds() throws Exception {
+        String name = TracedConnection.class.getName().replace('.', '/');
+        ClassNode type = new ClassNode();
+        try (InputStream input = TracedConnection.class.getResourceAsStream("/" + name + ".class")) {
+            new ClassReader(input).accept(type, 0);
+        }
+        java.util.Set<String> reasons = GameAutomationTransformer.reasonTypes(java.util.Collections.singletonMap("synthetic/Listener",
+            java.util.Collections.singletonList("onDisconnect(L" + Reason.class.getName().replace('.', '/') + ";)V")));
+        Assert.assertTrue(GameAutomationTransformer.instrumentConnection(type, reasons));
+        Assert.assertFalse(GameAutomationTransformer.instrumentConnection(type, reasons));
+        for (MethodNode method : type.methods)
+            for (AbstractInsnNode instruction : method.instructions)
+                if (instruction instanceof MethodInsnNode && ((MethodInsnNode) instruction).owner.equals(VoidClientAgent.GameHooksName))
+                    ((MethodInsnNode) instruction).owner = Probe.class.getName().replace('.', '/');
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        type.accept(writer);
+        Probe.events.clear();
+        Class<?> traced = new BytecodeLoader().define(writer.toByteArray());
+        Object connection = traced.getConstructor().newInstance();
+        Reason reason = new Reason();
+        IllegalStateException failure = new IllegalStateException("closed");
+
+        traced.getMethod("channelRead0", io.netty.channel.ChannelHandlerContext.class, String.class).invoke(connection, null, "packet");
+        traced.getMethod("channelInactive", io.netty.channel.ChannelHandlerContext.class).invoke(connection, (Object) null);
+        traced.getMethod("exceptionCaught", io.netty.channel.ChannelHandlerContext.class, Throwable.class).invoke(connection, null, failure);
+        traced.getMethod("disconnect", Reason.class).invoke(connection, reason);
+        traced.getMethod("listen", Object.class).invoke(connection, reason);
+
+        Assert.assertEquals(java.util.Arrays.asList(
+            java.util.Arrays.asList(ConnectionTrace.Read, connection, "packet"),
+            java.util.Arrays.asList(ConnectionTrace.Inactive, connection, null),
+            java.util.Arrays.asList(ConnectionTrace.Exception, connection, failure),
+            java.util.Arrays.asList(ConnectionTrace.Disconnect, connection, reason)), Probe.events);
+    }
+
+    @Test
+    public void leavesNetworkHandlersThatReadNoPacketsAlone() throws Exception {
+        String name = FrameHost.class.getName().replace('.', '/');
+        ClassNode type = new ClassNode();
+        try (InputStream input = FrameHost.class.getResourceAsStream("/" + name + ".class")) {
+            new ClassReader(input).accept(type, 0);
+        }
+        Assert.assertFalse(GameAutomationTransformer.instrumentConnection(type, java.util.Collections.singleton("java/lang/Object")));
+    }
+
+    public static class Reason {
+    }
+
+    // Netty's own handler is replaced by a stub on the test class path, and the hooks need only the shapes of netty's methods.
+    public static class TracedConnection {
+        public void channelRead0(io.netty.channel.ChannelHandlerContext context, String packet) {
+        }
+        public void channelInactive(io.netty.channel.ChannelHandlerContext context) {
+        }
+        public void exceptionCaught(io.netty.channel.ChannelHandlerContext context, Throwable cause) {
+        }
+        public void disconnect(Reason reason) {
+        }
+        public void listen(Object listener) {
+        }
+    }
+
     public static class FrameHost {
         public FrameHost() {
             getter();
@@ -149,6 +212,10 @@ public final class GameAutomationTransformerTest {
                     catch (Exception exception) { throw new AssertionError(exception); }
                 }
             });
+        }
+        public static final java.util.List<java.util.List<Object>> events = new java.util.ArrayList<java.util.List<Object>>();
+        public static void connectionEvent(String event, Object connection, Object detail) {
+            events.add(java.util.Arrays.asList(event, connection, detail));
         }
         public static void applyClient(Object client) {
             Assert.assertFalse("Automation must not run inside rendering", rendering);

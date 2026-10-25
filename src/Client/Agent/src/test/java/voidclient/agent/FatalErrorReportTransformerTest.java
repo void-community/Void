@@ -32,8 +32,8 @@ public final class FatalErrorReportTransformerTest {
 
         try (URLClassLoader bootstrap = new URLClassLoader(new URL[] { hooksJar.toUri().toURL() }, null)) {
             bootstrap.loadClass(VoidClientAgent.GameHooksName.replace('/', '.'))
-                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
-                .invoke(null, null, null, null, null, record);
+                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
+                .invoke(null, null, null, null, null, null, record);
             Class<?> reporting = new BytecodeLoader(bootstrap).define(transformed);
             IllegalStateException error = new IllegalStateException("Loading errors encountered");
             Path gameDirectory = Paths.get("/root/.minecraft");

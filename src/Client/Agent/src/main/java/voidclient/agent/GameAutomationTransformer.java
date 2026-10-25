@@ -7,10 +7,12 @@ import java.security.ProtectionDomain;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -36,7 +38,8 @@ final class GameAutomationTransformer implements ClassFileTransformer {
             client = index.plan.frame.owner.equals(className);
 
             List<String> rejections = index.plan.rejectionCallbacks.get(className);
-            if (!client && rejections == null)
+            boolean network = index.plan.networkTypes.contains(className);
+            if (!client && rejections == null && !network)
                 return null;
 
             ClassNode type = new ClassNode();
@@ -49,6 +52,9 @@ final class GameAutomationTransformer implements ClassFileTransformer {
 
             if (rejections != null)
                 changed |= instrumentRejections(type, rejections, index.plan.networkTypes);
+
+            if (network)
+                changed |= instrumentConnection(type, reasonTypes(index.plan.rejectionCallbacks));
 
             if (!changed)
                 return null;
@@ -139,6 +145,80 @@ final class GameAutomationTransformer implements ClassFileTransformer {
             }
         }
         return changed;
+    }
+
+    /**
+     * Reports what a Minecraft connection goes through as it ends: each packet it reads, its channel going inactive, the exceptions it
+     * catches and each reason it's disconnected with. The game takes the reason of a disconnect only while the channel is open, so these
+     * tell whether the reason a server sent reached the game before the channel closed. A connection is the network handler that reads packets in {@code channelRead0},
+     * which netty names, and its disconnect methods take the reason the disconnect callbacks of its listeners do.
+     */
+    static boolean instrumentConnection(ClassNode type, Set<String> reasonTypes) {
+        boolean reads = false;
+
+        for (MethodNode method : type.methods)
+            reads |= "channelRead0".equals(method.name) && isHandlerMethod(method, 2);
+
+        if (!reads)
+            return false;
+
+        boolean changed = false;
+
+        for (MethodNode method : type.methods) {
+            if ((method.access & (Opcodes.ACC_STATIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_BRIDGE)) != 0 || alreadyInstrumented(method, "connectionEvent"))
+                continue;
+
+            Type[] arguments = Type.getArgumentTypes(method.desc);
+            String event;
+            int detail;
+
+            if ("channelRead0".equals(method.name) && isHandlerMethod(method, 2)) {
+                event = ConnectionTrace.Read;
+                detail = 2;
+            } else if ("channelInactive".equals(method.name) && isHandlerMethod(method, 1)) {
+                event = ConnectionTrace.Inactive;
+                detail = 0;
+            } else if ("exceptionCaught".equals(method.name) && isHandlerMethod(method, 2) && "java/lang/Throwable".equals(arguments[1].getInternalName())) {
+                event = ConnectionTrace.Exception;
+                detail = 2;
+            } else if (arguments.length == 1 && arguments[0].getSort() == Type.OBJECT && reasonTypes.contains(arguments[0].getInternalName())
+                && Type.getReturnType(method.desc).getSort() == Type.VOID) {
+                event = ConnectionTrace.Disconnect;
+                detail = 1;
+            } else
+                continue;
+
+            InsnList call = new InsnList();
+            call.add(new LdcInsnNode(event));
+            call.add(new VarInsnNode(Opcodes.ALOAD, 0));
+            call.add(detail == 0 ? new InsnNode(Opcodes.ACONST_NULL) : new VarInsnNode(Opcodes.ALOAD, detail));
+            call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HooksName, "connectionEvent", "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)V", false));
+            method.instructions.insert(call);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /** Reads the types of the reasons the disconnect callbacks of network listeners take. */
+    static Set<String> reasonTypes(java.util.Map<String, List<String>> rejectionCallbacks) {
+        Set<String> types = new java.util.HashSet<String>();
+
+        for (List<String> callbacks : rejectionCallbacks.values())
+            for (String callback : callbacks)
+                types.add(Type.getArgumentTypes(callback.substring(callback.indexOf('(')))[0].getInternalName());
+
+        return types;
+    }
+
+    // Netty's handler methods take the context first, which mod loaders may not relocate but some builds shade.
+    private static boolean isHandlerMethod(MethodNode method, int argumentCount) {
+        Type[] arguments = Type.getArgumentTypes(method.desc);
+
+        return arguments.length == argumentCount && Type.getReturnType(method.desc).getSort() == Type.VOID
+            && (method.access & (Opcodes.ACC_STATIC | Opcodes.ACC_BRIDGE)) == 0
+            && arguments[0].getSort() == Type.OBJECT && arguments[0].getInternalName().endsWith("io/netty/channel/ChannelHandlerContext")
+            && (argumentCount < 2 || arguments[1].getSort() == Type.OBJECT);
     }
 
     private static InsnList controllerCall(String controllerMethod) {
