@@ -9,7 +9,6 @@ namespace Void.Proxy.Plugins.Retention;
 internal static class PluginRetentionAnalyzer
 {
     private const int MaximumChains = 8;
-    private const string Indentation = "  ";
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromMinutes(1);
 
     /// <param name="dumpPath">The dump of the proxy.</param>
@@ -34,7 +33,7 @@ internal static class PluginRetentionAnalyzer
         var pluginType = runtime.GetTypeByMethodTable(typeObject.ReadField<ulong>("m_handle")) ?? throw new InvalidOperationException("The dump holds no type of the plugin");
         var loaderAllocatorHandle = pluginType.LoaderAllocatorHandle;
         var loaderAllocator = target.DataReader.ReadPointer(loaderAllocatorHandle);
-        var staticFields = new Lazy<Dictionary<ulong, (string Name, string? Assembly)>>(() => FindStaticFields(runtime));
+        var staticFields = new Lazy<Dictionary<ulong, PluginRetentionChain.StaticField>>(() => FindStaticFields(runtime));
         var ownStatics = FindOwnStatics(heap.GetObject(loaderAllocator));
 
         using var timeout = new CancellationTokenSource(SearchTimeout);
@@ -54,28 +53,17 @@ internal static class PluginRetentionAnalyzer
             if (ownStatics.Contains(links[0].Address) || links.SkipLast(1).All(link => IsOfPlugin(link, loaderAllocatorHandle, runtime)))
                 continue;
 
-            var (origin, steps) = Describe(root, links, staticFields);
+            var (origin, chain) = PluginRetentionChain.Describe(root, links, staticFields.Value, runtime);
 
             // A chain is reached from several roots at once, such as a static field that a thread uses too, which tell nothing more.
-            if (!chains.Add(string.Join('\n', steps.Select(step => step.Text))))
+            if (!chains.Add(chain))
                 continue;
 
             if (chains.Count > 1)
                 output.WriteLine();
 
             output.WriteLine($"{origin}:");
-
-            // Links go a step to the right where the chain passes into another assembly, so each column reads as the part of the proxy,
-            // a library or the runtime that holds the next.
-            var depth = 1;
-
-            for (var index = 0; index < steps.Count; index++)
-            {
-                if (index > 0 && steps[index].Assembly != steps[index - 1].Assembly)
-                    depth++;
-
-                output.WriteLine($"{string.Concat(Enumerable.Repeat(Indentation, depth))}{steps[index].Text}");
-            }
+            output.WriteLine(chain);
 
             if (chains.Count is MaximumChains)
                 break;
@@ -83,38 +71,6 @@ internal static class PluginRetentionAnalyzer
 
         if (chains.Count is 0)
             output.WriteLine("Nothing outside of the plugin references it");
-    }
-
-    private static (string Origin, List<(string? Assembly, string Text)> Steps) Describe(ClrRoot root, List<ClrObject> links, Lazy<Dictionary<ulong, (string Name, string? Assembly)>> staticFields)
-    {
-        var steps = new List<(string? Assembly, string Text)>(links.Count);
-
-        for (var index = 0; index < links.Count; index++)
-        {
-            var link = links[index];
-            var typeName = link.Type?.Name ?? "?";
-            var assembly = link.Type?.Module?.Name;
-
-            // The array the runtime keeps static fields in references their values, so the step names the static field instead.
-            if (index is 0 && links.Count > 1 && staticFields.Value.TryGetValue(links[1].Address, out var staticField))
-            {
-                steps.Add((staticField.Assembly, $"static {staticField.Name}"));
-                continue;
-            }
-
-            if (index + 1 < links.Count && FindField(link, links[index + 1].Address) is { } field)
-                steps.Add((assembly, $"{typeName}.{field}"));
-            else
-                steps.Add((assembly, typeName));
-        }
-
-        var origin = root switch
-        {
-            ClrStackRoot { StackFrame: { } frame } => $"stack of {frame.Method?.Signature ?? frame.FrameName ?? "a thread"}",
-            _ => root.RootKind.ToString()
-        };
-
-        return (origin, steps);
     }
 
     // The loader allocator keeps the arrays that hold the static fields of the plugin's types, which roots of the heap reach too.
@@ -133,23 +89,6 @@ internal static class PluginRetentionAnalyzer
         return own;
     }
 
-    private static string? FindField(ClrObject owner, ulong referenced)
-    {
-        foreach (var reference in owner.EnumerateReferencesWithFields(carefully: true, considerDependantHandles: true))
-        {
-            if (reference.Object.Address != referenced)
-                continue;
-
-            if (reference.Field is { } field)
-                return field.Name;
-
-            // Elements of an array are referenced by index rather than by a field.
-            return reference.IsDependentHandle ? "(dependent handle)" : null;
-        }
-
-        return null;
-    }
-
     private static bool IsOfPlugin(ClrObject link, ulong loaderAllocatorHandle, ClrRuntime runtime)
     {
         if (link.Type is not { } type)
@@ -162,10 +101,10 @@ internal static class PluginRetentionAnalyzer
         return type.Name is "System.RuntimeType" && runtime.GetTypeByMethodTable(link.ReadField<ulong>("m_handle")) is { IsCollectible: true } runtimeType && runtimeType.LoaderAllocatorHandle == loaderAllocatorHandle;
     }
 
-    // Maps the value of each static field of a reference type to the field's name and the assembly of its type.
-    private static Dictionary<ulong, (string Name, string? Assembly)> FindStaticFields(ClrRuntime runtime)
+    // Maps the value of each static field of a reference type to the field.
+    private static Dictionary<ulong, PluginRetentionChain.StaticField> FindStaticFields(ClrRuntime runtime)
     {
-        var values = new Dictionary<ulong, (string Name, string? Assembly)>();
+        var values = new Dictionary<ulong, PluginRetentionChain.StaticField>();
         var appDomains = runtime.AppDomains.Concat([runtime.SharedDomain, runtime.SystemDomain]).OfType<ClrAppDomain>().ToArray();
 
         foreach (var module in runtime.EnumerateModules())
@@ -188,7 +127,7 @@ internal static class PluginRetentionAnalyzer
                         var value = field.ReadObject(appDomain);
 
                         if (!value.IsNull)
-                            values.TryAdd(value.Address, ($"{type.Name}.{field.Name}", module.Name));
+                            values.TryAdd(value.Address, new PluginRetentionChain.StaticField(type.Name ?? "?", field.Name ?? "?", module.Name));
                     }
                 }
             }
