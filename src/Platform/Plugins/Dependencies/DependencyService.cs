@@ -240,10 +240,13 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     {
         var assembly = @event.Plugin.GetType().Assembly;
 
+        // Removed before its listeners, as a listener its container resolves meanwhile unregisters itself once its plugin is gone
+        var removed = _plugins.TryRemove(assembly, out var container);
+
         var events = rootContainer.GetRequiredService<IEventService>();
         events.UnregisterListeners(events.Listeners.Where(listener => listener.GetType().Assembly == assembly));
 
-        if (!_plugins.TryRemove(assembly, out var container))
+        if (!removed || container is null)
             return;
 
         container.Root.Container.Dispose();
@@ -412,7 +415,13 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                     continue;
 
                 if (service is IEventListener listener)
+                {
                     events.RegisterListeners(listener);
+
+                    // A player that connects as a plugin unloads resolves the plugin's services after its listeners were unregistered
+                    if (listener.GetType().Assembly is { IsCollectible: true } listenerAssembly && !_plugins.ContainsKey(listenerAssembly))
+                        events.UnregisterListeners(listener);
+                }
 
                 return service;
             }
