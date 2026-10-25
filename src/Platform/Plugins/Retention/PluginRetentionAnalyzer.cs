@@ -11,10 +11,16 @@ internal static class PluginRetentionAnalyzer
     private const int MaximumChains = 8;
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromMinutes(1);
 
+    /// <summary>The line after the chains that the same chains follow, as the runtime names their frames.</summary>
+    public const string FramesHeader = "--- frames ---";
+
     /// <param name="dumpPath">The dump of the proxy.</param>
     /// <param name="typeHandleAddress">The address of the weak handle to a type of the plugin, in the dumped proxy.</param>
     /// <param name="dacPath">The DAC of the dumped runtime, or <see langword="null" /> to find it next to the runtime the dump names.</param>
-    /// <param name="output">Where the chains are written, each a line of its root followed by a line per link, apart by a blank line.</param>
+    /// <param name="output">
+    ///     Where the chains are written, each a line of its root and the lines of its references below it, apart by a blank line, and then
+    ///     after <see cref="FramesHeader" /> the same chains as the runtime names their frames.
+    /// </param>
     public static void Analyze(string dumpPath, ulong typeHandleAddress, string? dacPath, TextWriter output)
     {
         using var dump = DataTarget.LoadDump(dumpPath);
@@ -38,6 +44,7 @@ internal static class PluginRetentionAnalyzer
 
         using var timeout = new CancellationTokenSource(SearchTimeout);
         var chains = new HashSet<string>();
+        var frames = new List<string>();
 
         // An object of the plugin keeps its loader allocator alive through its type rather than a field, so chains to its objects count too.
         ulong[] targets = [loaderAllocator, .. heap.EnumerateObjects().Where(link => link.Type is { IsCollectible: true } type && type.LoaderAllocatorHandle == loaderAllocatorHandle).Select(link => link.Address)];
@@ -64,13 +71,20 @@ internal static class PluginRetentionAnalyzer
 
             output.WriteLine($"{origin}:");
             output.WriteLine(chain);
+            frames.Add(PluginRetentionChain.DescribeFrames(root, links, staticFields.Value));
 
             if (chains.Count is MaximumChains)
                 break;
         }
 
         if (chains.Count is 0)
+        {
             output.WriteLine("Nothing outside of the plugin references it");
+            return;
+        }
+
+        output.WriteLine(FramesHeader);
+        output.WriteLine(string.Join("\n\n", frames));
     }
 
     // The loader allocator keeps the arrays that hold the static fields of the plugin's types, which roots of the heap reach too.

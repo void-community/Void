@@ -15,16 +15,19 @@ internal static class PluginRetentionInspector
 
     private static readonly TimeSpan AnalysisTimeout = TimeSpan.FromMinutes(2);
 
-    /// <summary>Describes the chains of references that keep the plugin alive, one per line.</summary>
+    /// <summary>Describes the chains of references that keep the plugin alive.</summary>
     /// <param name="pluginType">A weak handle to a type of the plugin.</param>
-    public static async ValueTask<string> DescribeAsync(GCHandle pluginType, CancellationToken cancellationToken)
+    /// <returns>The chains as code reads them, and the same chains as the runtime names their frames.</returns>
+    public static async ValueTask<(string Chains, string Frames)> DescribeAsync(GCHandle pluginType, CancellationToken cancellationToken)
     {
         var dumpPath = Path.Combine(Path.GetTempPath(), $"void-plugin-retention-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
 
         try
         {
             await WriteDumpAsync(dumpPath, cancellationToken);
-            return await AnalyzeAsync(dumpPath, (ulong)GCHandle.ToIntPtr(pluginType), cancellationToken);
+            var output = await AnalyzeAsync(dumpPath, (ulong)GCHandle.ToIntPtr(pluginType), cancellationToken);
+
+            return output.Split($"\n{PluginRetentionAnalyzer.FramesHeader}\n", 2) is [var chains, var frames] ? (chains.TrimEnd(), frames.TrimEnd()) : (output, string.Empty);
         }
         finally
         {

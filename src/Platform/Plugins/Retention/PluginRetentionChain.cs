@@ -75,7 +75,7 @@ internal static partial class PluginRetentionChain
         // The array the runtime keeps static fields in references their values, so the chain starts at the static field instead.
         if (links.Count > 1 && staticFields.TryGetValue(links[1].Address, out var staticField))
         {
-            writer.Start(staticField.Assembly, $"{ShortName(staticField.TypeName)}.{MemberName(staticField.FieldName)}");
+            writer.Start(staticField.Assembly, $"{ShortName(staticField.TypeName)}.{MemberName(staticField.FieldName)}", links[1].Type);
             index = 1;
         }
 
@@ -97,7 +97,7 @@ internal static partial class PluginRetentionChain
 
             if (FindCollectionEnd(links, index) is { } end)
             {
-                writer.Access(writer.Assembly ?? assembly, link, DescribeElement(links, end, runtime));
+                writer.Access(writer.Assembly ?? assembly, link, DescribeElement(links, end, runtime), links[end + 1].Type);
                 arrival = null;
                 index = end + 1;
                 continue;
@@ -105,7 +105,7 @@ internal static partial class PluginRetentionChain
 
             if (link.Type is { IsArray: true })
             {
-                writer.Access(writer.Assembly ?? assembly, link, DescribeArrayElement(link, next.Address));
+                writer.Access(writer.Assembly ?? assembly, link, DescribeArrayElement(link, next.Address), next.Type);
             }
             else if (link.IsDelegate)
             {
@@ -117,7 +117,7 @@ internal static partial class PluginRetentionChain
 
                 if (reference?.Field?.Name is "StateMachine" && reference.Value.InnerField is { Field: { } local })
                 {
-                    writer.Line(stateMachineType.Module?.Name, $"{arrival}{method}, which holds {MemberName(local.Name ?? "?")}");
+                    writer.Line(stateMachineType.Module?.Name, $"{arrival}{method}, which holds {MemberName(local.Name ?? "?")}", next.Type);
                     writer.Receiver = MemberName(local.Name ?? "?");
                 }
                 else if (reference?.Field?.Name is "StateMachine")
@@ -126,30 +126,38 @@ internal static partial class PluginRetentionChain
                     index++;
                     continue;
                 }
-                else
+                else if (reference?.Field?.Name is "m_continuationObject")
                 {
                     writer.Line(stateMachineType.Module?.Name, $"{arrival}{method}");
+                }
+                else
+                {
+                    writer.Line(stateMachineType.Module?.Name, $"{arrival}{method}, through its {MemberName(reference?.Field?.Name ?? "?")}", next.Type);
                 }
             }
             else if (IsStateMachine(link.Type?.Name))
             {
                 var local = MemberName(reference?.Field?.Name ?? "?");
-                writer.Line(assembly, $"{arrival}{DescribeStateMachine(link.Type!.Name!)}, which holds {local}");
+                writer.Line(assembly, $"{arrival}{DescribeStateMachine(link.Type!.Name!)}, which holds {local}", next.Type);
                 writer.Receiver = local;
             }
             else if (IsTask(link.Type))
             {
-                writer.Line(assembly, $"{arrival}{DescribeTask(link.Type!.Name ?? "?")}");
+                // The continuation a task runs is told by the line after it
+                if (reference?.Field?.Name is "m_continuationObject" or null)
+                    writer.Line(assembly, $"{arrival}{DescribeTask(link.Type!.Name ?? "?")}");
+                else
+                    writer.Line(assembly, $"{arrival}{DescribeTask(link.Type!.Name ?? "?")}, through its {MemberName(reference.Value.Field.Name ?? "?")}", next.Type);
             }
             else if (link.Type?.Name is { } typeName && DisplayClassPattern().IsMatch(typeName))
             {
                 var captured = MemberName(reference?.Field?.Name ?? "?");
-                writer.Line(assembly, $"lambda in {DescribeDisplayClass(link.Type)}, which captured {captured}");
+                writer.Line(assembly, $"lambda in {DescribeDisplayClass(link.Type)}, which captured {captured}", next.Type);
                 writer.Receiver = captured;
             }
             else
             {
-                writer.Access(assembly, link, DescribeField(reference));
+                writer.Access(assembly, link, DescribeField(reference), next.Type);
             }
 
             // A continuation awaits the task that references it, as an async method awaits the one it calls.
@@ -158,9 +166,41 @@ internal static partial class PluginRetentionChain
         }
 
         var last = links[^1];
-        writer.Line(PluginAssembly, last.Type?.Name is "System.Reflection.LoaderAllocator" ? "the plugin's loader allocator" : ShortName(last.Type?.Name ?? "?") + PluginNote(last.Type));
+        writer.Line(PluginAssembly, last.Type?.Name is "System.Reflection.LoaderAllocator" ? "the plugin's loader allocator" : TypeNote(last.Type));
 
         return (DescribeRoot(root), writer.ToString());
+    }
+
+    /// <summary>Describes the chain as the runtime names its frames: each object's type and the field that references the next, one per line.</summary>
+    public static string DescribeFrames(ClrRoot root, IReadOnlyList<ClrObject> links, IReadOnlyDictionary<ulong, StaticField> staticFields)
+    {
+        var builder = new StringBuilder(root is ClrStackRoot { StackFrame: { } frame } ? $"stack of {frame.Method?.Signature ?? frame.FrameName ?? "a thread"}:" : $"{root.RootKind}:");
+
+        for (var index = 0; index < links.Count; index++)
+        {
+            var link = links[index];
+            builder.Append('\n').Append(Indentation);
+
+            if (index is 0 && links.Count > 1 && staticFields.TryGetValue(links[1].Address, out var staticField))
+            {
+                builder.Append($"static {staticField.TypeName}.{staticField.FieldName}");
+                continue;
+            }
+
+            builder.Append(link.Type?.Name ?? "?");
+
+            if (index + 1 >= links.Count || FindReference(link, links[index + 1].Address) is not { } reference)
+                continue;
+
+            if (reference.Field is { } field)
+                builder.Append('.').Append(field.Name).Append(reference.InnerField is { Field: { } inner } ? $".{inner.Name}" : string.Empty);
+            else if (reference.IsArrayElement)
+                builder.Append($"[{FindArrayElement(link, links[index + 1].Address).Index}]");
+            else if (reference.IsDependentHandle)
+                builder.Append(" (dependent handle)");
+        }
+
+        return builder.ToString();
     }
 
     private static string DescribeRoot(ClrRoot root)
@@ -177,7 +217,7 @@ internal static partial class PluginRetentionChain
     {
         if (reference?.Field?.Name is not "_target")
         {
-            writer.Access(link.Type?.Module?.Name, link, DescribeField(reference));
+            writer.Access(link.Type?.Module?.Name, link, DescribeField(reference), next.Type);
             return;
         }
 
@@ -185,7 +225,7 @@ internal static partial class PluginRetentionChain
         if (link.AsDelegate().GetDelegateTarget()?.Method is not { } method || GetStateMachineType(next) is not null || DisplayClassPattern().IsMatch(next.Type?.Name ?? string.Empty))
             return;
 
-        writer.Line(method.Type?.Module?.Name, $"calls {DescribeMethod(method)}");
+        writer.Line(method.Type?.Module?.Name, $"calls {DescribeMethod(method)}", next.Type);
     }
 
     // The last internal of the collection that the link starts, whose next link is the element it holds.
@@ -625,14 +665,16 @@ internal static partial class PluginRetentionChain
         return name.Length;
     }
 
-    // Tells which plugin code is of, as the chain passes through plugins other than the one that refuses to unload too.
-    private static string PluginNote(ClrType? type)
+    // Names a type, and the plugin it's of, as the chain passes through plugins other than the one that refuses to unload too.
+    private static string TypeNote(ClrType? type)
     {
-        if (type is not { IsCollectible: true, Module: { } module })
-            return string.Empty;
+        var name = ShortName(type?.Name ?? "?");
 
-        var name = module.Name is { Length: > 0 } fileName ? Path.GetFileNameWithoutExtension(fileName) : module.AssemblyName;
-        return name is { Length: > 0 } ? $"  // of {name}" : string.Empty;
+        if (type is not { IsCollectible: true, Module: { } module })
+            return name;
+
+        var plugin = module.Name is { Length: > 0 } fileName ? Path.GetFileNameWithoutExtension(fileName) : module.AssemblyName;
+        return plugin is { Length: > 0 } ? $"{name} of {plugin}" : name;
     }
 
     private static string VariableName(ClrObject owner)
@@ -649,10 +691,11 @@ internal static partial class PluginRetentionChain
     /// <summary>A static field of a reference type, with the assembly of the type it's declared in.</summary>
     public readonly record struct StaticField(string TypeName, string FieldName, string? Assembly);
 
-    // Lines of a chain, each with the assembly of what it tells, which an access joins while the chain stays in that assembly.
+    // Lines of a chain, each with the assembly of what it tells, which an access joins while the chain stays in that assembly, and the types
+    // of the objects the line passes through, which its code names leave out.
     private sealed class Writer
     {
-        private readonly List<(string? Assembly, StringBuilder Text)> _lines = [];
+        private readonly List<(string? Assembly, StringBuilder Text, List<string> Types)> _lines = [];
         private bool _open;
 
         // What the next line calls the object it starts with, as a lambda calls what it captured.
@@ -660,32 +703,37 @@ internal static partial class PluginRetentionChain
 
         public string? Assembly => _open ? _lines[^1].Assembly : null;
 
-        public void Start(string? assembly, string text)
+        public void Start(string? assembly, string text, ClrType? reached)
         {
-            _lines.Add((assembly, new StringBuilder(text)));
+            _lines.Add((assembly, new StringBuilder(text), [TypeNote(reached)]));
             _open = true;
         }
 
-        public void Access(string? assembly, ClrObject owner, string access)
+        public void Access(string? assembly, ClrObject owner, string access, ClrType? reached)
         {
             if (_open && _lines[^1].Assembly == assembly)
             {
                 if (_lines[^1].Text.Length + access.Length <= MaximumLineLength)
+                {
                     _lines[^1].Text.Append(access);
+                    _lines[^1].Types.Add(TypeNote(reached));
+                }
                 else
-                    _lines.Add((assembly, new StringBuilder(access)));
+                {
+                    _lines.Add((assembly, new StringBuilder(access), [TypeNote(reached)]));
+                }
 
                 return;
             }
 
-            _lines.Add((assembly, new StringBuilder((Receiver ?? VariableName(owner)) + access + PluginNote(owner.Type))));
+            _lines.Add((assembly, new StringBuilder((Receiver ?? VariableName(owner)) + access), [TypeNote(owner.Type), TypeNote(reached)]));
             _open = true;
             Receiver = null;
         }
 
-        public void Line(string? assembly, string text)
+        public void Line(string? assembly, string text, ClrType? reached = null)
         {
-            _lines.Add((assembly, new StringBuilder(text)));
+            _lines.Add((assembly, new StringBuilder(text), reached is null ? [] : [TypeNote(reached)]));
             _open = false;
         }
 
@@ -696,13 +744,21 @@ internal static partial class PluginRetentionChain
 
             for (var index = 0; index < _lines.Count; index++)
             {
-                if (index > 0 && _lines[index].Assembly != _lines[index - 1].Assembly)
+                var (assembly, text, types) = _lines[index];
+
+                if (index > 0 && assembly != _lines[index - 1].Assembly)
                     depth++;
 
                 if (index > 0)
                     builder.Append('\n');
 
-                builder.Insert(builder.Length, Indentation, depth).Append(_lines[index].Text);
+                builder.Insert(builder.Length, Indentation, depth).Append(text);
+
+                // A type the line passes through again, as the nodes of a list are, is told once
+                var distinct = types.Where((type, position) => position is 0 || type != types[position - 1]).ToArray();
+
+                if (distinct.Length > 0)
+                    builder.Append("  // ").AppendJoin(" → ", distinct);
             }
 
             return builder.ToString();

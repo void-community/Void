@@ -347,7 +347,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             } while (Stopwatch.GetElapsedTime(collectionTime) < _unloadTimeout);
 
             if (!IsCollected(container, pluginType))
-                throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(pluginType, cancellationToken)}");
+                throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, pluginType, cancellationToken)}");
         }
         finally
         {
@@ -385,14 +385,19 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         return pluginType.IsAllocated ? pluginType.Target is null : !container.IsAlive;
     }
 
-    private async ValueTask<string> DescribeRetentionAsync(GCHandle pluginType, CancellationToken cancellationToken)
+    private async ValueTask<string> DescribeRetentionAsync(string name, GCHandle pluginType, CancellationToken cancellationToken)
     {
         if (!pluginType.IsAllocated)
             return "It has no plugins to tell what keeps them alive";
 
         try
         {
-            return $"It is kept alive by:\n\n{await PluginRetentionInspector.DescribeAsync(pluginType, cancellationToken)}";
+            var (chains, frames) = await PluginRetentionInspector.DescribeAsync(pluginType, cancellationToken);
+
+            if (frames.Length > 0)
+                logger.LogTrace("Plugins context {ContextName} is kept alive through these frames:\n\n{Frames}", name, frames);
+
+            return $"It is kept alive by:\n\n{chains}";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
