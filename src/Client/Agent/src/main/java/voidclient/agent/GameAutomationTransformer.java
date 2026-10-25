@@ -185,6 +185,7 @@ final class GameAutomationTransformer implements ClassFileTransformer {
                 && Type.getReturnType(method.desc).getSort() == Type.VOID) {
                 event = ConnectionTrace.Disconnect;
                 detail = 1;
+                recordReasonBeforeClose(type, method);
             } else
                 continue;
 
@@ -198,6 +199,48 @@ final class GameAutomationTransformer implements ClassFileTransformer {
         }
 
         return changed;
+    }
+
+    /**
+     * Makes a disconnect method of a connection keep its reason before it closes the channel, rather than right after. The game handles a
+     * closed channel on its own thread, which can do so in between and tell its listener a generic "Disconnected" instead of the reason a
+     * server sent. The reason is kept under the same condition the method keeps it, an open channel, so a later disconnect doesn't replace it.
+     *
+     * @return whether the method keeps its reason after it closes the channel
+     */
+    static boolean recordReasonBeforeClose(ClassNode type, MethodNode method) {
+        String reasonDescriptor = Type.getArgumentTypes(method.desc)[0].getDescriptor();
+        MethodInsnNode close = null;
+
+        for (AbstractInsnNode instruction = method.instructions.getFirst(); instruction != null; instruction = instruction.getNext()) {
+            if (instruction instanceof MethodInsnNode) {
+                MethodInsnNode call = (MethodInsnNode) instruction;
+
+                if ("close".equals(call.name) && call.desc.startsWith("()") && call.owner.endsWith("io/netty/channel/Channel"))
+                    close = call;
+
+                continue;
+            }
+
+            if (close == null || instruction.getOpcode() != Opcodes.PUTFIELD || !(instruction.getPrevious() instanceof VarInsnNode))
+                continue;
+
+            FieldInsnNode field = (FieldInsnNode) instruction;
+            VarInsnNode value = (VarInsnNode) instruction.getPrevious();
+
+            if (!type.name.equals(field.owner) || !reasonDescriptor.equals(field.desc) || value.getOpcode() != Opcodes.ALOAD || value.var != 1)
+                continue;
+
+            // Leaves the stack as it was, so the channel the close call takes stays under it
+            InsnList keep = new InsnList();
+            keep.add(new VarInsnNode(Opcodes.ALOAD, 0));
+            keep.add(new VarInsnNode(Opcodes.ALOAD, 1));
+            keep.add(new FieldInsnNode(Opcodes.PUTFIELD, field.owner, field.name, field.desc));
+            method.instructions.insertBefore(close, keep);
+            return true;
+        }
+
+        return false;
     }
 
     /** Reads the types of the reasons the disconnect callbacks of network listeners take. */
