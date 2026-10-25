@@ -38,7 +38,8 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     }
 
     // Players of the versions the plugin supports can't play without it, so they leave with why rather than with a game that stops working.
-    [Subscribe]
+    // First, as the kick needs the plugin's packet registries that its other listeners dispose of as it unloads.
+    [Subscribe(PostOrder.First)]
     public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
     {
         if (@event.Plugin.GetType().Assembly != GetType().Assembly)

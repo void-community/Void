@@ -210,8 +210,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         return playerScope.CurrentScope.SelectMany(scope => scope.GetSnapshotOfServicesWithFactoryIDs()).Any(scopedService => ReferenceEquals(scopedService.Value, service));
     }
 
+    // After the plugin's own unloading listeners, which still use its services and listen to the events they raise, such as a kick.
     [Subscribe(PostOrder.First)]
-    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    public void OnPluginUnloaded(PluginUnloadedEvent @event)
     {
         var assembly = @event.Plugin.GetType().Assembly;
 
