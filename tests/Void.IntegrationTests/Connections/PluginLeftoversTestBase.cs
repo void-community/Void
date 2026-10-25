@@ -13,6 +13,7 @@ using Void.Minecraft.Commands.Brigadier.Tree.Nodes;
 using Void.Proxy.Api.Commands;
 using Void.Proxy.Api.Console;
 using Void.Proxy.Api.Events.Services;
+using Void.Proxy.Api.Players;
 using Xunit;
 
 namespace Void.IntegrationTests.Connections;
@@ -31,6 +32,12 @@ public abstract class PluginLeftoversTestBase(ConnectionsFixture fixture) : Plug
     {
         return RunReloadingAsync(async () =>
         {
+            // A player's scope brings listeners of its own, so the listeners are read once the previous test's players have left
+            var players = Proxy.RunResult.Services.GetRequiredService<IPlayerService>();
+
+            while (players.All.Any())
+                await Task.Delay(TimeSpan.FromMilliseconds(100), Timeouts.StepTimeoutToken);
+
             var commands = await ReadCommandsAsync();
             var listeners = ReadListeners();
             var settings = await ReadSettingsAsync();
