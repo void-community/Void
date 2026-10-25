@@ -62,7 +62,8 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 
         // The plugin whose code asks for the option, which a player that joins can make it do while another plugin loads. A plugin that
         // unloads takes no more options, which its unloading couldn't take away again.
-        var plugin = FindCallingPluginAssembly() ?? _loadingPlugin?.GetType().Assembly;
+        var callingPlugin = FindCallingPluginAssembly();
+        var plugin = callingPlugin ?? _loadingPlugin?.GetType().Assembly;
 
         if (plugin is not null && AssemblyLoadContext.GetLoadContext(plugin) is PluginAssemblyLoadContext { IsUnloading: true })
             return;
@@ -102,6 +103,7 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
             _pluginOptions[plugin] = pluginOptions = [];
 
         pluginOptions.Add(option);
+        logger.LogTrace("Console option {Option} belongs to {Plugin}, which {How}", option.Name, plugin.GetName().Name, callingPlugin is null ? "was loading" : "asked for it");
     }
 
     // Plugins load into collectible contexts, which the proxy's own code isn't in
@@ -160,6 +162,8 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         {
             if (!_pluginOptions.Remove(plugin, out var pluginOptions))
                 continue;
+
+            logger.LogTrace("Console options {Options} leave with {Plugin}", string.Join(", ", pluginOptions.Select(option => option.Name)), plugin.GetName().Name);
 
             foreach (var option in pluginOptions)
                 consoleConfiguration.RootCommand.Options.Remove(option);
