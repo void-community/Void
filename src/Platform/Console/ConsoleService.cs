@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using Nito.AsyncEx;
 using Void.Proxy.Api;
 using Void.Proxy.Api.Commands;
@@ -11,6 +12,7 @@ using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Events.Proxy;
 using Void.Proxy.Api.Plugins;
+using Void.Proxy.Plugins.Context;
 using Void.Terminal;
 using SystemConsole = System.Console;
 
@@ -58,6 +60,13 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         if (consoleConfiguration.RootCommand.Options.Contains(option))
             return;
 
+        // The plugin whose code asks for the option, which a player that joins can make it do while another plugin loads. A plugin that
+        // unloads takes no more options, which its unloading couldn't take away again.
+        var plugin = FindCallingPluginAssembly() ?? _loadingPlugin?.GetType().Assembly;
+
+        if (plugin is not null && AssemblyLoadContext.GetLoadContext(plugin) is PluginAssemblyLoadContext { IsUnloading: true })
+            return;
+
         foreach (var existingOption in consoleConfiguration.RootCommand.Options)
         {
             var existingAliases = existingOption.Aliases ?? [];
@@ -86,8 +95,7 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         var insertIndex = options.TakeWhile(existing => (-(existing.Aliases?.Count ?? 0), existing.Name?.ToLowerInvariant() ?? string.Empty).CompareTo((-(option.Aliases?.Count ?? 0), option.Name?.ToLowerInvariant() ?? string.Empty)) < 0).Count();
         options.Insert(insertIndex, option);
 
-        // The plugin whose code asks for the option, which a player that joins can make it do while another plugin loads
-        if ((FindCallingPluginAssembly() ?? _loadingPlugin?.GetType().Assembly) is not { } plugin)
+        if (plugin is null)
             return;
 
         if (!_pluginOptions.TryGetValue(plugin, out var pluginOptions))

@@ -54,7 +54,11 @@ public class WeakPluginContainer
     /// <returns><see langword="true" /> for the caller that claimed it; <see langword="false" /> while it loads, or once another caller claimed it.</returns>
     public bool TryBeginUnload()
     {
-        return Interlocked.CompareExchange(ref _state, State.Unloading, State.Loaded) is State.Loaded;
+        if (Interlocked.CompareExchange(ref _state, State.Unloading, State.Loaded) is not State.Loaded)
+            return false;
+
+        Context.BeginUnload();
+        return true;
     }
 
     public void Add(IPlugin plugin)

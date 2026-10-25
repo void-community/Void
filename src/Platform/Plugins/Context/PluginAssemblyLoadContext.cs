@@ -17,6 +17,14 @@ public class PluginAssemblyLoadContext : AssemblyLoadContext
     /// </summary>
     public Assembly? PluginAssembly { get; private set; }
 
+    /// <summary>
+    /// Gets whether the context's container started to unload, from before its plugins are told, so services that keep what plugins give
+    /// them take nothing more from the plugin meanwhile.
+    /// </summary>
+    public bool IsUnloading => _unloading;
+
+    private volatile bool _unloading;
+
     public PluginAssemblyLoadContext(ILogger<PluginAssemblyLoadContext> logger, IDependencyService dependencies, string name, Stream assemblyStream, CopyOnWriteCollection<WeakPluginContainer> containers) : base(name, true)
     {
         _logger = logger;
@@ -24,6 +32,11 @@ public class PluginAssemblyLoadContext : AssemblyLoadContext
 
         PluginAssembly = LoadFromStream(assemblyStream);
         Unloading += context => PluginAssembly = null;
+    }
+
+    internal void BeginUnload()
+    {
+        _unloading = true;
     }
 
     protected override Assembly Load(AssemblyName assemblyName)
