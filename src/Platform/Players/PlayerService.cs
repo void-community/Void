@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Sockets;
 using Nito.AsyncEx;
 using Void.Proxy.Api.Events;
@@ -21,6 +22,8 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
     private readonly AsyncLock _lock = new();
     // Players connect and leave while others enumerate them, as plugins that load do, so each enumeration reads a snapshot
     private readonly CopyOnWriteCollection<PlayerProxy> _players = new();
+    // A player being kicked leaves, so a link that stops meanwhile doesn't move it to another server
+    private readonly ConcurrentDictionary<IPlayer, byte> _kicking = new(ReferenceEqualityComparer.Instance);
 
     public IEnumerable<IPlayer> All => _players.Snapshot.Select(proxy => proxy.Source);
 
@@ -114,6 +117,9 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         var channel = await player.GetChannelAsync(cancellationToken);
         channel.TryPause();
 
+        // A kick that runs while another kicks the player leaves it to that one to tell the player is no longer kicked
+        var kicking = _kicking.TryAdd(player, 0);
+
         try
         {
             var kicked = await events.ThrowWithResultAsync(playerKickEvent, cancellationToken);
@@ -155,6 +161,10 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         }
         finally
         {
+            // Closed below, so a link that stops from now on finds the player gone
+            if (kicking)
+                _kicking.TryRemove(KeyValuePair.Create(player, (byte)0));
+
             channel.Close();
             player.Client.Close();
 
@@ -181,6 +191,10 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
             await DisconnectAsync(@event.Player, cancellationToken);
             return;
         }
+
+        // The kick disconnects the player once it leaves
+        if (_kicking.ContainsKey(@event.Player.Unwrap()))
+            return;
 
         logger.LogTrace("Reconnecting player {Player} after link {Link} stopped due to {Reason}", @event.Player, @event.Link, @event.Reason);
 
