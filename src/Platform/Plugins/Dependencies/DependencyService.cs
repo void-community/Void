@@ -19,6 +19,10 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     private static readonly FieldInfo EmptyRequestStackField = typeof(Request).GetField("DepRequestStack", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("DryIoc has no dependency request stack to drop the containers of unloaded plugins from");
 
+    // DryIoc pools the request a resolution is done with for the next one, and leaves it the constructor it selected, of an unloaded plugin too.
+    private static readonly FieldInfo PooledRequestField = typeof(Request).GetField("_pooledRequest", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("DryIoc has no pooled request to drop the constructors of unloaded plugins from");
+
     private readonly ConcurrentDictionary<Assembly, PluginContainer> _plugins = [];
 
     public TService CreateInstance<TService>(CancellationToken cancellationToken = default, params object[] parameters)
@@ -118,11 +122,14 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     public void ActivatePlayerScope(IPlayerContext context)
     {
         var playerStableHashCode = context.Player.GetStableHashCode();
-        var assemblies = new Queue<Assembly>(_plugins.Keys);
+        var plugins = new Queue<KeyValuePair<Assembly, PluginContainer>>(_plugins);
 
-        while (assemblies.TryDequeue(out var assembly))
+        while (plugins.TryDequeue(out var plugin))
         {
-            var playerScope = GetPlayerScope(assembly, playerStableHashCode, context);
+            var (assembly, container) = plugin;
+
+            if (GetPlayerScope(container, playerStableHashCode, context) is not { } playerScope)
+                return;
 
             foreach (var registration in playerScope.Container.GetServiceRegistrations())
             {
@@ -164,9 +171,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
     public bool TryGetServiceReuse(Type serviceType, out ServiceLifetime reuse)
     {
-        var pluginContainer = GetPluginContainer(serviceType.Assembly);
-        var container = pluginContainer.Root.Container;
-        var registration = container.GetServiceRegistrations().FirstOrDefault(registration => registration.ServiceType == serviceType);
+        var registration = _plugins.TryGetValue(serviceType.Assembly, out var pluginContainer)
+            ? pluginContainer.Root.Container.GetServiceRegistrations().FirstOrDefault(registration => registration.ServiceType == serviceType)
+            : default;
         var registered = registration.Factory is not null;
 
         reuse = registration.Factory?.Reuse switch
@@ -183,8 +190,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     {
         var playerStableHashCode = player.GetStableHashCode();
 
-        foreach (var assembly in _plugins.Keys)
-            GetPlayerScope(assembly, playerStableHashCode, player.Context);
+        foreach (var container in _plugins.Values)
+            GetPlayerScope(container, playerStableHashCode, player.Context);
 
         return CombineLazy(
             () => GetScopedContainers(playerStableHashCode, preferredAssembly),
@@ -229,6 +236,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
         // DryIoc starts another stack as it next needs one, while resolutions under way keep the one they hold.
         EmptyRequestStackField.SetValue(Request.Empty, null);
+        PooledRequestField.SetValue(null, null);
     }
 
     private IEnumerable<IServiceProvider> GetScopedContainers(int playerStableHashCode, Assembly? preferredAssembly = null)
@@ -250,8 +258,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
     private IEnumerable<IServiceProvider> GetRootContainers(Assembly? preferredAssembly = null)
     {
-        if (preferredAssembly is not null && _plugins.ContainsKey(preferredAssembly))
-            yield return GetPluginContainer(preferredAssembly).Root;
+        if (preferredAssembly is not null && _plugins.TryGetValue(preferredAssembly, out var preferredContainer))
+            yield return preferredContainer.Root;
 
         yield return rootContainer;
 
@@ -260,7 +268,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
             if (assembly == preferredAssembly)
                 continue;
 
-            yield return GetPluginContainer(assembly).Root;
+            // A plugin that unloads meanwhile is skipped rather than given another container, which would keep it alive
+            if (_plugins.TryGetValue(assembly, out var pluginContainer))
+                yield return pluginContainer.Root;
         }
     }
 
@@ -274,17 +284,30 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         return assemblies;
     }
 
-    private IServiceProvider GetPlayerScope(Assembly assembly, int playerStableHashCode, IPlayerContext context)
+    private IResolverContext? GetPlayerScope(PluginContainer container, int playerStableHashCode, IPlayerContext context)
     {
-        var container = GetPluginContainer(assembly);
-
         if (container.Scopes.TryGetValue(playerStableHashCode, out var playerScope))
             return playerScope;
 
-        playerScope = container.Root.Container.OpenScope(nameof(IPlayer));
-        container.Scopes[playerStableHashCode] = playerScope;
+        // A player that left keeps no scopes, which would keep it and the plugins of its services alive
+        if (context.IsDisposed)
+            return null;
 
+        playerScope = container.Root.Container.OpenScope(nameof(IPlayer));
         playerScope.Use(context);
+
+        if (!container.Scopes.TryAdd(playerStableHashCode, playerScope))
+        {
+            playerScope.Dispose();
+            return container.Scopes.GetValueOrDefault(playerStableHashCode);
+        }
+
+        // The player left while the scope opened, after its scopes were disposed
+        if (context.IsDisposed && container.Scopes.TryRemove(KeyValuePair.Create(playerStableHashCode, playerScope)))
+        {
+            playerScope.Dispose();
+            return null;
+        }
 
         return playerScope;
     }

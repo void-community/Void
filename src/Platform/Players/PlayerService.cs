@@ -223,8 +223,9 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         {
             logger.LogInformation("Player {Player} disconnected", player);
 
-            dependencies.DisposePlayerScope(player.Context);
+            // A disposed player opens no scopes again, so none outlive the ones disposed here
             await player.DisposeAsync();
+            dependencies.DisposePlayerScope(player.Context);
         }
     }
 
