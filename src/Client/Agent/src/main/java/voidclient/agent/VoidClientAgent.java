@@ -84,12 +84,13 @@ public final class VoidClientAgent {
             MethodType pair = MethodType.methodType(void.class, Object.class, Object.class);
             MethodType fatalError = MethodType.methodType(void.class, Throwable.class, Path.class, Path.class);
             Class.forName(GameHooksName.replace('/', '.'), true, null)
-                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
+                .getMethod("install", MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class, MethodHandle.class)
                 .invoke(null,
                     lookup.findStatic(Tracker.class, "registerPlayer", single),
                     lookup.findStatic(GameAutomationController.class, "applyClient", single),
                     lookup.findStatic(GameAutomationController.class, "connectionListenerCreated", pair),
                     lookup.findStatic(GameAutomationController.class, "connectionRejected", pair),
+                    lookup.findStatic(ConnectionTrace.class, "event", MethodType.methodType(void.class, String.class, Object.class, Object.class)),
                     lookup.findStatic(FatalErrorReports.class, "save", fatalError));
             return true;
         } catch (Throwable exception) {
@@ -150,7 +151,8 @@ public final class VoidClientAgent {
 
                 GameAutomationIndex.IndexedCode index = GameAutomationIndex.index(type.getClassLoader(), className, type.getProtectionDomain());
 
-                if (index != null && (index.plan.frame.owner.equals(className) || index.plan.rejectionCallbacks.containsKey(className)))
+                if (index != null && (index.plan.frame.owner.equals(className) || index.plan.rejectionCallbacks.containsKey(className)
+                    || index.plan.networkTypes.contains(className)))
                     instrumentation.retransformClasses(type);
             } catch (Throwable exception) {
                 // Some JVM-generated classes report as modifiable but cannot actually be retransformed.

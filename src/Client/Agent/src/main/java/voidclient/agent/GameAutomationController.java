@@ -419,12 +419,13 @@ public final class GameAutomationController {
     }
 
     public static synchronized void connectionRejected(Object listener, Object reason) {
+        Object connection = nativeConnection(listener);
+        ConnectionTrace.told(connection, reason);
         boolean connecting = pending != null && pending.submitted && pending.connection != null;
 
         if (!connecting && !JoinedConnection.hasJoined())
             return;
 
-        Object connection = nativeConnection(listener);
         JoinedConnection.disconnected(connection, reason);
 
         if (connecting && pending.connection == connection)
