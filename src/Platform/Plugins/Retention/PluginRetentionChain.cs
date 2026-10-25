@@ -203,6 +203,108 @@ internal static partial class PluginRetentionChain
         return builder.ToString();
     }
 
+    /// <summary>
+    ///     Describes a chain of which only the types of its objects are known, as a snapshot of the heap tells it: by the types it passes
+    ///     through, with the internals of collections, async methods and lambdas told as they are elsewhere.
+    /// </summary>
+    /// <param name="links">The objects from the root to the plugin.</param>
+    /// <param name="first">What the root is, such as a static field, when the snapshot names it.</param>
+    public static string DescribeTypes(IReadOnlyList<TypeLink> links, string? first)
+    {
+        // A line joins the types of one assembly, unless one of them tells an async method or a lambda, which goes on a line of its own
+        var lines = new List<(string? Assembly, List<string> Segments, bool Standalone)>();
+        var family = (string?)null;
+        var repeats = 1;
+
+        if (first is not null)
+            lines.Add((links.Count > 0 ? links[0].Assembly : null, [first], false));
+
+        for (var index = 0; index < links.Count; index++)
+        {
+            var (name, assembly, plugin) = links[index];
+            var last = index == links.Count - 1;
+
+            // The internals of a collection, and the array of its elements, are told by the collection
+            if (!last && family is not null && (IsCollectionPart(name, family, field: null) || name.EndsWith(']')))
+                continue;
+
+            family = last ? null : GetCollectionFamily(name);
+
+            var standalone = true;
+            string text;
+
+            if (name.Contains("+AsyncStateMachineBox<"))
+                text = $"{(index > 0 && IsAwaitable(links[index - 1].TypeName) ? "awaited by " : "in ")}{DescribeStateMachine(GetStateMachineName(name))}";
+            else if (IsStateMachine(name) && index > 0 && links[index - 1].TypeName.Contains("+AsyncStateMachineBox<"))
+                continue;
+            else if (IsStateMachine(name))
+                text = DescribeStateMachine(name);
+            else if (DisplayClassPattern().IsMatch(name))
+                text = $"captures of a lambda in {ShortName(StripClosures(name))}";
+            else if (name.StartsWith("System.Threading.Tasks.Task"))
+                text = DescribeTask(name);
+            else if (last && name is "System.Reflection.LoaderAllocator")
+                text = "the plugin's loader allocator";
+            else
+            {
+                text = ShortName(name);
+                standalone = last;
+            }
+
+            if (plugin is not null)
+                text += $" of {plugin}";
+
+            // The nodes of a list, one after another, are told once with how many there are
+            if (!standalone && index > 0 && links[index - 1].TypeName == name && lines is [.., { Standalone: false } previous] && previous.Segments.Count > 0)
+            {
+                repeats++;
+                previous.Segments[^1] = $"{text} ×{repeats}";
+                continue;
+            }
+
+            repeats = 1;
+
+            if (!standalone && lines is [.., { Standalone: false } open] && open.Assembly == assembly && open.Segments.Sum(segment => segment.Length + 3) + text.Length <= MaximumLineLength)
+                open.Segments.Add(text);
+            else
+                lines.Add((last ? PluginAssembly : assembly, [text], standalone));
+        }
+
+        var builder = new StringBuilder();
+        var depth = 1;
+
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (index > 0 && lines[index].Assembly != lines[index - 1].Assembly)
+                depth++;
+
+            if (index > 0)
+                builder.Append('\n');
+
+            builder.Insert(builder.Length, Indentation, depth).AppendJoin(" → ", lines[index].Segments);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsAwaitable(string name)
+    {
+        return name.Contains("+AsyncStateMachineBox<") || name.StartsWith("System.Threading.Tasks.Task");
+    }
+
+    // A box names the state machine it runs as its last generic argument
+    private static string GetStateMachineName(string boxName)
+    {
+        var start = boxName.IndexOf("+AsyncStateMachineBox<", StringComparison.Ordinal) + "+AsyncStateMachineBox<".Length;
+        return boxName.EndsWith('>') ? boxName[start..^1] : boxName[start..];
+    }
+
+    /// <summary>An object of a chain that only its type is known of.</summary>
+    /// <param name="TypeName">The type, as the runtime names it.</param>
+    /// <param name="Assembly">The assembly of the type.</param>
+    /// <param name="Plugin">The plugin the type is of, if any.</param>
+    public readonly record struct TypeLink(string TypeName, string? Assembly, string? Plugin);
+
     private static string DescribeRoot(ClrRoot root)
     {
         return root switch

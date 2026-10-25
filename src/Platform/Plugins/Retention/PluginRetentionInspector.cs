@@ -6,7 +6,8 @@ namespace Void.Proxy.Plugins.Retention;
 
 /// <summary>
 /// Tells what keeps a plugin that refuses to unload alive. The proxy can't read its own heap while it runs, so it writes a dump of itself and
-/// has another process of its own executable read the dump.
+/// has another process of its own executable read the dump. A runtime without createdump and DAC, as on Android, sends the proxy a snapshot of
+/// its heap instead.
 /// </summary>
 internal static class PluginRetentionInspector
 {
@@ -24,6 +25,9 @@ internal static class PluginRetentionInspector
     /// <returns>The chains as code reads them, and the same chains as the runtime names their frames.</returns>
     public static async ValueTask<(string Chains, string Frames)> DescribeAsync(GCHandle pluginType, CancellationToken cancellationToken)
     {
+        if (!CarriesRuntimeDiagnostics(CreateDumpFileName) || !CarriesRuntimeDiagnostics(DacFileName))
+            return (await PluginRetentionSnapshot.DescribeAsync(pluginType, cancellationToken), string.Empty);
+
         var dumpPath = Path.Combine(Path.GetTempPath(), $"void-plugin-retention-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
 
         try
@@ -37,6 +41,12 @@ internal static class PluginRetentionInspector
         {
             File.Delete(dumpPath);
         }
+    }
+
+    /// <summary>Tells whether the arguments start the proxy's executable as an analyzer.</summary>
+    public static bool IsAnalyzer(string[] arguments)
+    {
+        return arguments is [AnalyzeArgument, ..];
     }
 
     /// <summary>Runs the analyzer that <see cref="AnalyzeArgument" /> starts.</summary>
@@ -109,13 +119,19 @@ internal static class PluginRetentionInspector
 
     private delegate int SetProcessOption(int option, nint argument2, nint argument3, nint argument4, nint argument5);
 
-    private static async ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, CancellationToken cancellationToken)
+    private static ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, CancellationToken cancellationToken)
+    {
+        var dacPath = File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName)) ? Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName) : GetRuntimeDiagnosticsFile(DacFileName);
+        return RunAnalyzerAsync([AnalyzeArgument, dumpPath, handle.ToString(), dacPath], cancellationToken);
+    }
+
+    private static async ValueTask<string> RunAnalyzerAsync(string[] arguments, CancellationToken cancellationToken)
     {
         var startInfo = CreateAnalyzerStartInfo();
-        startInfo.ArgumentList.Add(AnalyzeArgument);
-        startInfo.ArgumentList.Add(dumpPath);
-        startInfo.ArgumentList.Add(handle.ToString());
-        startInfo.ArgumentList.Add(File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName)) ? Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName) : GetRuntimeDiagnosticsFile(DacFileName));
+
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;
 
@@ -171,6 +187,11 @@ internal static class PluginRetentionInspector
 
         // The runtime lives in shared/Microsoft.NETCore.App/<version> of the installation the host is in.
         return Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", hostName));
+    }
+
+    private static bool CarriesRuntimeDiagnostics(string fileName)
+    {
+        return File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), fileName)) || typeof(PluginRetentionInspector).Assembly.GetManifestResourceInfo($"RuntimeDiagnostics/{fileName}") is not null;
     }
 
     private static string DacFileName => OperatingSystem.IsWindows() ? "mscordaccore.dll" : OperatingSystem.IsMacOS() ? "libmscordaccore.dylib" : "libmscordaccore.so";

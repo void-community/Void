@@ -88,7 +88,7 @@ public static class VoidEntryPoint
     private static async Task<int> Main(string[] args)
     {
         // The proxy starts its own executable to analyze a dump of itself, as it does for a plugin that refuses to unload.
-        if (args is [PluginRetentionInspector.AnalyzeArgument, ..])
+        if (PluginRetentionInspector.IsAnalyzer(args))
             return PluginRetentionInspector.Analyze(args);
 
         var options = new RunOptions { Arguments = args };
