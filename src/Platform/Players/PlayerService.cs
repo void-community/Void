@@ -120,6 +120,7 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
 
             // Only a live link notices the player leaving, so a player that is still joining a server is read here until it leaves
             var linked = links.TryGetLink(player, out var playingLink) && playingLink.IsAlive;
+            logger.LogTrace("Kick of {Player} handled: {Kicked}, through a live link: {Linked}", player, kicked, linked);
 
             if (kicked && linked)
             {
@@ -138,6 +139,8 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
 
                 if (channel.IsAlive)
                     logger.LogWarning("Plugins didn't handle graceful {Player} player kick in {Timeout}ms", player, settings.KickTimeout);
+                else
+                    logger.LogTrace("Player {Player} left {Elapsed}ms after its kick", player, (int)Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds);
             }
 
             channel.TryResume();
