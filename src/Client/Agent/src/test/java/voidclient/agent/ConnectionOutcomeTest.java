@@ -16,6 +16,7 @@ public final class ConnectionOutcomeTest {
     public void clearOperation() throws Exception {
         field(GameAutomationController.class, "pending").set(null, null);
         JoinedConnection.joined(null);
+        JoinedConnection.reasonGraceNanos = JoinedConnection.DefaultReasonGraceNanos;
     }
 
     @Test
@@ -37,6 +38,7 @@ public final class ConnectionOutcomeTest {
     public void disconnectClosesTheChannelOfTheJoinedServer() {
         Network joined = new Network(true);
         JoinedConnection.joined(joined);
+        JoinedConnection.reasonGraceNanos = 0;
 
         Assert.assertEquals("{\"status\":\"ok\",\"stage\":\"disconnect.requested\"}", GameAutomationController.disconnectJson());
         Assert.assertFalse(joined.open);
@@ -108,8 +110,23 @@ public final class ConnectionOutcomeTest {
         Network joined = new Network(true);
         JoinedConnection.joined(joined);
         joined.open = false;
+        JoinedConnection.reasonGraceNanos = 0;
 
         Assert.assertEquals("The connection to the server closed", JoinedConnection.closedReason());
+    }
+
+    @Test
+    public void closedChannelWaitsForTheGameToTellWhy() {
+        Network joined = new Network(true);
+        JoinedConnection.joined(joined);
+        joined.open = false;
+        JoinedConnection.reasonGraceNanos = java.util.concurrent.TimeUnit.MINUTES.toNanos(1);
+
+        Assert.assertNull(JoinedConnection.closedReason());
+
+        JoinedConnection.disconnected(joined, "Kicked by an operator");
+
+        Assert.assertEquals("Kicked by an operator", JoinedConnection.closedReason());
     }
 
     @Test
