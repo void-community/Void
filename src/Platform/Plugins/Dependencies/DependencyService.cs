@@ -96,7 +96,17 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                         var players = rootContainer.GetRequiredService<IPlayerService>();
 
                         foreach (var player in players.All)
-                            GetEntryPoint(player, assembly).GetRequiredService(serviceType);
+                        {
+                            // A player that leaves meanwhile has its scopes disposed, and needs none of its services any more
+                            try
+                            {
+                                GetEntryPoint(player, assembly).GetRequiredService(serviceType);
+                            }
+                            catch (ContainerException) when (player.Context.IsDisposed)
+                            {
+                                logger.LogTrace("Player {Player} left before its {ServiceType} service activated", player, serviceType);
+                            }
+                        }
 
                         break;
                     }
