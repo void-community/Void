@@ -15,12 +15,21 @@ final class JoinedConnection {
     private static volatile WeakReference<Object> connection = new WeakReference<Object>(null);
     private static volatile boolean joined;
     private static volatile String disconnectReason;
+    private static volatile long closedAt;
+
+    /**
+     * How long the game has to tell why its connection closed once its network thread closed the channel. The game handles the packets
+     * it read before the end of the connection, a disconnect's reason among them, on its own thread afterwards.
+     */
+    static final long DefaultReasonGraceNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+    static volatile long reasonGraceNanos = DefaultReasonGraceNanos;
 
     private JoinedConnection() {
     }
 
     static void joined(Object value) {
         disconnectReason = null;
+        closedAt = 0;
         connection = new WeakReference<Object>(value);
         joined = value != null;
     }
@@ -101,7 +110,16 @@ final class JoinedConnection {
         if (Boolean.TRUE.equals(open) || open == null && reason == null)
             return null;
 
-        return reason == null ? "The connection to the server closed" : reason;
+        if (reason != null)
+            return reason;
+
+        // A closed channel the game hasn't told about yet still has its reason coming, which only a game that never tells goes without.
+        long now = System.nanoTime();
+
+        if (closedAt == 0)
+            closedAt = now;
+
+        return now - closedAt < reasonGraceNanos ? null : "The connection to the server closed";
     }
 
     /**

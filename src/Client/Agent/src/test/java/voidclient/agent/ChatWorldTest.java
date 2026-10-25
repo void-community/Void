@@ -33,7 +33,9 @@ public final class ChatWorldTest {
         advance();
         Assert.assertNull(response(operation));
 
+        // The game tells why its connection closed, as it does once it handles the closed channel.
         joined.open = false;
+        JoinedConnection.disconnected(joined, "Kicked by an operator");
         advance();
         Assert.assertTrue(response(operation), response(operation).contains("\"connection.closed\""));
     }
