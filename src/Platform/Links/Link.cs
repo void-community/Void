@@ -134,6 +134,9 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
     {
         await Task.Yield();
 
+        // A server that closes its connection may have sent something last, such as why it kicks the player, which the other direction reads
+        var serverClosed = false;
+
         while (sourceChannel is { CanRead: true } && destinationChannel is { CanWrite: true })
         {
             if (cancellationToken.IsCancellationRequested || forceCancellationToken.IsCancellationRequested)
@@ -203,6 +206,7 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
                     _ => throw new ArgumentOutOfRangeException(nameof(direction), direction, null)
                 };
 
+                serverClosed = direction is Direction.Serverbound;
                 break;
             }
             catch (Exception exception)
@@ -250,6 +254,11 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
                     break;
                 case Direction.Serverbound:
                     _playerToServerTaskDisposed = true;
+
+                    // The other direction reads what the server sent before it closed, until the connection ends
+                    if (serverClosed && _serverToPlayerTask is not null)
+                        await WaitWithTimeout(_serverToPlayerTask);
+
                     await DisposeClientboundAsync();
                     break;
                 default:
