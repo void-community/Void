@@ -18,8 +18,24 @@ public class MinecraftPacketIdPluginsRegistry : IMinecraftPacketIdPluginsRegistr
     public bool IsEmpty => All.All(registry => registry.IsEmpty);
     public ProtocolVersion? ProtocolVersion { get; set; }
     public IPlugin? ManagedBy { get; set; }
-    public IReadOnlyCollection<IMinecraftPacketIdRegistry> Read => _read.Values;
-    public IReadOnlyCollection<IMinecraftPacketIdRegistry> Write => _write.Values;
+    // Links read the registries as plugins unload and phases change them, so each read takes a snapshot
+    public IReadOnlyCollection<IMinecraftPacketIdRegistry> Read
+    {
+        get
+        {
+            lock (this)
+                return [.. _read.Values];
+        }
+    }
+
+    public IReadOnlyCollection<IMinecraftPacketIdRegistry> Write
+    {
+        get
+        {
+            lock (this)
+                return [.. _write.Values];
+        }
+    }
 
     public IMinecraftPacketIdRegistry Get(Operation operation, IPlugin plugin)
     {
@@ -37,10 +53,7 @@ public class MinecraftPacketIdPluginsRegistry : IMinecraftPacketIdPluginsRegistr
             };
 
             if (!map.TryGetValue(plugin, out var registry))
-            {
-                lock (this)
-                    map[plugin] = registry = new MinecraftPacketIdRegistry();
-            }
+                map[plugin] = registry = new MinecraftPacketIdRegistry();
 
             return registry;
         }
@@ -117,13 +130,13 @@ public class MinecraftPacketIdPluginsRegistry : IMinecraftPacketIdPluginsRegistr
         {
             if (operation.HasFlag(Operation.Read))
             {
-                foreach (var registry in Read)
+                foreach (var registry in _read.Values)
                     registry.Clear(direction);
             }
 
             if (operation.HasFlag(Operation.Write))
             {
-                foreach (var registry in Write)
+                foreach (var registry in _write.Values)
                     registry.Clear(direction);
             }
         }
