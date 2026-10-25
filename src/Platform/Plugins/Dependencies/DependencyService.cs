@@ -155,7 +155,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                     _ = GetEntryPoint(context.Player, assembly).GetRequiredService(registration.ServiceType);
                 }
             }
-            catch (ContainerException) when (container.Root.Container.IsDisposed)
+            // Its container leaves the entry point before it is disposed, which then has no services of it to resolve
+            catch (Exception exception) when (exception is ContainerException or InvalidOperationException && (container.Root.Container.IsDisposed || !_plugins.ContainsKey(assembly)))
             {
                 // The plugin unloaded meanwhile, and has no services for the player any more
             }

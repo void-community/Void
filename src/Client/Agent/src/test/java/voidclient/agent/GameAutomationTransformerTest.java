@@ -165,6 +165,62 @@ public final class GameAutomationTransformerTest {
         Assert.assertFalse(GameAutomationTransformer.instrumentConnection(type, java.util.Collections.singleton("java/lang/Object")));
     }
 
+    @Test
+    public void keepsTheDisconnectReasonBeforeTheChannelCloses() throws Exception {
+        String name = ClosingConnection.class.getName().replace('.', '/');
+        ClassNode type = new ClassNode();
+        try (InputStream input = ClosingConnection.class.getResourceAsStream("/" + name + ".class")) {
+            new ClassReader(input).accept(type, 0);
+        }
+        MethodNode disconnect = null;
+        for (MethodNode method : type.methods)
+            if ("disconnect".equals(method.name))
+                disconnect = method;
+        Assert.assertTrue(GameAutomationTransformer.recordReasonBeforeClose(type, disconnect));
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        type.accept(writer);
+        final Class<?> closing = new BytecodeLoader().define(writer.toByteArray());
+        final Object connection = closing.getConstructor().newInstance();
+        final Object[] reasonAtClose = new Object[1];
+        final boolean[] open = { true };
+        closing.getField("channel").set(connection, java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+            new Class<?>[] { io.netty.channel.Channel.class }, new java.lang.reflect.InvocationHandler() {
+                @Override
+                public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] arguments) throws Exception {
+                    if ("isOpen".equals(method.getName()))
+                        return Boolean.valueOf(open[0]);
+                    if (!"close".equals(method.getName()))
+                        throw new UnsupportedOperationException(method.getName());
+                    reasonAtClose[0] = closing.getField("reason").get(connection);
+                    open[0] = false;
+                    return null;
+                }
+            }));
+        Reason kick = new Reason();
+
+        closing.getMethod("disconnect", Reason.class).invoke(connection, kick);
+        Assert.assertSame(kick, reasonAtClose[0]);
+
+        // A disconnect once the channel closed keeps the reason the game was told first.
+        closing.getMethod("disconnect", Reason.class).invoke(connection, new Reason());
+        Assert.assertSame(kick, closing.getField("reason").get(connection));
+    }
+
+    // The disconnect of Minecraft's connection, which keeps its reason only after it closes the channel.
+    public static class ClosingConnection {
+        public io.netty.channel.Channel channel;
+        public Reason pending;
+        public Reason reason;
+        public void disconnect(Reason reason) {
+            if (channel == null)
+                this.pending = reason;
+            if (channel.isOpen()) {
+                channel.close();
+                this.reason = reason;
+            }
+        }
+    }
+
     public static class Reason {
     }
 
