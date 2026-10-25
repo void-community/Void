@@ -40,8 +40,12 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
             if (player.Link is not { } link)
                 continue;
 
-            link.PlayerChannel.MinecraftRegistries.ClearPlugin(@event.Plugin);
-            link.ServerChannel.MinecraftRegistries.ClearPlugin(@event.Plugin);
+            // A channel that carries no Minecraft packets, as one built while no protocol read its handshake does, keeps no registries
+            foreach (var channel in (INetworkChannel[])[link.PlayerChannel, link.ServerChannel])
+            {
+                if (channel.TryGet<IMinecraftPacketMessageStream>(out var stream))
+                    stream.Registries.ClearPlugin(@event.Plugin);
+            }
         }
     }
 
