@@ -203,25 +203,25 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
     }
 
     [Subscribe]
-    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
+    public void OnPluginUnloading(PluginUnloadingEvent @event)
     {
         if (@event.Plugin != plugin)
             return;
 
         events.UnregisterListeners(this);
 
-        await players.ForEachAsync(async (player, eachCancellationToken) =>
+        players.ForEach(player =>
         {
-            var channel = await player.GetChannelAsync(eachCancellationToken);
-
-            if (!channel.TryGet<IMinecraftPacketMessageStream>(out _))
+            // A player still connecting has no channel to keep the plugin's registries yet, and building one here would build it for the
+            // player as it was before a protocol took it
+            if (player.Context.Channel is not { } channel || !channel.TryGet<IMinecraftPacketMessageStream>(out _))
                 return;
 
             if (links.TryGetLink(player, out var link))
                 link.ServerChannel.DisposeRegistries(plugin);
 
             channel.DisposeRegistries(plugin);
-        }, cancellationToken);
+        });
     }
 
     protected static IEnumerable<IMinecraftPacket> DecodeBinaryMessage(ILink link, Operation operation, IMinecraftPacketIdPluginsRegistry registries, IMinecraftPacketTransformationsPluginsRegistry transformationsMappings, IMinecraftBinaryMessage binaryMessage)
