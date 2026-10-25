@@ -33,7 +33,7 @@ final class ConnectionTrace {
         if (Inactive.equals(event))
             print(connection, "channel inactive; read last: " + lastReads(connection));
         else if (Exception.equals(event))
-            print(connection, "caught " + detail);
+            print(connection, "caught " + stackTrace(detail));
         else if (Disconnect.equals(event))
             print(connection, "disconnecting with \"" + JoinedConnection.reasonText(detail) + "\"");
     }
@@ -72,6 +72,16 @@ final class ConnectionTrace {
         return "Void client agent connection " + Integer.toHexString(System.identityHashCode(connection)) + " at "
             + new SimpleDateFormat("HH:mm:ss.SSS").format(new Date()) + " on " + Thread.currentThread().getName()
             + " (channel open: " + JoinedConnection.isOpen(connection) + "): " + text;
+    }
+
+    // The game logs what its connections catch only at debug level, if at all, while where it was thrown tells which code of the game failed
+    static String stackTrace(Object detail) {
+        if (!(detail instanceof Throwable))
+            return String.valueOf(detail);
+
+        java.io.StringWriter text = new java.io.StringWriter();
+        ((Throwable) detail).printStackTrace(new java.io.PrintWriter(text));
+        return text.toString().trim();
     }
 
     private static void print(Object connection, String text) {
