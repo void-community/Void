@@ -142,11 +142,28 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         if (_loadingPlugin == @event.Plugin)
             _loadingPlugin = null;
 
-        if (!_pluginOptions.Remove(@event.Plugin.GetType().Assembly, out var pluginOptions))
-            return;
+        RemoveUnloadingPluginOptions();
+    }
 
-        foreach (var option in pluginOptions)
-            consoleConfiguration.RootCommand.Options.Remove(option);
+    // Again once the plugin's listeners are gone, as its code may still have asked for an option meanwhile
+    [Subscribe(PostOrder.Last)]
+    public void OnPluginUnloaded(PluginUnloadedEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+        RemoveUnloadingPluginOptions();
+    }
+
+    // Every plugin that unloads, rather than only the one an event tells of, as each keeps its context alive by its assembly
+    private void RemoveUnloadingPluginOptions()
+    {
+        foreach (var plugin in _pluginOptions.Keys.Where(plugin => AssemblyLoadContext.GetLoadContext(plugin) is PluginAssemblyLoadContext { IsUnloading: true }).ToArray())
+        {
+            if (!_pluginOptions.Remove(plugin, out var pluginOptions))
+                continue;
+
+            foreach (var option in pluginOptions)
+                consoleConfiguration.RootCommand.Options.Remove(option);
+        }
     }
 
     public async ValueTask HandleCommandsAsync(CancellationToken cancellationToken = default)
