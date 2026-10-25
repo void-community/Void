@@ -156,6 +156,10 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         {
             @event.Result = true;
         }
+
+        // The player is then disconnected without the reason, which its game shows as a lost connection
+        if (!@event.Result)
+            logger.LogDebug("Player {Player} in {Phase} phase has no packets to be told why it's kicked", @event.Player, @event.Player.Phase);
     }
 
     [Subscribe]
