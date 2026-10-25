@@ -41,8 +41,21 @@ public sealed class CopyOnWriteCollection<T>
         return added;
     }
 
-    public void RemoveAll(Predicate<T> match)
+    /// <summary>
+    /// Removes the items that match, as one change.
+    /// </summary>
+    /// <returns>How many items this change removed, which concurrent removals of the same item never count twice.</returns>
+    public int RemoveAll(Predicate<T> match)
     {
-        ImmutableInterlocked.Update(ref _items, static (items, match) => items.RemoveAll(match), match);
+        var removed = 0;
+
+        ImmutableInterlocked.Update(ref _items, (items, match) =>
+        {
+            var remaining = items.RemoveAll(match);
+            removed = items.Length - remaining.Length;
+            return remaining;
+        }, match);
+
+        return removed;
     }
 }

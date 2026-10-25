@@ -12,30 +12,36 @@ using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Api.Plugins.Dependencies;
 using Void.Proxy.Api.Settings;
 using Void.Proxy.Players.Extensions;
+using Void.Proxy.Plugins.Containers;
 
 namespace Void.Proxy.Players;
 
 public class PlayerService(ILogger<PlayerService> logger, IDependencyService dependencies, ILinkService links, IEventService events, ISettings settings) : IPlayerService, IEventListener
 {
     private readonly AsyncLock _lock = new();
-    private readonly List<PlayerProxy> _players = [];
+    // Players connect and leave while others enumerate them, as plugins that load do, so each enumeration reads a snapshot
+    private readonly CopyOnWriteCollection<PlayerProxy> _players = new();
 
-    public IEnumerable<IPlayer> All => _players.Select(proxy => proxy.Source);
+    public IEnumerable<IPlayer> All => _players.Snapshot.Select(proxy => proxy.Source);
 
     public void ForEach(Action<IPlayer> action)
     {
-        for (var i = _players.Count - 1; i >= 0; i--)
-            action(_players[i].Unwrap());
+        var players = _players.Snapshot;
+
+        for (var i = players.Length - 1; i >= 0; i--)
+            action(players[i].Unwrap());
     }
 
     public async ValueTask ForEachAsync(Func<IPlayer, CancellationToken, ValueTask> action, CancellationToken cancellationToken = default)
     {
-        for (var i = _players.Count - 1; i >= 0; i--)
+        var players = _players.Snapshot;
+
+        for (var i = players.Length - 1; i >= 0; i--)
         {
             if (cancellationToken.IsCancellationRequested)
                 break;
 
-            await action(_players[i].Unwrap(), cancellationToken);
+            await action(players[i].Unwrap(), cancellationToken);
         }
     }
 
@@ -85,7 +91,7 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
     {
         using var sync = await _lock.LockAsync(cancellationToken);
 
-        var proxy = _players.FirstOrDefault(proxy => proxy == player || proxy.Source == player) ??
+        var proxy = _players.Snapshot.FirstOrDefault(proxy => proxy == player || proxy.Source == player) ??
                     throw new InvalidOperationException($"Player {player} not found");
 
         proxy.Replace(upgradedPlayer);
