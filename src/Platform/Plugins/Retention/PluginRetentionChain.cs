@@ -800,6 +800,12 @@ internal static partial class PluginRetentionChain
         private readonly List<(string? Assembly, StringBuilder Text, List<string> Types)> _lines = [];
         private bool _open;
 
+        // The access the open line ends with, where it starts on the line, and how many times it came one after another, as the nodes of a
+        // list are reached
+        private string? _lastAccess;
+        private int _lastAccessStart;
+        private int _lastAccessRepeats;
+
         // What the next line calls the object it starts with, as a lambda calls what it captured.
         public string? Receiver { get; set; }
 
@@ -809,34 +815,57 @@ internal static partial class PluginRetentionChain
         {
             _lines.Add((assembly, new StringBuilder(text), [TypeNote(reached)]));
             _open = true;
+            _lastAccess = null;
         }
 
         public void Access(string? assembly, ClrObject owner, string access, ClrType? reached)
         {
             if (_open && _lines[^1].Assembly == assembly)
             {
-                if (_lines[^1].Text.Length + access.Length <= MaximumLineLength)
+                var text = _lines[^1].Text;
+
+                if (access == _lastAccess)
                 {
-                    _lines[^1].Text.Append(access);
+                    _lastAccessRepeats++;
+                    text.Length = _lastAccessStart;
+                    text.Append($"{access} ×{_lastAccessRepeats}");
                     _lines[^1].Types.Add(TypeNote(reached));
-                }
-                else
-                {
-                    _lines.Add((assembly, new StringBuilder(access), [TypeNote(reached)]));
+                    return;
                 }
 
+                if (text.Length + access.Length > MaximumLineLength)
+                {
+                    _lines.Add((assembly, new StringBuilder(), []));
+                    text = _lines[^1].Text;
+                }
+
+                Remember(text, access);
+                text.Append(access);
+                _lines[^1].Types.Add(TypeNote(reached));
                 return;
             }
 
-            _lines.Add((assembly, new StringBuilder((Receiver ?? VariableName(owner)) + access), [TypeNote(owner.Type), TypeNote(reached)]));
+            var line = new StringBuilder(Receiver ?? VariableName(owner));
+            Remember(line, access);
+            line.Append(access);
+
+            _lines.Add((assembly, line, [TypeNote(owner.Type), TypeNote(reached)]));
             _open = true;
             Receiver = null;
+        }
+
+        private void Remember(StringBuilder line, string access)
+        {
+            _lastAccess = access;
+            _lastAccessStart = line.Length;
+            _lastAccessRepeats = 1;
         }
 
         public void Line(string? assembly, string text, ClrType? reached = null)
         {
             _lines.Add((assembly, new StringBuilder(text), reached is null ? [] : [TypeNote(reached)]));
             _open = false;
+            _lastAccess = null;
         }
 
         public override string ToString()
