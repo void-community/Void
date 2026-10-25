@@ -37,11 +37,12 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
     {
         foreach (var player in players.All)
         {
-            if (player.Link is not { } link)
-                continue;
+            // The player's own channel keeps what plugins registered on it while it joins or moves between servers, without a link
+            var pendingLink = links.TryGetWeakLink(player, out var weakLink) ? weakLink : null;
+            INetworkChannel?[] channels = [player.Context.Channel, player.Link?.PlayerChannel, player.Link?.ServerChannel, pendingLink?.ServerChannel];
 
             // A channel that carries no Minecraft packets, as one built while no protocol read its handshake does, keeps no registries
-            foreach (var channel in (INetworkChannel[])[link.PlayerChannel, link.ServerChannel])
+            foreach (var channel in channels.OfType<INetworkChannel>().Distinct())
             {
                 if (channel.TryGet<IMinecraftPacketMessageStream>(out var stream))
                     stream.Registries.ClearPlugin(@event.Plugin);
