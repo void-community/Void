@@ -1,5 +1,8 @@
 ﻿using System.CommandLine;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Nito.AsyncEx;
 using Void.Proxy.Api;
 using Void.Proxy.Api.Commands;
@@ -17,8 +20,8 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 {
     private readonly AsyncLock _optionDiscoveryLock = new();
 
-    // Options a plugin discovers while it loads belong to it and leave with it, so the plugin can discover them again when it loads again.
-    private readonly Dictionary<IPlugin, List<Option>> _pluginOptions = [];
+    // Options a plugin discovers belong to it and leave with it, so the plugin can discover them again when it loads again.
+    private readonly Dictionary<Assembly, List<Option>> _pluginOptions = [];
     private IPlugin? _loadingPlugin;
 
     private readonly PromptReader _reader = new();
@@ -83,13 +86,27 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         var insertIndex = options.TakeWhile(existing => (-(existing.Aliases?.Count ?? 0), existing.Name?.ToLowerInvariant() ?? string.Empty).CompareTo((-(option.Aliases?.Count ?? 0), option.Name?.ToLowerInvariant() ?? string.Empty)) < 0).Count();
         options.Insert(insertIndex, option);
 
-        if (_loadingPlugin is not { } plugin)
+        // The plugin whose code asks for the option, which a player that joins can make it do while another plugin loads
+        if ((FindCallingPluginAssembly() ?? _loadingPlugin?.GetType().Assembly) is not { } plugin)
             return;
 
         if (!_pluginOptions.TryGetValue(plugin, out var pluginOptions))
             _pluginOptions[plugin] = pluginOptions = [];
 
         pluginOptions.Add(option);
+    }
+
+    // Plugins load into collectible contexts, which the proxy's own code isn't in
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Assembly? FindCallingPluginAssembly()
+    {
+        foreach (var frame in new StackTrace().GetFrames())
+        {
+            if (frame.GetMethod()?.DeclaringType?.Assembly is { IsCollectible: true } assembly)
+                return assembly;
+        }
+
+        return null;
     }
 
     // Plugins load one at a time, so the options discovered until a plugin has loaded are its own.
@@ -117,7 +134,7 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         if (_loadingPlugin == @event.Plugin)
             _loadingPlugin = null;
 
-        if (!_pluginOptions.Remove(@event.Plugin, out var pluginOptions))
+        if (!_pluginOptions.Remove(@event.Plugin.GetType().Assembly, out var pluginOptions))
             return;
 
         foreach (var option in pluginOptions)
