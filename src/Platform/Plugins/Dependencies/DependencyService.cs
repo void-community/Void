@@ -212,7 +212,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
         return CombineLazy(
             () => GetScopedContainers(playerStableHashCode, preferredAssembly),
-            () => GetRootContainers(preferredAssembly));
+            () => GetRootContainers(preferredAssembly),
+            player.Context);
     }
 
     public IServiceProvider GetEntryPoint(Assembly? preferredAssembly = null)
@@ -364,7 +365,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         return CombineLazy(() => containers);
     }
 
-    private Container CombineLazy(Func<IEnumerable<IServiceProvider>> getContainers, Func<IEnumerable<IServiceProvider>>? getSingletonContainers = null)
+    private Container CombineLazy(Func<IEnumerable<IServiceProvider>> getContainers, Func<IEnumerable<IServiceProvider>>? getSingletonContainers = null, IPlayerContext? playerContext = null)
     {
         var events = rootContainer.Resolve<IEventService>();
         var getSingletonResolutionContainers = getSingletonContainers ?? getContainers;
@@ -418,8 +419,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                 {
                     events.RegisterListeners(listener);
 
-                    // A player that connects as a plugin unloads resolves the plugin's services after its listeners were unregistered
-                    if (listener.GetType().Assembly is { IsCollectible: true } listenerAssembly && !_plugins.ContainsKey(listenerAssembly))
+                    // A player that connects as a plugin unloads resolves the plugin's services after its listeners were unregistered, and a player
+                    // that leaves as its services activate has its scopes, and their listeners, disposed meanwhile
+                    if ((listener.GetType().Assembly is { IsCollectible: true } listenerAssembly && !_plugins.ContainsKey(listenerAssembly)) || (playerContext is { IsDisposed: true } && !IsSingletonService(serviceType)))
                         events.UnregisterListeners(listener);
                 }
 
