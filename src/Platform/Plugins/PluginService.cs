@@ -40,7 +40,8 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
 
-    public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.Plugins);
+    // A container that unloads has plugins no more, whose instances it may have let go already
+    public IEnumerable<IPlugin> All => _containers.Snapshot.Where(container => !container.IsUnloading).SelectMany(container => container.Plugins);
 
     public IEnumerable<string> Containers => _containers.Snapshot
         .Select(container => container.Context.Name)
@@ -357,7 +358,8 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
 
-        _containers.RemoveAll(reference => !reference.IsAlive);
+        // The container's plugins are collected, which the references it keeps to them may tell a moment later
+        _containers.RemoveAll(reference => reference == container || !reference.IsAlive);
     }
 
     // Its own state machine, so the last plugin it throws the events for isn't kept by the one that waits for the plugin to be collected.
