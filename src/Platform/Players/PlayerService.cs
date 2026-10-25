@@ -169,7 +169,9 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
     [Subscribe]
     public async ValueTask OnLinkStopped(LinkStoppedEvent @event, CancellationToken cancellationToken)
     {
-        if (@event.Reason is LinkStopReason.Requested)
+        // A link stops on request as its player moves to another server, unless the player left meanwhile, as one that kicks itself from its
+        // chat does, while the link its command came through is still alive
+        if (@event.Reason is LinkStopReason.Requested && @event.Link.PlayerChannel.IsAlive)
             return;
 
         var isPlayerAlive = @event.Reason is not LinkStopReason.PlayerDisconnected && @event.Link.PlayerChannel.IsAlive;
