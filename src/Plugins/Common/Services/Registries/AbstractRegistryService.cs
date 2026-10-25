@@ -327,17 +327,22 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
 
     internal static void ClearLinkTransformations(INetworkChannel playerChannel, INetworkChannel serverChannel, bool preservePlayerChannel)
     {
+        // The player still plays its protocol without a link, so the proxy's own packets to it, such as a kick as the proxy stops, still
+        // need the system transformations of its version. The next link registers them only where they are missing, and the protocol plugin
+        // releases them as it unloads.
         if (!preservePlayerChannel)
-            ClearTransformations(playerChannel);
+            ClearTransformations(playerChannel, system: false);
 
-        ClearTransformations(serverChannel);
+        ClearTransformations(serverChannel, system: true);
 
-        static void ClearTransformations(INetworkChannel channel)
+        static void ClearTransformations(INetworkChannel channel, bool system)
         {
             if (!channel.TryGet<IMinecraftPacketMessageStream>(out var packetStream))
                 return;
 
-            packetStream.Registries.PacketTransformationsSystem.Clear();
+            if (system)
+                packetStream.Registries.PacketTransformationsSystem.Clear();
+
             packetStream.Registries.PacketTransformationsPlugins.Clear();
         }
     }
