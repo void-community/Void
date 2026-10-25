@@ -46,11 +46,36 @@ internal static class PluginRetentionInspector
         return 0;
     }
 
-    // The runtime writes the dump itself, which works whether or not the system lets one process read another.
+    // The runtime writes the dump itself, with the createdump next to it. A single-file build has none there, so it runs the one it carries
+    // on itself, which the system lets a process do to the one that started it.
     private static async ValueTask WriteDumpAsync(string dumpPath, CancellationToken cancellationToken)
     {
-        var client = new DiagnosticsClient(Environment.ProcessId);
-        await client.WriteDumpAsync(DumpType.Full, dumpPath, logDumpGeneration: false, cancellationToken);
+        if (File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), CreateDumpFileName)))
+        {
+            var client = new DiagnosticsClient(Environment.ProcessId);
+            await client.WriteDumpAsync(DumpType.Full, dumpPath, logDumpGeneration: false, cancellationToken);
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo(GetRuntimeDiagnosticsFile(CreateDumpFileName))
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        startInfo.ArgumentList.Add("--full");
+        startInfo.ArgumentList.Add("-f");
+        startInfo.ArgumentList.Add(dumpPath);
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("createdump didn't start");
+
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+
+        if (process.ExitCode is not 0 || !File.Exists(dumpPath))
+            throw new InvalidOperationException($"createdump failed with exit code {process.ExitCode}: {await errorTask}{await outputTask}");
     }
 
     private static async ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, CancellationToken cancellationToken)
@@ -59,7 +84,7 @@ internal static class PluginRetentionInspector
         startInfo.ArgumentList.Add(AnalyzeArgument);
         startInfo.ArgumentList.Add(dumpPath);
         startInfo.ArgumentList.Add(handle.ToString());
-        startInfo.ArgumentList.Add(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName));
+        startInfo.ArgumentList.Add(File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName)) ? Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName) : GetRuntimeDiagnosticsFile(DacFileName));
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;
 
@@ -118,4 +143,33 @@ internal static class PluginRetentionInspector
     }
 
     private static string DacFileName => OperatingSystem.IsWindows() ? "mscordaccore.dll" : OperatingSystem.IsMacOS() ? "libmscordaccore.dylib" : "libmscordaccore.so";
+
+    private static string CreateDumpFileName => OperatingSystem.IsWindows() ? "createdump.exe" : "createdump";
+
+    // A single-file build carries the createdump and DAC of its runtime as resources, which run from a directory of their runtime's version.
+    private static string GetRuntimeDiagnosticsFile(string fileName)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"void-runtime-diagnostics-{RuntimeInformation.RuntimeIdentifier}-{Environment.Version}");
+        var path = Path.Combine(directory, fileName);
+
+        if (File.Exists(path))
+            return path;
+
+        using var resource = typeof(PluginRetentionInspector).Assembly.GetManifestResourceStream($"RuntimeDiagnostics/{fileName}")
+            ?? throw new FileNotFoundException($"The proxy carries no {fileName} of its runtime", fileName);
+
+        Directory.CreateDirectory(directory);
+
+        // Written aside and moved, so another proxy extracting it at once never runs a file half written.
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}";
+
+        using (var file = File.Create(temporaryPath))
+            resource.CopyTo(file);
+
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(temporaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        File.Move(temporaryPath, path, overwrite: true);
+        return path;
+    }
 }

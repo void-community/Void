@@ -163,4 +163,12 @@
 			<LogicalName>%(Filename)%(Extension)</LogicalName>
 		</EmbeddedResource>
 	</ItemGroup>
+
+	<!-- Single-file builds leave out the createdump and DAC of the runtime, which the proxy carries itself to tell what keeps a plugin alive that refuses to unload -->
+	<Target Name="EmbedRuntimeDiagnostics" AfterTargets="ResolveRuntimePackAssets" Condition="'$(PublishSingleFile)' == 'true' and '$(SelfContained)' == 'true'">
+		<ItemGroup>
+			<EmbeddedResource Include="@(RuntimePackAsset)" Condition="'%(Filename)' == 'createdump' or '%(Filename)' == 'libmscordaccore' or '%(Filename)' == 'mscordaccore'" LogicalName="RuntimeDiagnostics/%(Filename)%(Extension)" WithCulture="false" Type="Non-Resx" />
+		</ItemGroup>
+	</Target>
+
 </Project>

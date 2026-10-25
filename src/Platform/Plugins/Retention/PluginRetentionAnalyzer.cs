@@ -40,7 +40,10 @@ internal static class PluginRetentionAnalyzer
         using var timeout = new CancellationTokenSource(SearchTimeout);
         var chains = new HashSet<string>();
 
-        foreach (var (root, path) in new GCRoot(heap, [loaderAllocator]).EnumerateRootPaths(timeout.Token))
+        // An object of the plugin keeps its loader allocator alive through its type rather than a field, so chains to its objects count too.
+        ulong[] targets = [loaderAllocator, .. heap.EnumerateObjects().Where(link => link.Type is { IsCollectible: true } type && type.LoaderAllocatorHandle == loaderAllocatorHandle).Select(link => link.Address)];
+
+        foreach (var (root, path) in new GCRoot(heap, targets).EnumerateRootPaths(timeout.Token))
         {
             var links = new List<ClrObject>();
 

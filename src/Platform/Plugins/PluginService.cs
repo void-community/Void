@@ -284,7 +284,10 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     public async ValueTask UnloadContainersAsync(CancellationToken cancellationToken = default)
     {
         logger.LogInformation("Unloading all plugins");
+
+        // A container that refused to unload was told of as it did, and is no closer to unloading now.
         await _containers.Snapshot
+            .Where(reference => !reference.IsUnloading)
             .Select(reference => reference.Context.Name)
             .WhereNotNull()
             .Select(async name =>

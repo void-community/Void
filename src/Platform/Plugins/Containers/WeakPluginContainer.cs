@@ -28,6 +28,11 @@ public class WeakPluginContainer
     public IEnumerable<IPlugin> Plugins => GetReferences();
     public bool IsAlive => _references.Snapshot.All(plugin => plugin.TryGetTarget(out _));
     public PluginAssemblyLoadContext Context { get; }
+
+    /// <summary>
+    /// Gets whether the container started to unload, and is still referenced, as a container that refused to unload is.
+    /// </summary>
+    public bool IsUnloading => _state is State.Unloading;
     public CancellationTokenSource CancellationTokenSource { get; } = new();
 
     /// <summary>
