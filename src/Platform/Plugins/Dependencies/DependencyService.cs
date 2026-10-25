@@ -102,7 +102,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                             {
                                 GetEntryPoint(player, assembly).GetRequiredService(serviceType);
                             }
-                            catch (Exception exception) when (exception is ContainerException or InvalidOperationException && player.Context.IsDisposed)
+                            // DryIoc fails variously as the scope of the player disposes under the resolution
+                            catch (Exception) when (player.Context.IsDisposed)
                             {
                                 logger.LogTrace("Player {Player} left before its {ServiceType} service activated", player, serviceType);
                             }
