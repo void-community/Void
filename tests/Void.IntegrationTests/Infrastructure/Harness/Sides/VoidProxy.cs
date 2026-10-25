@@ -169,18 +169,23 @@ public record VoidProxy(CollectingTextWriter LogWriter, VoidEntryPoint.RunResult
     {
         var stateLock = new Lock();
         var disconnected = false;
+        var linkStopping = false;
+        var linkStopped = false;
 
+        // The player's link may finish stopping before or after the player is told to have disconnected, and a player that never got a link
+        // only disconnects
         await LogWriter.WaitForLineAsync(line =>
         {
             using var _ = stateLock.EnterScope();
 
-            if (!disconnected)
-            {
-                disconnected = line.Contains($"Player {username} disconnected", StringComparison.Ordinal);
-                return false;
-            }
+            if (line.Contains("Stopping ", StringComparison.Ordinal) && line.Contains($" link {username} <=> ", StringComparison.Ordinal))
+                linkStopping = true;
+            else if (linkStopping && line.Contains($"Completed invoking {nameof(LinkStoppedEvent)} event", StringComparison.Ordinal))
+                linkStopped = true;
+            else if (line.Contains($"Player {username} disconnected", StringComparison.Ordinal))
+                disconnected = true;
 
-            return line.Contains($"Completed invoking {nameof(LinkStoppedEvent)} event", StringComparison.Ordinal);
+            return disconnected && (!linkStopping || linkStopped);
         }, cancellationToken);
     }
 
