@@ -356,10 +356,11 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
                 pluginType.Free();
         }
 
-        logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
-
-        // The container's plugins are collected, which the references it keeps to them may tell a moment later
+        // The container's plugins are collected, which the references it keeps to them may tell a moment later. It leaves the list before
+        // the unload is told of, so whoever reads of it finds it gone
         _containers.RemoveAll(reference => reference == container || !reference.IsAlive);
+
+        logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
     }
 
     // Its own state machine, so the last plugin it throws the events for isn't kept by the one that waits for the plugin to be collected.
