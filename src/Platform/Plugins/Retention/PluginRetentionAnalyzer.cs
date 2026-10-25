@@ -9,7 +9,6 @@ namespace Void.Proxy.Plugins.Retention;
 internal static class PluginRetentionAnalyzer
 {
     private const int MaximumChains = 8;
-    private const int MaximumLinks = 16;
     private const string Indentation = "  ";
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromMinutes(1);
 
@@ -108,9 +107,6 @@ internal static class PluginRetentionAnalyzer
             else
                 steps.Add((assembly, typeName));
         }
-
-        if (steps.Count > MaximumLinks)
-            steps = [.. steps.Take(MaximumLinks / 2), ("…", "…"), .. steps.TakeLast(MaximumLinks / 2)];
 
         var origin = root switch
         {
