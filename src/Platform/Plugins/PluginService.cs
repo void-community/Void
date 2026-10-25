@@ -40,8 +40,8 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
 
-    // A container that unloads has plugins no more, whose instances it may have let go already
-    public IEnumerable<IPlugin> All => _containers.Snapshot.Where(container => !container.IsUnloading).SelectMany(container => container.Plugins);
+    // A container that unloads keeps its plugins for their own unloading listeners, and lets them go as it is collected
+    public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.AlivePlugins);
 
     public IEnumerable<string> Containers => _containers.Snapshot
         .Select(container => container.Context.Name)

@@ -26,6 +26,11 @@ public class WeakPluginContainer
     }
 
     public IEnumerable<IPlugin> Plugins => GetReferences();
+
+    /// <summary>
+    /// Gets the plugins of the container that are still alive, which those of a container that unloads stop being as it's collected.
+    /// </summary>
+    public IEnumerable<IPlugin> AlivePlugins => _references.Snapshot.Select(reference => reference.TryGetTarget(out var plugin) ? plugin : null).OfType<IPlugin>();
     public bool IsAlive => _references.Snapshot.All(plugin => plugin.TryGetTarget(out _));
     public PluginAssemblyLoadContext Context { get; }
 
