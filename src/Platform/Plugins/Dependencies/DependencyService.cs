@@ -102,7 +102,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                             {
                                 GetEntryPoint(player, assembly).GetRequiredService(serviceType);
                             }
-                            catch (ContainerException) when (player.Context.IsDisposed)
+                            catch (Exception exception) when (exception is ContainerException or InvalidOperationException && player.Context.IsDisposed)
                             {
                                 logger.LogTrace("Player {Player} left before its {ServiceType} service activated", player, serviceType);
                             }
