@@ -282,7 +282,9 @@ public static class PlayerExtensions
 
         internal async ValueTask<IChannelBuilderService> GetChannelBuilderAsync(CancellationToken cancellationToken = default)
         {
-            var channelBuilder = player.GetRequiredService<IChannelBuilderService>();
+            // The builder read the player's handshake as it connected, which no other builder can read again, so it stays the player's
+            // whichever plugins that registered it unload meanwhile.
+            var channelBuilder = player.Context.ChannelBuilder ??= player.GetRequiredService<IChannelBuilderService>();
             await channelBuilder.SearchChannelBuilderAsync(player, cancellationToken);
 
             return channelBuilder;
