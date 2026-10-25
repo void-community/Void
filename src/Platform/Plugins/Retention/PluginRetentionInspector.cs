@@ -97,15 +97,17 @@ internal static class PluginRetentionInspector
         }
     }
 
-    // Fails where Yama isn't there to restrict tracing, which leaves nothing to allow
+    // Fails where Yama isn't there to restrict tracing, which leaves nothing to allow. glibc, musl and bionic name their C library apart, which
+    // the proxy has loaded whichever it is, so prctl is found among the symbols the proxy has loaded.
     private static void AllowPtracer(nint ptracer)
     {
-        SetProcessOption(SetPtracer, ptracer, 0, 0, 0);
+        if (!NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "prctl", out var prctl))
+            return;
+
+        Marshal.GetDelegateForFunctionPointer<SetProcessOption>(prctl)(SetPtracer, ptracer, 0, 0, 0);
     }
 
-    // Linux only, which binds it on its first call
-    [DllImport("libc", EntryPoint = "prctl")]
-    private static extern int SetProcessOption(int option, nint argument2, nint argument3, nint argument4, nint argument5);
+    private delegate int SetProcessOption(int option, nint argument2, nint argument3, nint argument4, nint argument5);
 
     private static async ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, CancellationToken cancellationToken)
     {
