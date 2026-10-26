@@ -27,9 +27,9 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
     private Task<Task>? _onStoppingTask;
 
     private Task? _playerToServerTask;
-    private bool _playerToServerTaskDisposed;
+    private volatile bool _playerToServerTaskDisposed;
     private Task? _serverToPlayerTask;
-    private bool _serverToPlayerTaskDisposed;
+    private volatile bool _serverToPlayerTaskDisposed;
     private bool _stopping;
     private LinkStopReason? _stopReason;
 
@@ -248,15 +248,20 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
 
             switch (direction)
             {
+                // Each direction tells it stops before it reads whether the other does, and a full fence keeps the read after the write, so the
+                // two never both wait for each other
                 case Direction.Clientbound:
                     _serverToPlayerTaskDisposed = true;
+                    Interlocked.MemoryBarrier();
                     await DisposeServerboundAsync();
                     break;
                 case Direction.Serverbound:
                     _playerToServerTaskDisposed = true;
+                    Interlocked.MemoryBarrier();
 
-                    // The other direction reads what the server sent before it closed, until the connection ends
-                    if (serverClosed && _serverToPlayerTask is not null)
+                    // The other direction reads what the server sent before it closed, until the connection ends, unless it stops already and
+                    // waits for this one
+                    if (serverClosed && !_serverToPlayerTaskDisposed && _serverToPlayerTask is not null)
                         await WaitWithTimeout(_serverToPlayerTask);
 
                     await DisposeClientboundAsync();
