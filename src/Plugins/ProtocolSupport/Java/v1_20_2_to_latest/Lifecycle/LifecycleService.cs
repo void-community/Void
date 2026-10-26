@@ -8,6 +8,7 @@ using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
+using Void.Proxy.Plugins.Common.Extensions;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Services.Lifecycle;
 using Void.Proxy.Plugins.ProtocolSupport.Java.v1_20_2_to_latest.Extensions;
@@ -44,6 +45,10 @@ public class LifecycleService(ILogger<LifecycleService> logger, IEventService ev
 
         if (await player.IsPlayingAsync(cancellationToken))
         {
+            // A player in the middle of a bundle handles nothing until the bundle ends, so the kick would wait in it until the player is gone
+            if (player.GetBundles(GetType().Assembly).IsActivated)
+                await channel.SendPacketAsync(new BundleDelimiterPacket(), cancellationToken);
+
             await channel.SendPacketAsync(new NbtDisconnectPacket { Reason = reason }, cancellationToken);
         }
         else if (await player.IsConfiguringAsync(cancellationToken))
