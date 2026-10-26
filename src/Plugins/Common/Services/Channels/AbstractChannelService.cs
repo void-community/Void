@@ -64,9 +64,20 @@ public abstract class AbstractChannelService : IPluginCommonService
                 return;
             }
 
-            if (!IsSupportedHandshake(@event.Buffer, out var protocolVersion))
+            ProtocolVersion protocolVersion;
+
+            // Clients that aren't Minecraft send what no protocol reads, which tells no more than that the protocol doesn't support it
+            try
             {
-                @event.Player.Context.Logger.LogTrace("{Protocol} supports no handshake of {Length} bytes of version {Version}", GetType().Assembly.GetName().Name, @event.Buffer.Length, protocolVersion?.ToString() ?? "unread");
+                if (!IsSupportedHandshake(@event.Buffer, out protocolVersion))
+                {
+                    @event.Player.Context.Logger.LogTrace("{Protocol} supports no handshake of {Length} bytes of version {Version}", GetType().Assembly.GetName().Name, @event.Buffer.Length, protocolVersion);
+                    return;
+                }
+            }
+            catch (Exception exception)
+            {
+                @event.Player.Context.Logger.LogTrace(exception, "{Protocol} could not read a handshake of {Length} bytes", GetType().Assembly.GetName().Name, @event.Buffer.Length);
                 return;
             }
 
