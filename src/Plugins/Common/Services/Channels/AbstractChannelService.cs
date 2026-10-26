@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using Void.Minecraft.Network;
 using Void.Proxy.Api.Events;
@@ -56,8 +57,18 @@ public abstract class AbstractChannelService : IPluginCommonService
 
         try
         {
-            if (!_accepting || !IsSupportedHandshake(@event.Buffer, out var protocolVersion))
+            // Which protocol took a player isn't told otherwise, nor why none did, which a player that is forwarded as no version's would need
+            if (!_accepting)
+            {
+                @event.Player.Context.Logger.LogTrace("{Protocol} takes no players as it loads or unloads", GetType().Assembly.GetName().Name);
                 return;
+            }
+
+            if (!IsSupportedHandshake(@event.Buffer, out var protocolVersion))
+            {
+                @event.Player.Context.Logger.LogTrace("{Protocol} supports no handshake of {Length} bytes of version {Version}", GetType().Assembly.GetName().Name, @event.Buffer.Length, protocolVersion?.ToString() ?? "unread");
+                return;
+            }
 
             // This is definitely a Minecraft connection
             var player = await @event.Player.UpgradeToMinecraftAsync(protocolVersion, cancellationToken);
