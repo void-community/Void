@@ -22,8 +22,9 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 {
     private readonly AsyncLock _optionDiscoveryLock = new();
 
-    // Options a plugin discovers belong to it and leave with it, so the plugin can discover them again when it loads again.
-    private readonly Dictionary<Assembly, List<Option>> _pluginOptions = [];
+    // Options a plugin discovers belong to it and leave with it, so the plugin can discover them again when it loads again. They are kept by
+    // the name of the plugin's context rather than its assembly, which would keep the context alive for as long as an option is kept.
+    private readonly Dictionary<string, List<Option>> _pluginOptions = [];
     private IPlugin? _loadingPlugin;
 
     private readonly PromptReader _reader = new();
@@ -65,7 +66,9 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         var callingPlugin = FindCallingPluginAssembly();
         var plugin = callingPlugin ?? _loadingPlugin?.GetType().Assembly;
 
-        if (plugin is not null && AssemblyLoadContext.GetLoadContext(plugin) is PluginAssemblyLoadContext { IsUnloading: true })
+        var pluginContext = plugin is null ? null : AssemblyLoadContext.GetLoadContext(plugin) as PluginAssemblyLoadContext;
+
+        if (pluginContext is { IsUnloading: true })
             return;
 
         foreach (var existingOption in consoleConfiguration.RootCommand.Options)
@@ -96,14 +99,14 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         var insertIndex = options.TakeWhile(existing => (-(existing.Aliases?.Count ?? 0), existing.Name?.ToLowerInvariant() ?? string.Empty).CompareTo((-(option.Aliases?.Count ?? 0), option.Name?.ToLowerInvariant() ?? string.Empty)) < 0).Count();
         options.Insert(insertIndex, option);
 
-        if (plugin is null)
+        if (pluginContext?.Name is not { } pluginName)
             return;
 
-        if (!_pluginOptions.TryGetValue(plugin, out var pluginOptions))
-            _pluginOptions[plugin] = pluginOptions = [];
+        if (!_pluginOptions.TryGetValue(pluginName, out var pluginOptions))
+            _pluginOptions[pluginName] = pluginOptions = [];
 
         pluginOptions.Add(option);
-        logger.LogTrace("Console option {Option} belongs to {Plugin}, which {How}", option.Name, plugin.GetName().Name, callingPlugin is null ? "was loading" : "asked for it");
+        logger.LogTrace("Console option {Option} belongs to {Plugin}, which {How}", option.Name, pluginName, callingPlugin is null ? "was loading" : "asked for it");
     }
 
     // Plugins load into collectible contexts, which the proxy's own code isn't in
@@ -144,7 +147,7 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         if (_loadingPlugin == @event.Plugin)
             _loadingPlugin = null;
 
-        RemoveUnloadingPluginOptions();
+        RemovePluginOptions(@event.Plugin);
     }
 
     // Again once the plugin's listeners are gone, as its code may still have asked for an option meanwhile
@@ -152,22 +155,18 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
     public void OnPluginUnloaded(PluginUnloadedEvent @event)
     {
         using var lockDisposable = _optionDiscoveryLock.Lock();
-        RemoveUnloadingPluginOptions();
+        RemovePluginOptions(@event.Plugin);
     }
 
-    // Every plugin that unloads, rather than only the one an event tells of, as each keeps its context alive by its assembly
-    private void RemoveUnloadingPluginOptions()
+    private void RemovePluginOptions(IPlugin plugin)
     {
-        foreach (var plugin in _pluginOptions.Keys.Where(plugin => AssemblyLoadContext.GetLoadContext(plugin) is PluginAssemblyLoadContext { IsUnloading: true }).ToArray())
-        {
-            if (!_pluginOptions.Remove(plugin, out var pluginOptions))
-                continue;
+        if (AssemblyLoadContext.GetLoadContext(plugin.GetType().Assembly)?.Name is not { } pluginName || !_pluginOptions.Remove(pluginName, out var pluginOptions))
+            return;
 
-            logger.LogTrace("Console options {Options} leave with {Plugin}", string.Join(", ", pluginOptions.Select(option => option.Name)), plugin.GetName().Name);
+        logger.LogTrace("Console options {Options} leave with {Plugin}", string.Join(", ", pluginOptions.Select(option => option.Name)), pluginName);
 
-            foreach (var option in pluginOptions)
-                consoleConfiguration.RootCommand.Options.Remove(option);
-        }
+        foreach (var option in pluginOptions)
+            consoleConfiguration.RootCommand.Options.Remove(option);
     }
 
     public async ValueTask HandleCommandsAsync(CancellationToken cancellationToken = default)
