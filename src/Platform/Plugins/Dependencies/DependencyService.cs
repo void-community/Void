@@ -413,7 +413,17 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                     ? configuredContainer.WithCurrentScope(resolverContext.CurrentScope)
                     : configuredContainer;
 
-                var service = resolver.Resolve(serviceType, IfUnresolved.ReturnDefault);
+                object? service;
+
+                try
+                {
+                    service = resolver.Resolve(serviceType, IfUnresolved.ReturnDefault);
+                }
+                // A plugin that unloads meanwhile disposes its containers and the player scopes taken from them, and serves no services any more
+                catch (ContainerException) when (container.IsDisposed || serviceProvider is IResolverContext { CurrentScope.IsDisposed: true })
+                {
+                    continue;
+                }
 
                 if (service is null)
                     continue;
