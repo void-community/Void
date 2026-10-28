@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cargo install portablemc-cli --root /usr/local
 
 # Debian 12 still packages the LWJGL 2 JNI libraries used by legacy clients.
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS legacy-natives
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS legacy-natives
 
 WORKDIR /native-packages
 RUN apt-get update && apt-get download liblwjgl-java-jni libjinput-jni
