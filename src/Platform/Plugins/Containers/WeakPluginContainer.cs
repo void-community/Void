@@ -7,6 +7,14 @@ namespace Void.Proxy.Plugins.Containers;
 public class WeakPluginContainer
 {
     private readonly CopyOnWriteCollection<WeakReference<IPlugin>> _references = new();
+    private State _state = State.Loading;
+
+    private enum State
+    {
+        Loading,
+        Loaded,
+        Unloading
+    }
 
     [SuppressMessage("Style", "IDE0290:Use primary constructor", Justification = "They keep a strict reference to parameters")]
     public WeakPluginContainer(PluginAssemblyLoadContext context, params IPlugin[] plugins)
@@ -18,9 +26,40 @@ public class WeakPluginContainer
     }
 
     public IEnumerable<IPlugin> Plugins => GetReferences();
+
+    /// <summary>
+    /// Gets the plugins of the container that are still alive, which those of a container that unloads stop being as it's collected.
+    /// </summary>
+    public IEnumerable<IPlugin> AlivePlugins => _references.Snapshot.Select(reference => reference.TryGetTarget(out var plugin) ? plugin : null).OfType<IPlugin>();
     public bool IsAlive => _references.Snapshot.All(plugin => plugin.TryGetTarget(out _));
     public PluginAssemblyLoadContext Context { get; }
+
+    /// <summary>
+    /// Gets whether the container started to unload, and is still referenced, as a container that refused to unload is.
+    /// </summary>
+    public bool IsUnloading => _state is State.Unloading;
     public CancellationTokenSource CancellationTokenSource { get; } = new();
+
+    /// <summary>
+    /// Marks the plugins of the container as loaded, after which the container can be unloaded.
+    /// </summary>
+    public void MarkLoaded()
+    {
+        Interlocked.CompareExchange(ref _state, State.Loaded, State.Loading);
+    }
+
+    /// <summary>
+    /// Claims the container for unloading, which one caller can, once its plugins are loaded.
+    /// </summary>
+    /// <returns><see langword="true" /> for the caller that claimed it; <see langword="false" /> while it loads, or once another caller claimed it.</returns>
+    public bool TryBeginUnload()
+    {
+        if (Interlocked.CompareExchange(ref _state, State.Unloading, State.Loaded) is not State.Loaded)
+            return false;
+
+        Context.BeginUnload();
+        return true;
+    }
 
     public void Add(IPlugin plugin)
     {

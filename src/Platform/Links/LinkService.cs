@@ -13,16 +13,18 @@ using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Api.Servers;
 using Void.Proxy.Players.Extensions;
+using Void.Proxy.Plugins.Containers;
 
 namespace Void.Proxy.Links;
 
 public class LinkService(ILogger<LinkService> logger, IServerService servers, IEventService events, IHostApplicationLifetime hostApplicationLifetime) : ILinkService, IEventListener
 {
-    private readonly List<ILink> _activeLinks = [];
+    // Links start and stop while players look theirs up, so each lookup reads a snapshot
+    private readonly CopyOnWriteCollection<ILink> _activeLinks = new();
     private readonly AsyncLock _lock = new();
-    private readonly List<ILink> _weakLinks = [];
+    private readonly CopyOnWriteCollection<ILink> _weakLinks = new();
 
-    public IReadOnlyList<ILink> All => _activeLinks.AsReadOnly();
+    public IReadOnlyList<ILink> All => _activeLinks.Snapshot;
 
     public async ValueTask<ConnectionResult> ConnectAsync(IPlayer player, IServer server, CancellationToken cancellationToken = default)
     {
@@ -96,20 +98,20 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
     public bool TryGetLink(IPlayer player, [NotNullWhen(true)] out ILink? link)
     {
         player = player.Unwrap();
-        link = _activeLinks.FirstOrDefault(link => link.Player == player);
+        link = _activeLinks.Snapshot.FirstOrDefault(link => link.Player == player);
         return link is not null;
     }
 
     public bool TryGetWeakLink(IPlayer player, [NotNullWhen(true)] out ILink? link)
     {
         player = player.Unwrap();
-        link = _weakLinks.FirstOrDefault(link => link.Player == player);
+        link = _weakLinks.Snapshot.FirstOrDefault(link => link.Player == player);
         return link is not null;
     }
 
     public bool HasLink(IPlayer player)
     {
-        return _activeLinks.Any(link => link.Player == player);
+        return _activeLinks.Snapshot.Any(link => link.Player == player);
     }
 
     [Subscribe(PostOrder.First)]
@@ -120,10 +122,10 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
 
         using (await _lock.LockAsync(cancellationToken))
         {
-            if (!_activeLinks.Remove(@event.Link))
+            if (_activeLinks.RemoveAll(link => link == @event.Link) is 0)
                 throw new InvalidOperationException($"Link {@event.Link} is not found");
 
-            _weakLinks.Remove(@event.Link);
+            _weakLinks.RemoveAll(link => link == @event.Link);
         }
 
         // IServer channel is no longer needed
@@ -296,9 +298,9 @@ public class LinkService(ILogger<LinkService> logger, IServerService servers, IE
 
             if (link is not null)
             {
-                if (!_activeLinks.Contains(link))
+                if (!_activeLinks.Snapshot.Contains(link))
                 {
-                    _weakLinks.Remove(link);
+                    _weakLinks.RemoveAll(weakLink => weakLink == link);
                 }
             }
         }

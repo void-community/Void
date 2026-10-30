@@ -29,8 +29,9 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "ReadTimeoutException",
         "PrematureCloseException",
         "Connection reset",
-        // Paper's launcher checks the server jar it downloads from Mojang
-        "Hash check failed for downloaded file"
+        // Paper's launcher checks the server jar it downloads from Mojang, which launchers before Minecraft 1.18 report as not valid
+        "Hash check failed for downloaded file",
+        "Downloaded vanilla jar is not valid"
     ];
     private readonly DateTime _readLogsSince = DateTime.UtcNow;
     public int Port => Container.GetMappedPublicPort(containerPort: 25565);

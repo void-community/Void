@@ -27,9 +27,9 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
     private Task<Task>? _onStoppingTask;
 
     private Task? _playerToServerTask;
-    private bool _playerToServerTaskDisposed;
+    private volatile bool _playerToServerTaskDisposed;
     private Task? _serverToPlayerTask;
-    private bool _serverToPlayerTaskDisposed;
+    private volatile bool _serverToPlayerTaskDisposed;
     private bool _stopping;
     private LinkStopReason? _stopReason;
 
@@ -134,6 +134,9 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
     {
         await Task.Yield();
 
+        // A server that closes its connection may have sent something last, such as why it kicks the player, which the other direction reads
+        var serverClosed = false;
+
         while (sourceChannel is { CanRead: true } && destinationChannel is { CanWrite: true })
         {
             if (cancellationToken.IsCancellationRequested || forceCancellationToken.IsCancellationRequested)
@@ -203,6 +206,7 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
                     _ => throw new ArgumentOutOfRangeException(nameof(direction), direction, null)
                 };
 
+                serverClosed = direction is Direction.Serverbound;
                 break;
             }
             catch (Exception exception)
@@ -244,12 +248,22 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
 
             switch (direction)
             {
+                // Each direction tells it stops before it reads whether the other does, and a full fence keeps the read after the write, so the
+                // two never both wait for each other
                 case Direction.Clientbound:
                     _serverToPlayerTaskDisposed = true;
+                    Interlocked.MemoryBarrier();
                     await DisposeServerboundAsync();
                     break;
                 case Direction.Serverbound:
                     _playerToServerTaskDisposed = true;
+                    Interlocked.MemoryBarrier();
+
+                    // The other direction reads what the server sent before it closed, until the connection ends, unless it stops already and
+                    // waits for this one
+                    if (serverClosed && !_serverToPlayerTaskDisposed && _serverToPlayerTask is not null)
+                        await WaitWithTimeout(_serverToPlayerTask);
+
                     await DisposeClientboundAsync();
                     break;
                 default:

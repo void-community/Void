@@ -62,6 +62,9 @@ public abstract class ProxiedPlayerTestBase(ConnectionsFixture fixture) : Integr
         await ConnectPlayerAsync(firstGame);
         await ConnectPlayerAsync(secondGame);
 
+        // The first game played the collection's earlier tests, and its player comes back wherever it was, which can be out of the other's sight
+        await fixture.Server1.RunCommandAsync($"tp {firstGame.Username} {secondGame.Username}", Timeouts.StepTimeoutToken);
+
         await WaitForReciprocalCoordinatesAsync(firstGame, secondGame);
 
         await Task.WhenAll(firstGame.EndAsync(fixture.Server1, Timeouts.StepTimeoutToken), secondGame.EndAsync(fixture.Server1, Timeouts.StepTimeoutToken));

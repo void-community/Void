@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Sockets;
 using Nito.AsyncEx;
 using Void.Proxy.Api.Events;
@@ -12,30 +13,38 @@ using Void.Proxy.Api.Players.Extensions;
 using Void.Proxy.Api.Plugins.Dependencies;
 using Void.Proxy.Api.Settings;
 using Void.Proxy.Players.Extensions;
+using Void.Proxy.Plugins.Containers;
 
 namespace Void.Proxy.Players;
 
 public class PlayerService(ILogger<PlayerService> logger, IDependencyService dependencies, ILinkService links, IEventService events, ISettings settings) : IPlayerService, IEventListener
 {
     private readonly AsyncLock _lock = new();
-    private readonly List<PlayerProxy> _players = [];
+    // Players connect and leave while others enumerate them, as plugins that load do, so each enumeration reads a snapshot
+    private readonly CopyOnWriteCollection<PlayerProxy> _players = new();
+    // A player being kicked leaves, so a link that stops meanwhile doesn't move it to another server
+    private readonly ConcurrentDictionary<IPlayer, byte> _kicking = new(ReferenceEqualityComparer.Instance);
 
-    public IEnumerable<IPlayer> All => _players.Select(proxy => proxy.Source);
+    public IEnumerable<IPlayer> All => _players.Snapshot.Select(proxy => proxy.Source);
 
     public void ForEach(Action<IPlayer> action)
     {
-        for (var i = _players.Count - 1; i >= 0; i--)
-            action(_players[i].Unwrap());
+        var players = _players.Snapshot;
+
+        for (var i = players.Length - 1; i >= 0; i--)
+            action(players[i].Unwrap());
     }
 
     public async ValueTask ForEachAsync(Func<IPlayer, CancellationToken, ValueTask> action, CancellationToken cancellationToken = default)
     {
-        for (var i = _players.Count - 1; i >= 0; i--)
+        var players = _players.Snapshot;
+
+        for (var i = players.Length - 1; i >= 0; i--)
         {
             if (cancellationToken.IsCancellationRequested)
                 break;
 
-            await action(_players[i].Unwrap(), cancellationToken);
+            await action(players[i].Unwrap(), cancellationToken);
         }
     }
 
@@ -85,7 +94,7 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
     {
         using var sync = await _lock.LockAsync(cancellationToken);
 
-        var proxy = _players.FirstOrDefault(proxy => proxy == player || proxy.Source == player) ??
+        var proxy = _players.Snapshot.FirstOrDefault(proxy => proxy == player || proxy.Source == player) ??
                     throw new InvalidOperationException($"Player {player} not found");
 
         proxy.Replace(upgradedPlayer);
@@ -108,18 +117,23 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         var channel = await player.GetChannelAsync(cancellationToken);
         channel.TryPause();
 
+        // A kick that runs while another kicks the player leaves it to that one to tell the player is no longer kicked
+        var kicking = _kicking.TryAdd(player, 0);
+
         try
         {
             var kicked = await events.ThrowWithResultAsync(playerKickEvent, cancellationToken);
 
             // Only a live link notices the player leaving, so a player that is still joining a server is read here until it leaves
             var linked = links.TryGetLink(player, out var playingLink) && playingLink.IsAlive;
+            logger.LogTrace("Kick of {Player} handled: {Kicked}, through a live link: {Linked}", player, kicked, linked);
 
             if (kicked && linked)
             {
                 var timestamp = Stopwatch.GetTimestamp();
 
-                while (channel.IsAlive)
+                // A link that stops meanwhile, as all do as the proxy stops, no longer reads what the player sent, which then keeps its channel alive
+                while (channel.IsAlive && playingLink!.IsAlive)
                 {
                     if (Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds > settings.KickTimeout)
                         break;
@@ -130,8 +144,12 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
                     await Task.Delay(100, cancellationToken);
                 }
 
-                if (channel.IsAlive)
+                if (!channel.IsAlive)
+                    logger.LogTrace("Player {Player} left {Elapsed}ms after its kick", player, (int)Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds);
+                else if (playingLink!.IsAlive)
                     logger.LogWarning("Plugins didn't handle graceful {Player} player kick in {Timeout}ms", player, settings.KickTimeout);
+                else
+                    linked = false;
             }
 
             channel.TryResume();
@@ -146,6 +164,10 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         }
         finally
         {
+            // Closed below, so a link that stops from now on finds the player gone
+            if (kicking)
+                _kicking.TryRemove(KeyValuePair.Create(player, (byte)0));
+
             channel.Close();
             player.Client.Close();
 
@@ -160,7 +182,10 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
     [Subscribe]
     public async ValueTask OnLinkStopped(LinkStoppedEvent @event, CancellationToken cancellationToken)
     {
-        if (@event.Reason is LinkStopReason.Requested)
+        // A link stops on request as its player moves to another server, unless the player was closed meanwhile, as one that kicks itself from
+        // its chat is, while the link its command came through is still alive. Whether its channel can still be read doesn't tell, as the move
+        // reads it meanwhile.
+        if (@event.Reason is LinkStopReason.Requested && @event.Player.Client.Connected)
             return;
 
         var isPlayerAlive = @event.Reason is not LinkStopReason.PlayerDisconnected && @event.Link.PlayerChannel.IsAlive;
@@ -170,6 +195,10 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
             await DisconnectAsync(@event.Player, cancellationToken);
             return;
         }
+
+        // The kick disconnects the player once it leaves
+        if (_kicking.ContainsKey(@event.Player.Unwrap()))
+            return;
 
         logger.LogTrace("Reconnecting player {Player} after link {Link} stopped due to {Reason}", @event.Player, @event.Link, @event.Reason);
 
@@ -223,8 +252,9 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         {
             logger.LogInformation("Player {Player} disconnected", player);
 
-            dependencies.DisposePlayerScope(player.Context);
+            // A disposed player opens no scopes again, so none outlive the ones disposed here
             await player.DisposeAsync();
+            dependencies.DisposePlayerScope(player.Context);
         }
     }
 

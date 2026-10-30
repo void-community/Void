@@ -42,6 +42,10 @@
 	<ItemGroup>
 		<PackageReference Include="DotNetGraph" Version="3.3.0" />
 		<PackageReference Include="DryIoc.Microsoft.DependencyInjection" Version="8.0.0-preview-04" />
+		<PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
+		<PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.2.751201" />
+		<!-- Reads a snapshot of the heap where the runtime has no createdump and DAC, without the native libraries of its Windows tracing -->
+		<PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.23" ExcludeAssets="build;buildTransitive" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
 		<PackageReference Include="NuGet.PackageManagement" Version="7.9.0" />
 		<PackageReference Include="Samboy063.Tomlet" Version="6.2.0" />
@@ -161,4 +165,12 @@
 			<LogicalName>%(Filename)%(Extension)</LogicalName>
 		</EmbeddedResource>
 	</ItemGroup>
+
+	<!-- Single-file builds leave out the createdump and DAC of the runtime, which the proxy carries itself to tell what keeps a plugin alive that refuses to unload -->
+	<Target Name="EmbedRuntimeDiagnostics" AfterTargets="ResolveRuntimePackAssets" Condition="'$(PublishSingleFile)' == 'true' and '$(SelfContained)' == 'true'">
+		<ItemGroup>
+			<EmbeddedResource Include="@(RuntimePackAsset)" Condition="'%(Filename)' == 'createdump' or '%(Filename)' == 'libmscordaccore' or '%(Filename)' == 'mscordaccore'" LogicalName="RuntimeDiagnostics/%(Filename)%(Extension)" WithCulture="false" Type="Non-Resx" />
+		</ItemGroup>
+	</Target>
+
 </Project>

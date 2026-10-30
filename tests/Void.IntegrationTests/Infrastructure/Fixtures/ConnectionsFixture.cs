@@ -59,7 +59,31 @@ public abstract class ConnectionsFixture(ProtocolVersion protocolVersion) : IAsy
 
         _game1 = new ReusableGame(protocolVersion, Setup);
         _game2 = new ReusableGame(protocolVersion, Setup);
-        _voidProxy = await VoidProxy.CreateAsync(Path.Combine(Path.GetTempPath(), nameof(ConnectionsFixture), Path.GetRandomFileName()), targetServers: [.. Servers.Select(server => $"localhost:{server.Port}")], cancellationToken: Timeouts.SetupTimeoutToken);
+        _voidProxy = await StartVoidProxyAsync();
+        _voidLogWindowStartedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Replaces the proxy with one started anew, for a test that left it as no test can play on, such as with a plugin that didn't load back,
+    /// so the tests after it play on a proxy as it starts.
+    /// </summary>
+    public async Task ReplaceVoidProxyAsync()
+    {
+        var voidProxy = VoidProxy;
+        _voidProxy = null;
+
+        // The test that left the proxy so failed already, so what the proxy logs as it stops is no news.
+        try
+        {
+            await voidProxy.LogWriter.WriteLineAsync($"Stopping {nameof(VoidProxy)} because a test left it unusable");
+            await voidProxy.DisposeAsync().AsTask().WaitAsync(Timeouts.StepTimeout);
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"[Void.IntegrationTests] {nameof(VoidProxy)} that a test left unusable didn't stop cleanly: {exception.Message}");
+        }
+
+        _voidProxy = await StartVoidProxyAsync();
         _voidLogWindowStartedAt = DateTime.UtcNow;
     }
 
@@ -92,6 +116,11 @@ public abstract class ConnectionsFixture(ProtocolVersion protocolVersion) : IAsy
     }
 
     protected abstract Task StartServersAsync();
+
+    private async Task<VoidProxy> StartVoidProxyAsync()
+    {
+        return await VoidProxy.CreateAsync(Path.Combine(Path.GetTempPath(), nameof(ConnectionsFixture), Path.GetRandomFileName()), targetServers: [.. Servers.Select(server => $"localhost:{server.Port}")], cancellationToken: Timeouts.SetupTimeoutToken);
+    }
 
     protected abstract Task DisposeServersAsync();
 }

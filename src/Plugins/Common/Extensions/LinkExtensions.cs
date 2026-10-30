@@ -45,14 +45,14 @@ public static class LinkExtensions
         return cancelled ? default : packet;
     }
 
-    public static async ValueTask SendTerminalPacketAsync<T>(this ILink link, CancellationToken cancellationToken) where T : class, IMinecraftPacket, new()
+    public static async ValueTask SendTerminalPacketAsync<T>(this ILink link, IBundleService bundles, CancellationToken cancellationToken) where T : class, IMinecraftPacket, new()
     {
-        await link.SendTerminalPacketAsync(new T(), cancellationToken);
+        await link.SendTerminalPacketAsync(new T(), bundles, cancellationToken);
     }
 
-    public static async ValueTask SendTerminalPacketAsync<T>(this ILink link, T packet, CancellationToken cancellationToken) where T : class, IMinecraftPacket
+    // The bundles of the protocol that sends the packet, as each protocol keeps its own
+    public static async ValueTask SendTerminalPacketAsync<T>(this ILink link, T packet, IBundleService bundles, CancellationToken cancellationToken) where T : class, IMinecraftPacket
     {
-        var bundles = link.Player.Context.Services.GetRequiredService<IBundleService>();
         await bundles.WaitBundleCompletionAsync();
 
         await link.SendPacketAsync(packet is IMinecraftClientboundPacket ? Side.Client : Side.Server, packet, cancellationToken);

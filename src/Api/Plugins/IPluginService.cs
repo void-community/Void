@@ -19,6 +19,12 @@ public interface IPluginService
     IEnumerable<string> Containers { get; }
 
     /// <summary>
+    ///     Gets the names of the plugin containers that <see cref="LoadContainerAsync" /> can load: the <c>.dll</c> files in the
+    ///     <c>plugins</c> directory and the plugins embedded in the proxy. Loaded containers are included.
+    /// </summary>
+    IEnumerable<string> LoadableContainers { get; }
+
+    /// <summary>
     ///     Loads plugins specified via the <c>--plugin</c>/<c>-p</c> command-line arguments
     ///     or the <c>VOID_PLUGINS</c> environment variable.
     ///     Each entry may be a local file path, a directory path, or an HTTP/HTTPS URL.
@@ -51,6 +57,17 @@ public interface IPluginService
     /// </param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     ValueTask LoadPluginsAsync(string path = "plugins", CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     Loads the plugin container with the given name from <see cref="LoadableContainers" /> and loads its plugins.
+    ///     A <c>.dll</c> file in the <c>plugins</c> directory is loaded in place of the embedded plugin of the same name.
+    /// </summary>
+    /// <param name="name">The exact name of the container, such as <c>Void.Proxy.Plugins.Essentials.dll</c>.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <exception cref="InvalidOperationException">
+    ///     The container is already loaded, or no container has that name. Of concurrent loads of one name, all but one throw.
+    /// </exception>
+    ValueTask LoadContainerAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     ///     Instantiates and registers each of the supplied plugin types as live plugins.
@@ -97,13 +114,18 @@ public interface IPluginService
 
     /// <summary>
     ///     Fires <c>PluginUnloadingEvent</c> and <c>PluginUnloadedEvent</c> for every plugin in the named
-    ///     container, cancels the container's cancellation token, initiates assembly unload, and then forces
-    ///     garbage collection until the weak reference is collected or a 10-second timeout expires.
+    ///     container, cancels the container's cancellation token, and unloads its assemblies, waiting up to 10 seconds
+    ///     until nothing references the container's types or objects any more.
     /// </summary>
+    /// <remarks>
+    ///     A container that something still references after that refuses to unload, and the exception tells what references
+    ///     it: each chain of references, by type and field, from a static field, a thread or a handle to the container.
+    /// </remarks>
     /// <param name="name">The name of the container to unload, as returned by <see cref="Containers" />.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <exception cref="Exception">
-    ///     Thrown when the container is not found, is already unloaded, or refuses to unload within the timeout.
+    ///     Thrown when the container is not found, is still loading, is already unloading or unloaded, or refuses to unload within the
+    ///     timeout. Of concurrent unloads of one container, all but one throw.
     /// </exception>
     ValueTask UnloadContainerAsync(string name, CancellationToken cancellationToken = default);
 }

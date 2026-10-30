@@ -150,6 +150,24 @@ $ ./void-linux-x64 --plugin "/home/YourPlugin1.dll" --plugin "https://example.or
 $ VOID_PLUGINS="https://example.org/download/YourPlugin1.dll;/home/YourPlugin2.dll" ./void-linux-x64
 ```
 
+### Managing plugins at runtime
+
+The `/plugins` command manages plugins while the proxy runs, from the console or from a player's chat, and answers whoever ran it.
+
+- `/plugins` lists the loaded plugin containers.
+- `/plugins load <name>` loads a plugin from the `plugins` directory or one of those built into the proxy. A file in `plugins` is loaded in place of the built-in plugin of the same name.
+- `/plugins unload <name>` unloads a loaded plugin container.
+- `/plugins reload <name>` unloads a loaded plugin container and loads it again.
+
+A name matches the container named exactly so, ignoring case, or else the only container whose name contains it, so `/plugins reload essentials` reloads `Void.Proxy.Plugins.Essentials.dll`. Pressing Tab suggests the names each subcommand takes.
+
+Players who can't keep playing without a plugin are kicked as it unloads, with the reason:
+
+- Unloading the plugin that supports a player's Minecraft version kicks the player with "Void unloaded support for your Minecraft version (…)".
+- Unloading `Void.Proxy.Plugins.ModsSupport.Forge.dll` kicks players who joined with Forge or NeoForge with "Void unloaded support for your mods". Players without mods keep playing.
+
+Other players keep playing through a reload.
+
 ## Plugin Configurations (configs/\<Plugin\>/*.toml)
 
 Each plugin may [**define one or a subset of keyed configuration files**](/docs/developing-plugins/configuration/) in its own directory. 
