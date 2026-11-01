@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Void.Minecraft.Components.Text;
 using Void.Minecraft.Events;
 using Void.Minecraft.Events.Chat;
@@ -8,6 +9,7 @@ using Void.Minecraft.Players.Extensions;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Links;
 using Void.Proxy.Api.Events.Network;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Events.Player;
 using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Links;
@@ -23,8 +25,11 @@ using Void.Proxy.Plugins.Common.Players.Contexts;
 
 namespace Void.Proxy.Plugins.Common.Services.Lifecycle;
 
-public abstract class AbstractLifecycleService(ILogger logger, IEventService events) : IPluginCommonService
+public abstract class AbstractLifecycleService(ILogger logger, IEventService events, IPlayerService players) : IPluginCommonService
 {
+    private static readonly TimeSpan AnsweringTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan AnsweringPollInterval = TimeSpan.FromMilliseconds(50);
+
     private const string DefaultKickMessage = "You were kicked from proxy";
 
     private readonly KeepAliveForwarding _keepAliveForwarding = new();
@@ -34,6 +39,42 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
     {
         @event.Result ??= new SimplePlayer(@event.Client, instance => new PlayerContext(@event.GetServices) { Player = instance });
         logger.LogTrace("Player connecting: {Player}", @event.Result);
+    }
+
+    // Players of the versions the plugin supports can't play without it, so they leave with why rather than with a game that stops working.
+    // Before the plugin's other listeners dispose of the packet registries the kick needs, and after it stopped taking new players.
+    [Subscribe(PostOrder.First + 1)]
+    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event.Plugin.GetType().Assembly != GetType().Assembly)
+            return;
+
+        // A player that asks for the server's status, or hasn't said yet what it asks for, can't be told why, and is answered in moments, which
+        // only the plugin can answer
+        var timestamp = Stopwatch.GetTimestamp();
+
+        while (players.All.Any(IsAnswering) && Stopwatch.GetElapsedTime(timestamp) < AnsweringTimeout)
+            await Task.Delay(AnsweringPollInterval, cancellationToken);
+
+        await players.ForEachAsync(async (player, cancellationToken) =>
+        {
+            if (!player.IsMinecraft || !IsSupportedVersion(player.ProtocolVersion))
+                return;
+
+            try
+            {
+                await player.KickAsync($"Void unloaded support for your Minecraft version ({player.ProtocolVersion})", cancellationToken);
+            }
+            catch (StreamClosedException)
+            {
+                // Player disconnected before we could kick them, ignore
+            }
+        }, cancellationToken);
+    }
+
+    private bool IsAnswering(IPlayer player)
+    {
+        return player.IsMinecraft && IsSupportedVersion(player.ProtocolVersion) && player.Phase is Phase.Status or Phase.Handshake;
     }
 
     [Subscribe]
@@ -131,6 +172,10 @@ public abstract class AbstractLifecycleService(ILogger logger, IEventService eve
         {
             @event.Result = true;
         }
+
+        // The player is then disconnected without the reason, which its game shows as a lost connection
+        if (!@event.Result)
+            logger.LogDebug("Player {Player} in {Phase} phase has no packets to be told why it's kicked", @event.Player, @event.Player.Phase);
     }
 
     [Subscribe]

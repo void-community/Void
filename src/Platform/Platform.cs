@@ -232,6 +232,9 @@ public class Platform(
                     catch (Exception exception)
                     {
                         logger.LogError(exception, "An error occurred while accepting a player connection");
+
+                        // A connection nobody serves would wait for an answer that never comes
+                        client.Dispose();
                     }
                 }, cancellationToken);
             }

@@ -1,8 +1,10 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using Void.Minecraft.Network;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Channels;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Players;
@@ -16,21 +18,84 @@ namespace Void.Proxy.Plugins.Common.Services.Channels;
 
 public abstract class AbstractChannelService : IPluginCommonService
 {
+    private static readonly TimeSpan AcceptingPollInterval = TimeSpan.FromMilliseconds(10);
+
+    // The plugin's services register their listeners one at a time as it loads, so a player it took before it loaded would meet only some
+    private volatile bool _accepting;
+    private int _searches;
+
+    [Subscribe]
+    public void OnPluginLoaded(PluginLoadedEvent @event)
+    {
+        if (@event.Plugin.GetType().Assembly == GetType().Assembly)
+            _accepting = true;
+    }
+
+    // A plugin that unloads takes no new players, which are forwarded as players of a version no plugin supports, while those it took
+    // finish with it. First, before its lifecycle waits for them, which it can only do for players it has already taken, so it finishes
+    // taking those it was taking meanwhile.
+    [Subscribe(PostOrder.First)]
+    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
+    {
+        if (@event.Plugin.GetType().Assembly != GetType().Assembly)
+            return;
+
+        _accepting = false;
+
+        // A full fence, so that a search that still found it accepting is counted by then
+        Interlocked.MemoryBarrier();
+
+        while (Volatile.Read(ref _searches) > 0)
+            await Task.Delay(AcceptingPollInterval, cancellationToken);
+    }
+
     [Subscribe]
     public async ValueTask OnSearchChannelBuilder(SearchChannelBuilderEvent @event, CancellationToken cancellationToken)
     {
-        if (!IsSupportedHandshake(@event.Buffer, out var protocolVersion))
-            return;
-        
-        // This is definitely a Minecraft connection
-        var player = await @event.Player.UpgradeToMinecraftAsync(protocolVersion, cancellationToken);
+        // Counted before it reads whether it accepts, so the plugin unloading waits for a player it found itself accepting
+        Interlocked.Increment(ref _searches);
 
-        @event.Result = ChannelBuilderAsync;
+        try
+        {
+            // Which protocol took a player isn't told otherwise, nor why none did, which a player that is forwarded as no version's would need
+            if (!_accepting)
+            {
+                @event.Player.Context.Logger.LogTrace("{Protocol} takes no players as it loads or unloads", GetType().Assembly.GetName().Name);
+                return;
+            }
+
+            ProtocolVersion protocolVersion;
+
+            // Clients that aren't Minecraft send what no protocol reads, which tells no more than that the protocol doesn't support it
+            try
+            {
+                if (!IsSupportedHandshake(@event.Buffer, out protocolVersion))
+                {
+                    @event.Player.Context.Logger.LogTrace("{Protocol} supports no handshake of {Length} bytes of version {Version}", GetType().Assembly.GetName().Name, @event.Buffer.Length, protocolVersion);
+                    return;
+                }
+            }
+            catch (Exception exception)
+            {
+                @event.Player.Context.Logger.LogTrace(exception, "{Protocol} could not read a handshake of {Length} bytes", GetType().Assembly.GetName().Name, @event.Buffer.Length);
+                return;
+            }
+
+            // This is definitely a Minecraft connection
+            var player = await @event.Player.UpgradeToMinecraftAsync(protocolVersion, cancellationToken);
+
+            @event.Result = ChannelBuilderAsync;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _searches);
+        }
     }
 
     protected abstract bool IsSupportedHandshake(Memory<byte> memory, [MaybeNullWhen(false)] out ProtocolVersion protocolVersion);
 
-    private async ValueTask<INetworkChannel> ChannelBuilderAsync(IPlayer player, Side side, NetworkStream stream, CancellationToken cancellationToken)
+    // Static, as a player keeps the builder that read its handshake, which would otherwise keep the protocol plugin whose service built it alive
+    private static async ValueTask<INetworkChannel> ChannelBuilderAsync(IPlayer player, Side side, NetworkStream stream, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 

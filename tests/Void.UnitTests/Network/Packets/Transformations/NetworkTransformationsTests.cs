@@ -76,7 +76,7 @@ public class NetworkTransformationsTests
     }
 
     [Fact]
-    public void ClearLinkTransformations_WithoutReplacement_ClearsBothChannelsAndAllowsRegistrationAgain()
+    public void ClearLinkTransformations_WithoutReplacement_KeepsPlayerSystemTransformationsAndAllowsRegistrationAgain()
     {
         var protocolVersion = ProtocolVersion.MINECRAFT_1_8;
         var plugin = new TestPlugin();
@@ -91,7 +91,7 @@ public class NetworkTransformationsTests
 
         ClearLinkTransformations(playerChannel, serverChannel, preservePlayerChannel: false);
 
-        Assert.True(playerPacketStream.Registries.PacketTransformationsSystem.IsEmpty);
+        Assert.False(playerPacketStream.Registries.PacketTransformationsSystem.IsEmpty);;
         Assert.True(playerPacketStream.Registries.PacketTransformationsPlugins.IsEmpty);
         Assert.True(serverPacketStream.Registries.PacketTransformationsSystem.IsEmpty);
         Assert.True(serverPacketStream.Registries.PacketTransformationsPlugins.IsEmpty);

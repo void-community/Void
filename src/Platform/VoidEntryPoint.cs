@@ -34,6 +34,7 @@ using Void.Proxy.Plugins.Dependencies.Embedded;
 using Void.Proxy.Plugins.Dependencies.Extensions;
 using Void.Proxy.Plugins.Dependencies.File;
 using Void.Proxy.Plugins.Dependencies.Nuget;
+using Void.Proxy.Plugins.Retention;
 using Void.Proxy.Servers;
 using Logger = Serilog.Core.Logger;
 
@@ -54,7 +55,8 @@ public static class VoidEntryPoint
         public TextWriter? LogWriter { get; init; } = null;
     }
 
-    public record RunResult(Task<int> CompletionTask, int ListeningPort) : IAsyncDisposable
+    /// <param name="Services">The services of the running proxy, such as its <see cref="IPluginService" />, until it stops.</param>
+    public record RunResult(Task<int> CompletionTask, int ListeningPort, IServiceProvider Services) : IAsyncDisposable
     {
         public int ExitCode => !CompletionTask.IsCompleted
                 ? throw new InvalidOperationException("Cannot get exit code before completion.")
@@ -85,6 +87,10 @@ public static class VoidEntryPoint
 
     private static async Task<int> Main(string[] args)
     {
+        // The proxy starts its own executable to analyze a dump of itself, as it does for a plugin that refuses to unload.
+        if (PluginRetentionInspector.IsAnalyzer(args))
+            return PluginRetentionInspector.Analyze(args);
+
         var options = new RunOptions { Arguments = args };
         var result = await RunAsync(options);
 
@@ -175,7 +181,7 @@ public static class VoidEntryPoint
                 host.Dispose();
                 logger.Dispose();
             }
-        }), ListeningPort: port);
+        }), ListeningPort: port, Services: host.Services);
     }
 
     private static Logger CreateLogger(LoggingLevelSwitch loggingLevelSwitch, TextWriter? logWriter)

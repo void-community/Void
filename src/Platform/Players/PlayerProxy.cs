@@ -31,6 +31,11 @@ public class PlayerProxy(IPlayer player) : IPlayer
         return Source.ToString();
     }
 
+    public async ValueTask SendMessageAsync(string message, CancellationToken cancellationToken = default)
+    {
+        await Source.SendMessageAsync(message, cancellationToken);
+    }
+
     public bool Equals(IPlayer? other)
     {
         return ((IPlayer)this).GetStableHashCode() == other?.GetStableHashCode();

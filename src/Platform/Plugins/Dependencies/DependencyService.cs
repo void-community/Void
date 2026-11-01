@@ -14,6 +14,15 @@ namespace Void.Proxy.Plugins.Dependencies;
 
 public class DependencyService(ILogger<DependencyService> logger, IContainer rootContainer) : IDependencyService
 {
+    // DryIoc gives its static empty request a stack of dependency requests once a collection resolves from it, which every resolution after
+    // shares, and which keeps the container each of its requests came from, that of an unloaded plugin too. DryIoc can't drop it.
+    private static readonly FieldInfo EmptyRequestStackField = typeof(Request).GetField("DepRequestStack", BindingFlags.NonPublic | BindingFlags.Instance)
+        ?? throw new InvalidOperationException("DryIoc has no dependency request stack to drop the containers of unloaded plugins from");
+
+    // DryIoc pools the request a resolution is done with for the next one, and leaves it the constructor it selected, of an unloaded plugin too.
+    private static readonly FieldInfo PooledRequestField = typeof(Request).GetField("_pooledRequest", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("DryIoc has no pooled request to drop the constructors of unloaded plugins from");
+
     private readonly ConcurrentDictionary<Assembly, PluginContainer> _plugins = [];
 
     public TService CreateInstance<TService>(CancellationToken cancellationToken = default, params object[] parameters)
@@ -87,7 +96,18 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                         var players = rootContainer.GetRequiredService<IPlayerService>();
 
                         foreach (var player in players.All)
-                            GetEntryPoint(player, assembly).GetRequiredService(serviceType);
+                        {
+                            // A player that leaves meanwhile has its scopes disposed, and needs none of its services any more
+                            try
+                            {
+                                GetEntryPoint(player, assembly).GetRequiredService(serviceType);
+                            }
+                            // DryIoc fails variously as the scope of the player disposes under the resolution
+                            catch (Exception) when (player.Context.IsDisposed)
+                            {
+                                logger.LogTrace("Player {Player} left before its {ServiceType} service activated", player, serviceType);
+                            }
+                        }
 
                         break;
                     }
@@ -113,21 +133,33 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     public void ActivatePlayerScope(IPlayerContext context)
     {
         var playerStableHashCode = context.Player.GetStableHashCode();
-        var assemblies = new Queue<Assembly>(_plugins.Keys);
+        // A snapshot, as the queue would copy the dictionary by its count and its items apart while plugins load and unload meanwhile
+        var plugins = new Queue<KeyValuePair<Assembly, PluginContainer>>(_plugins.ToArray());
 
-        while (assemblies.TryDequeue(out var assembly))
+        while (plugins.TryDequeue(out var plugin))
         {
-            var playerScope = GetPlayerScope(assembly, playerStableHashCode, context);
+            var (assembly, container) = plugin;
 
-            foreach (var registration in playerScope.Container.GetServiceRegistrations())
+            if (GetPlayerScope(container, playerStableHashCode, context) is not { } playerScope)
+                continue;
+
+            try
             {
-                if (registration.ServiceType.IsOpenGeneric())
-                    continue;
+                foreach (var registration in playerScope.Container.GetServiceRegistrations())
+                {
+                    if (registration.ServiceType.IsOpenGeneric())
+                        continue;
 
-                if (registration.Factory?.Reuse is not CurrentScopeReuse)
-                    continue;
+                    if (registration.Factory?.Reuse is not CurrentScopeReuse)
+                        continue;
 
-                _ = GetEntryPoint(context.Player, assembly).GetRequiredService(registration.ServiceType);
+                    _ = GetEntryPoint(context.Player, assembly).GetRequiredService(registration.ServiceType);
+                }
+            }
+            // Its container leaves the entry point before it is disposed, which then has no services of it to resolve
+            catch (Exception exception) when (exception is ContainerException or InvalidOperationException && (container.Root.Container.IsDisposed || !_plugins.ContainsKey(assembly)))
+            {
+                // The plugin unloaded meanwhile, and has no services for the player any more
             }
         }
     }
@@ -159,9 +191,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
     public bool TryGetServiceReuse(Type serviceType, out ServiceLifetime reuse)
     {
-        var pluginContainer = GetPluginContainer(serviceType.Assembly);
-        var container = pluginContainer.Root.Container;
-        var registration = container.GetServiceRegistrations().FirstOrDefault(registration => registration.ServiceType == serviceType);
+        var registration = _plugins.TryGetValue(serviceType.Assembly, out var pluginContainer)
+            ? pluginContainer.Root.Container.GetServiceRegistrations().FirstOrDefault(registration => registration.ServiceType == serviceType)
+            : default;
         var registered = registration.Factory is not null;
 
         reuse = registration.Factory?.Reuse switch
@@ -178,12 +210,13 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     {
         var playerStableHashCode = player.GetStableHashCode();
 
-        foreach (var assembly in _plugins.Keys)
-            GetPlayerScope(assembly, playerStableHashCode, player.Context);
+        foreach (var container in _plugins.Values)
+            GetPlayerScope(container, playerStableHashCode, player.Context);
 
         return CombineLazy(
             () => GetScopedContainers(playerStableHashCode, preferredAssembly),
-            () => GetRootContainers(preferredAssembly));
+            () => GetRootContainers(preferredAssembly),
+            player.Context);
     }
 
     public IServiceProvider GetEntryPoint(Assembly? preferredAssembly = null)
@@ -205,21 +238,29 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         return playerScope.CurrentScope.SelectMany(scope => scope.GetSnapshotOfServicesWithFactoryIDs()).Any(scopedService => ReferenceEquals(scopedService.Value, service));
     }
 
+    // After the plugin's own unloading listeners, which still use its services and listen to the events they raise, such as a kick.
     [Subscribe(PostOrder.First)]
-    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    public void OnPluginUnloaded(PluginUnloadedEvent @event)
     {
         var assembly = @event.Plugin.GetType().Assembly;
+
+        // Removed before its listeners, as a listener its container resolves meanwhile unregisters itself once its plugin is gone
+        var removed = _plugins.TryRemove(assembly, out var container);
 
         var events = rootContainer.GetRequiredService<IEventService>();
         events.UnregisterListeners(events.Listeners.Where(listener => listener.GetType().Assembly == assembly));
 
-        if (!_plugins.TryRemove(assembly, out var container))
+        if (!removed || container is null)
             return;
 
         container.Root.Container.Dispose();
 
         foreach (var scope in container.Scopes.Values)
             scope.Dispose();
+
+        // DryIoc starts another stack as it next needs one, while resolutions under way keep the one they hold.
+        EmptyRequestStackField.SetValue(Request.Empty, null);
+        PooledRequestField.SetValue(null, null);
     }
 
     private IEnumerable<IServiceProvider> GetScopedContainers(int playerStableHashCode, Assembly? preferredAssembly = null)
@@ -241,8 +282,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
     private IEnumerable<IServiceProvider> GetRootContainers(Assembly? preferredAssembly = null)
     {
-        if (preferredAssembly is not null && _plugins.ContainsKey(preferredAssembly))
-            yield return GetPluginContainer(preferredAssembly).Root;
+        if (preferredAssembly is not null && _plugins.TryGetValue(preferredAssembly, out var preferredContainer))
+            yield return preferredContainer.Root;
 
         yield return rootContainer;
 
@@ -251,7 +292,9 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
             if (assembly == preferredAssembly)
                 continue;
 
-            yield return GetPluginContainer(assembly).Root;
+            // A plugin that unloads meanwhile is skipped rather than given another container, which would keep it alive
+            if (_plugins.TryGetValue(assembly, out var pluginContainer))
+                yield return pluginContainer.Root;
         }
     }
 
@@ -265,17 +308,38 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         return assemblies;
     }
 
-    private IServiceProvider GetPlayerScope(Assembly assembly, int playerStableHashCode, IPlayerContext context)
+    private IResolverContext? GetPlayerScope(PluginContainer container, int playerStableHashCode, IPlayerContext context)
     {
-        var container = GetPluginContainer(assembly);
-
         if (container.Scopes.TryGetValue(playerStableHashCode, out var playerScope))
             return playerScope;
 
-        playerScope = container.Root.Container.OpenScope(nameof(IPlayer));
-        container.Scopes[playerStableHashCode] = playerScope;
+        // A player that left keeps no scopes, which would keep it and the plugins of its services alive, and a plugin that unloaded has none
+        if (context.IsDisposed || container.Root.Container.IsDisposed)
+            return null;
+
+        try
+        {
+            playerScope = container.Root.Container.OpenScope(nameof(IPlayer));
+        }
+        catch (ContainerException) when (container.Root.Container.IsDisposed)
+        {
+            return null;
+        }
 
         playerScope.Use(context);
+
+        if (!container.Scopes.TryAdd(playerStableHashCode, playerScope))
+        {
+            playerScope.Dispose();
+            return container.Scopes.GetValueOrDefault(playerStableHashCode);
+        }
+
+        // The player left while the scope opened, after its scopes were disposed
+        if (context.IsDisposed && container.Scopes.TryRemove(KeyValuePair.Create(playerStableHashCode, playerScope)))
+        {
+            playerScope.Dispose();
+            return null;
+        }
 
         return playerScope;
     }
@@ -304,7 +368,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         return CombineLazy(() => containers);
     }
 
-    private Container CombineLazy(Func<IEnumerable<IServiceProvider>> getContainers, Func<IEnumerable<IServiceProvider>>? getSingletonContainers = null)
+    private Container CombineLazy(Func<IEnumerable<IServiceProvider>> getContainers, Func<IEnumerable<IServiceProvider>>? getSingletonContainers = null, IPlayerContext? playerContext = null)
     {
         var events = rootContainer.Resolve<IEventService>();
         var getSingletonResolutionContainers = getSingletonContainers ?? getContainers;
@@ -324,8 +388,10 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
         object? ResolveService(Type serviceType, Func<IEnumerable<IServiceProvider>> getServiceProviders, IContainer entryPointContainer)
         {
+            var ownerContainer = AdoptOpenGenericRegistrations(serviceType);
             var serviceProviders = getServiceProviders()
-                .OrderByDescending(serviceProvider => GetServiceProviderPriority(serviceProvider.Container, serviceType));
+                .OrderByDescending(serviceProvider => GetServiceProviderPriority(serviceProvider.Container, serviceType))
+                .ThenByDescending(serviceProvider => serviceProvider.Container == ownerContainer);
 
             foreach (var serviceProvider in serviceProviders)
             {
@@ -347,13 +413,30 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
                     ? configuredContainer.WithCurrentScope(resolverContext.CurrentScope)
                     : configuredContainer;
 
-                var service = resolver.Resolve(serviceType, IfUnresolved.ReturnDefault);
+                object? service;
+
+                try
+                {
+                    service = resolver.Resolve(serviceType, IfUnresolved.ReturnDefault);
+                }
+                // A plugin that unloads meanwhile disposes its containers and the player scopes taken from them, and serves no services any more
+                catch (ContainerException) when (container.IsDisposed || serviceProvider is IResolverContext { CurrentScope.IsDisposed: true })
+                {
+                    continue;
+                }
 
                 if (service is null)
                     continue;
 
                 if (service is IEventListener listener)
+                {
                     events.RegisterListeners(listener);
+
+                    // A player that connects as a plugin unloads resolves the plugin's services after its listeners were unregistered, and a player
+                    // that leaves as its services activate has its scopes, and their listeners, disposed meanwhile
+                    if ((listener.GetType().Assembly is { IsCollectible: true } listenerAssembly && !_plugins.ContainsKey(listenerAssembly)) || (playerContext is { IsDisposed: true } && !IsSingletonService(serviceType)))
+                        events.UnregisterListeners(listener);
+                }
 
                 return service;
             }
@@ -405,6 +488,63 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         {
             return requestedServiceType == registeredServiceType || requestedServiceType.IsConstructedGenericType && requestedServiceType.GetGenericTypeDefinition() == registeredServiceType;
         }
+    }
+
+    /// <summary>
+    /// Registers in a plugin's own container the open generics of other containers that a closed generic over the plugin's types, such as
+    /// <c>ILogger&lt;T&gt;</c> of a plugin's service, is resolved from. A container caches each closed generic it generates, and its singletons,
+    /// for as long as the container lives, which would keep the plugin alive after it unloads, so the plugin's container generates them, and
+    /// disposes of them as the plugin unloads.
+    /// </summary>
+    /// <returns>The container of the plugin whose types the service type is closed over, or <see langword="null" /> when it's closed over none.</returns>
+    private IContainer? AdoptOpenGenericRegistrations(Type serviceType)
+    {
+        if (!serviceType.IsConstructedGenericType || FindOwnerContainer(serviceType) is not { } ownerContainer)
+            return null;
+
+        var definition = serviceType.GetGenericTypeDefinition();
+
+        if (ownerContainer.IsRegistered(definition))
+            return ownerContainer;
+
+        foreach (var serviceProvider in GetRootContainers())
+        {
+            var container = serviceProvider.Container;
+
+            if (container == ownerContainer)
+                continue;
+
+            foreach (var registration in container.GetServiceRegistrations())
+            {
+                if (registration.ServiceType != definition || registration.Factory is not ReflectionFactory factory)
+                    continue;
+
+                // Concurrent resolutions adopt the same registrations, which append once per implementation.
+                ownerContainer.Register(ReflectionFactory.Of(factory.ImplementationType, factory.Reuse, factory.Made, factory.Setup), definition, registration.OptionalServiceKey, IfAlreadyRegistered.AppendNewImplementation, isStaticallyChecked: true);
+            }
+        }
+
+        return ownerContainer;
+    }
+
+    private IContainer? FindOwnerContainer(Type type)
+    {
+        if (_plugins.TryGetValue(type.Assembly, out var pluginContainer))
+            return pluginContainer.Root.Container;
+
+        if (type.HasElementType && type.GetElementType() is { } elementType && FindOwnerContainer(elementType) is { } elementOwnerContainer)
+            return elementOwnerContainer;
+
+        if (!type.IsGenericType)
+            return null;
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            if (FindOwnerContainer(argument) is { } argumentOwnerContainer)
+                return argumentOwnerContainer;
+        }
+
+        return null;
     }
 
     // Players join and leave on threads of their own, each opening or disposing its scopes.
