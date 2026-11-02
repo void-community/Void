@@ -565,10 +565,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             {
                 "maxFps:15",
                 "renderDistance:2",
-                "pauseOnLostFocus:false",
-                // The game plays no sound at no volume, as tests need none, so it doesn't decode music, which crashed Forge 1.16.3 in LWJGL's
-                // Vorbis decoder
-                "soundCategory_master:0.0"
+                "pauseOnLostFocus:false"
             };
 
             if (protocolVersion >= ProtocolVersion.MINECRAFT_1_19_4)
