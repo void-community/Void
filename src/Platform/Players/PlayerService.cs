@@ -275,9 +275,9 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
         {
             logger.LogTrace("Player {Player} didn't leave in {Timeout}ms after its kick", player, settings.KickTimeout);
         }
-        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            // The player has already left.
+            // The player has already left, also when its connection closed after the check above and has no stream to read.
         }
     }
 }
