@@ -27,6 +27,10 @@ public abstract class ProxiedLoginPluginReloadTestBase(ConnectionsFixture fixtur
                 var loginStartedTask = Proxy.LogWriter.WaitForLineAsync(line => line.Contains(game.Username, StringComparison.Ordinal), Timeouts.SetupTimeoutToken);
                 var joinTask = game.JoinServerAsync(ProxyEndPoint, Timeouts.SetupTimeoutToken);
 
+                // A join that fails before the player's name reaches the proxy fails the test at once, rather than once the wait times out
+                if (await Task.WhenAny(loginStartedTask, joinTask) == joinTask)
+                    await joinTask;
+
                 await loginStartedTask;
 
                 foreach (var name in containers)
