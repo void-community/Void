@@ -40,6 +40,15 @@ final class JoinedConnection {
     }
 
     /**
+     * Keeps the reason the joined connection disconnects with while its channel is still open, as the game keeps it. The game's own thread
+     * tells its listener only once it handles the closed connection, which a busy game does well after the channel closed.
+     */
+    static void disconnecting(Object value, Object reason) {
+        if (value != null && value == connection.get() && Boolean.TRUE.equals(isOpen(value)))
+            disconnectReason = reasonText(reason);
+    }
+
+    /**
      * Reads the plain text of a disconnect reason. Text components implement Brigadier's {@code Message}, whose method keeps its name
      * in obfuscated builds, and newer versions wrap the component in a record with the report details.
      *

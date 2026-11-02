@@ -34,8 +34,10 @@ final class ConnectionTrace {
             print(connection, "channel inactive; read last: " + lastReads(connection));
         else if (Exception.equals(event))
             print(connection, "caught " + stackTrace(detail));
-        else if (Disconnect.equals(event))
+        else if (Disconnect.equals(event)) {
             print(connection, "disconnecting with \"" + JoinedConnection.reasonText(detail) + "\"");
+            JoinedConnection.disconnecting(connection, detail);
+        }
     }
 
     /** Logs the reason the game tells the listener of a connection when it handles the connection's end. */
