@@ -30,12 +30,17 @@ public class SimpleNetworkStream(NetworkStream baseStream, TimeSpan writeTimeout
 
     public async ValueTask WaitForDataAsync(CancellationToken cancellationToken = default)
     {
-        if (_nextBuffer.Length > 0)
-            return;
-
         try
         {
-            await baseStream.Socket.ReceiveAsync(Memory<byte>.Empty, SocketFlags.None, cancellationToken);
+            // A wake that finds nothing to read, such as when another reader of the socket took what woke it, waits again, since the read
+            // that follows can no longer be canceled. A closed connection ends the wait, and the read then tells it is closed.
+            while (_nextBuffer.Length == 0 && baseStream.Socket.Available == 0)
+            {
+                await baseStream.Socket.ReceiveAsync(Memory<byte>.Empty, SocketFlags.None, cancellationToken);
+
+                if (baseStream.Socket.Available == 0 && baseStream.Socket.Poll(0, SelectMode.SelectRead))
+                    return;
+            }
         }
         catch (Exception exception) when (exception is SocketException or ObjectDisposedException)
         {
