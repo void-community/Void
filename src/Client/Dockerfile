@@ -1,5 +1,5 @@
 # Builder stage: compile portablemc from source
-FROM rust:1.99-slim-trixie@sha256:1a939748a7cbab172de91a014e3804a97af1394a8c844faa67fce9401c4e40fb AS builder
+FROM rust:1.99-slim-trixie@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -9,13 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cargo install portablemc-cli --root /usr/local
 
 # Debian 12 still packages the LWJGL 2 JNI libraries used by legacy clients.
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS legacy-natives
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS legacy-natives
 
 WORKDIR /native-packages
 RUN apt-get update && apt-get download liblwjgl-java-jni libjinput-jni
 
 # Runtime stage
-FROM debian:13@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS runtime
+FROM debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1 AS runtime
 
 ARG TARGETARCH
 
@@ -189,7 +189,7 @@ RUN portablemc-dry-run-with-retries "mojang:$MINECRAFT_VERSION"
 
 # Publish the API once during the image build. Runtime startup never restores or compiles source code.
 # The API and agent are platform independent, so they build once on the build machine instead of under emulation per platform.
-FROM --platform=$BUILDPLATFORM debian:13@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS dotnet-builder
+FROM --platform=$BUILDPLATFORM debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1 AS dotnet-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl default-jdk-headless libicu-dev maven \
  && rm -rf /var/lib/apt/lists/* \

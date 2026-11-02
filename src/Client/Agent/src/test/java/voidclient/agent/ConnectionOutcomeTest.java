@@ -130,6 +130,20 @@ public final class ConnectionOutcomeTest {
     }
 
     @Test
+    public void closedChannelReportsTheReasonItDisconnectedWithBeforeTheGameTells() {
+        Network joined = new Network(true);
+        JoinedConnection.joined(joined);
+        JoinedConnection.reasonGraceNanos = java.util.concurrent.TimeUnit.MINUTES.toNanos(1);
+
+        // The network thread disconnects with the server's reason while the channel is open, and with a generic one once it closed
+        ConnectionTrace.event(ConnectionTrace.Disconnect, joined, "Void unloaded support for your mods");
+        joined.open = false;
+        ConnectionTrace.event(ConnectionTrace.Disconnect, joined, "End of stream");
+
+        Assert.assertEquals("Void unloaded support for your mods", JoinedConnection.closedReason());
+    }
+
+    @Test
     public void connectionIsUnknownUntilTheGameJoinsAServer() {
         Assert.assertTrue(GameAutomationController.connectionJson().contains("\"connection.unknown\""));
         Assert.assertNull(JoinedConnection.closedReason());
