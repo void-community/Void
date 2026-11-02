@@ -108,8 +108,11 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             }
             catch (Exception exception)
             {
-                // The server's own output says why it didn't start, such as a mod loader installer that failed.
+                // The server's own output says why it didn't start, such as a mod loader installer that failed, and its threads where one that hangs waits.
                 var logs = await TryReadLastLogsAsync(container);
+                if (exception is TimeoutException)
+                    await TryDumpThreadsAsync(container, serverDescription);
+
                 await DisposeFailedContainerAsync(container, serverDescription);
                 throw new IntegrationTestException($"{serverDescription} failed to start: {exception.Message}\nLast server logs:\n{logs}", exception);
             }
@@ -140,6 +143,24 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         catch (Exception exception)
         {
             return $"(the logs couldn't be read: {exception.Message})";
+        }
+    }
+
+    // A server that hangs as it starts logs nothing more, while Java prints where each of its threads is when it is sent SIGQUIT. The dump is written
+    // once to the test output, since every test of a collection whose servers failed to start repeats the failure.
+    private static async Task TryDumpThreadsAsync(IContainer container, string serverDescription)
+    {
+        try
+        {
+            var dumpedSince = DateTime.UtcNow;
+            await container.ExecAsync(["pkill", "-QUIT", "-x", "java"], CancellationToken.None);
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            var dump = await container.ReadLogsAsync(dumpedSince, CancellationToken.None);
+            Console.WriteLine($"[Void.IntegrationTests] Threads of the {serverDescription} that didn't start in time:\n{string.Join('\n', dump)}");
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"[Void.IntegrationTests] The threads of the {serverDescription} that didn't start in time couldn't be dumped: {exception.Message}");
         }
     }
 
