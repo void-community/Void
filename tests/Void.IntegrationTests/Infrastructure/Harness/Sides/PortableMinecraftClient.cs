@@ -97,6 +97,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         private const string ModsDirectory = "/root/.minecraft/mods/";
         private const string JvmOutputPath = "/root/jvm-output.log";
         private const string ThreadDumpHeader = "Full thread dump";
+        private const int ThreadDumps = 3;
+        private static readonly TimeSpan ThreadDumpInterval = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(5);
 
         private ApiProblemDetails? _lastPlayersProblem;
@@ -404,18 +406,27 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         }
 
         // A JVM writes where each of its threads is, and which locks they hold, to its output on SIGQUIT, so a game that hangs shows where.
+        // Dumps some seconds apart tell a thread that is stuck, which stays where it was, from one that is only slow.
         internal async Task TryDumpThreadsAsync()
         {
             try
             {
-                await Container.RunCommandAsync(["pkill", "--signal", "QUIT", "--exact", "java"], Timeouts.StepTimeoutToken);
+                var dumpedBefore = Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken)).Length;
+
+                for (var signal = 0; signal < ThreadDumps; signal++)
+                {
+                    if (signal > 0)
+                        await Task.Delay(ThreadDumpInterval);
+
+                    await Container.RunCommandAsync(["pkill", "--signal", "QUIT", "--exact", "java"], Timeouts.StepTimeoutToken);
+                }
 
                 // The JVM writes the dump on a thread of its own after the signal.
                 await Task.Delay(TimeSpan.FromSeconds(2));
 
-                // The file starts with the game's command line, which holds the client agent's token, so only the dump is kept.
+                // The file starts with the game's command line, which holds the client agent's token, so only the dumps are kept.
                 var output = Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken));
-                var dumpStart = output.LastIndexOf(ThreadDumpHeader, StringComparison.Ordinal);
+                var dumpStart = output.IndexOf(ThreadDumpHeader, Math.Min(dumpedBefore, output.Length), StringComparison.Ordinal);
 
                 if (dumpStart < 0)
                 {
