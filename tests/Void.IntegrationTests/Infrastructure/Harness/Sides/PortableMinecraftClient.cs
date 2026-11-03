@@ -99,7 +99,8 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         private const string ThreadDumpHeader = "Full thread dump";
         private const int ThreadDumps = 3;
         private static readonly TimeSpan ThreadDumpInterval = TimeSpan.FromSeconds(5);
-        private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(5);
+        // Longer than the client's own limit of 5 minutes to install a game, so an install that stalls fails with the client's report of it
+        private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(7);
 
         private ApiProblemDetails? _lastPlayersProblem;
         private Guid? _sessionId;
@@ -411,7 +412,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         {
             try
             {
-                var dumpedBefore = Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken)).Length;
+                var dumpedBefore = (await TryReadJvmOutputAsync()).Length;
 
                 for (var signal = 0; signal < ThreadDumps; signal++)
                 {
@@ -425,7 +426,7 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 await Task.Delay(TimeSpan.FromSeconds(2));
 
                 // The file starts with the game's command line, which holds the client agent's token, so only the dumps are kept.
-                var output = Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken));
+                var output = await TryReadJvmOutputAsync();
                 var dumpStart = output.IndexOf(ThreadDumpHeader, Math.Min(dumpedBefore, output.Length), StringComparison.Ordinal);
 
                 if (dumpStart < 0)
@@ -445,6 +446,19 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             catch (Exception exception)
             {
                 await LogAsync($"Dumping {GameName} threads failed: {exception.Message}", CancellationToken.None);
+            }
+        }
+
+        // A game that never started, such as one whose install stalled, has written no output
+        private async Task<string> TryReadJvmOutputAsync()
+        {
+            try
+            {
+                return Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return string.Empty;
             }
         }
 
