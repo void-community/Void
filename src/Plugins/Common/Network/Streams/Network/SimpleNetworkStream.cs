@@ -225,7 +225,13 @@ public class SimpleNetworkStream(NetworkStream baseStream, TimeSpan writeTimeout
         try
         {
             var isPollSuccessful = baseStream.Socket.Poll(0, SelectMode.SelectRead);
-            return !isPollSuccessful || baseStream.Socket.Available > 0;
+
+            if (!isPollSuccessful || baseStream.Socket.Available > 0)
+                return true;
+
+            // A readable socket with nothing to read has ended, unless another reader took what made it readable meanwhile, after which it
+            // isn't readable any more
+            return !baseStream.Socket.Poll(0, SelectMode.SelectRead) || baseStream.Socket.Available > 0;
         }
         catch (Exception exception) when (exception is SocketException or ObjectDisposedException)
         {
