@@ -36,6 +36,8 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "ReadTimeoutException",
         "PrematureCloseException",
         "Connection reset",
+        // GitHub's release downloads, such as of the agent the servers load, time out at its gateway for minutes at times
+        "failed with 504 Gateway Timeout",
         // Paper's launcher checks the server jar it downloads from Mojang, which launchers before Minecraft 1.18 report as not valid, and older ones as invalid
         "Hash check failed for downloaded file",
         "Downloaded vanilla jar is not valid",
