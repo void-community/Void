@@ -24,6 +24,8 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
     private readonly CancellationTokenSource _ctsServerToPlayerForce = new();
     private readonly AsyncLock _lock = new();
     private readonly ConcurrentDictionary<Direction, State> _states = [];
+    // Each direction stops the other one as it stops, which it can only once both are started
+    private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task<Task>? _onStoppingTask;
 
     private Task? _playerToServerTask;
@@ -53,6 +55,7 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
         _serverToPlayerTask = ExecuteAsync(ServerChannel, PlayerChannel, Direction.Clientbound, _ctsServerToPlayer.Token, _ctsServerToPlayerForce.Token);
 
         _onStoppingTask = Task.WhenAll(_playerToServerTask, _serverToPlayerTask).ContinueWith(task => OnStoppedAsync(task, cancellationToken).CatchExceptions(logger, $"{nameof(LinkStoppedEvent)} caused exception(s)"));
+        _started.SetResult();
 
         logger.LogTrace("Started forwarding {Link} traffic", this);
     }
@@ -132,7 +135,7 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
 
     protected async Task ExecuteAsync(INetworkChannel sourceChannel, INetworkChannel destinationChannel, Direction direction, CancellationToken cancellationToken, CancellationToken forceCancellationToken)
     {
-        await Task.Yield();
+        await _started.Task;
 
         // A server that closes its connection may have sent something last, such as why it kicks the player, which the other direction reads
         var serverClosed = false;
