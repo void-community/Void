@@ -23,6 +23,14 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     private static readonly FieldInfo PooledRequestField = typeof(Request).GetField("_pooledRequest", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("DryIoc has no pooled request to drop the constructors of unloaded plugins from");
 
+    // DryIoc hands each scope it disposes its static empty maps, which every scope it opens after starts from, and a resolution that was
+    // already under way when the scope disposed still stores its service there, of an unloaded plugin or a player that left too.
+    private static readonly FieldInfo EmptyScopeMapsField = typeof(Scope).GetField("_emptyMaps", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("DryIoc has no empty scope maps to drop the services of disposed scopes from");
+
+    private static readonly MethodInfo CreateEmptyScopeMapsMethod = typeof(Scope).GetMethod("CreateEmptyMaps", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("DryIoc has no empty scope maps to start the scopes it opens after from");
+
     private readonly ConcurrentDictionary<Assembly, PluginContainer> _plugins = [];
 
     public TService CreateInstance<TService>(CancellationToken cancellationToken = default, params object[] parameters)
@@ -187,6 +195,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
             resolverContext.Dispose();
         }
+
+        DropDisposedScopeMaps();
     }
 
     public bool TryGetServiceReuse(Type serviceType, out ServiceLifetime reuse)
@@ -261,6 +271,13 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         // DryIoc starts another stack as it next needs one, while resolutions under way keep the one they hold.
         EmptyRequestStackField.SetValue(Request.Empty, null);
         PooledRequestField.SetValue(null, null);
+        DropDisposedScopeMaps();
+    }
+
+    // Scopes opened from now on start from empty maps of their own, while late services go to the maps only the disposed scopes keep
+    private static void DropDisposedScopeMaps()
+    {
+        EmptyScopeMapsField.SetValue(null, CreateEmptyScopeMapsMethod.Invoke(null, null));
     }
 
     private IEnumerable<IServiceProvider> GetScopedContainers(int playerStableHashCode, Assembly? preferredAssembly = null)
@@ -338,6 +355,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         if (context.IsDisposed && container.Scopes.TryRemove(KeyValuePair.Create(playerStableHashCode, playerScope)))
         {
             playerScope.Dispose();
+            DropDisposedScopeMaps();
             return null;
         }
 
