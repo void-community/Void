@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Docker.DotNet;
@@ -8,6 +10,7 @@ using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Extensions;
+using Void.Minecraft.Network;
 
 namespace Void.IntegrationTests.Infrastructure.Harness.Sides;
 
@@ -19,6 +22,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     private const int StartupFailureLogLines = 200;
     // Where the image feeds the console from when it creates the console pipe
     private const string ConsolePipePath = "/tmp/minecraft-console-in";
+    private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(250);
     // The image downloads the server and its mods while it starts, and lookups and downloads can fail for a moment.
     private static readonly string[] TransientStartupFailureMarkers =
     [
@@ -100,6 +104,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             try
             {
                 await container.StartAsync(attemptTimeout.Token);
+                await WaitForStatusAsync(container, attemptTimeout.Token);
                 return container;
             }
             catch (Exception exception) when (startupAttempt < MaximumStartupAttempts && IsTransientStartupFailure(exception))
@@ -122,6 +127,29 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         }
 
         throw new InvalidOperationException($"{serverDescription} startup attempts were exhausted without returning or throwing.");
+    }
+
+    // A server logs that it is done before it has the status it answers, and closes each status request until then, as it closes those of
+    // the proxy it is behind.
+    private static async Task WaitForStatusAsync(IContainer container, CancellationToken cancellationToken)
+    {
+        var port = container.GetMappedPublicPort(containerPort: 25565);
+
+        while (!await IsStatusAnsweredAsync(port, cancellationToken))
+            await Task.Delay(StatusPollInterval, cancellationToken);
+    }
+
+    private static async Task<bool> IsStatusAnsweredAsync(int port, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ServerStatus.RequestAsync(port, ProtocolVersion.Latest, cancellationToken);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or SocketException && !cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private static bool IsTransientStartupFailure(Exception exception)
