@@ -1,5 +1,5 @@
 # Builder stage: compile portablemc from source
-FROM rust:1.99-slim-trixie@sha256:59f72d5265cfcf281fcfa4d990e75f09c53f911def9913c47a4a89dca690a887 AS builder
+FROM rust:1.99-slim-trixie@sha256:4195a35184f0f4e8964c0208f3b2427b4b7581933878ef44344e6125cdc76269 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cargo install portablemc-cli --root /usr/local
 
 # Debian 12 still packages the LWJGL 2 JNI libraries used by legacy clients.
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS legacy-natives
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS legacy-natives
 
 WORKDIR /native-packages
 RUN apt-get update && apt-get download liblwjgl-java-jni libjinput-jni
