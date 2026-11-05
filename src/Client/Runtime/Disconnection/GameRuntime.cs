@@ -30,7 +30,7 @@ internal sealed partial class GameRuntime
 
         try
         {
-            while (await ReadDisconnectReasonAsync(game, timeout.Token).ConfigureAwait(continueOnCapturedContext: false) is null)
+            while (await TryReadDisconnectReasonAsync().ConfigureAwait(continueOnCapturedContext: false) is null)
                 await Task.Delay(DisconnectCheckIntervalMilliseconds, timeout.Token).ConfigureAwait(continueOnCapturedContext: false);
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -39,5 +39,18 @@ internal sealed partial class GameRuntime
         }
 
         await Console.Error.WriteLineAsync(value: "Minecraft agent closed the connection to the server").ConfigureAwait(continueOnCapturedContext: false);
+
+        // A game busy leaving the world can answer one query late, which tells nothing yet, so it is asked again until the wait's own limit
+        async Task<string?> TryReadDisconnectReasonAsync()
+        {
+            try
+            {
+                return await ReadDisconnectReasonAsync(game, timeout.Token).ConfigureAwait(continueOnCapturedContext: false);
+            }
+            catch (OperationCanceledException) when (!timeout.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
     }
 }
