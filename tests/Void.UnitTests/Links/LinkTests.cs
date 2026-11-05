@@ -16,6 +16,11 @@ using static Void.UnitTests.Players.PlayerServiceDisconnectTests;
 
 namespace Void.UnitTests.Links;
 
+// The links fill the thread pool for a while, which would slow the tests running beside them past their timeouts
+[CollectionDefinition(DisableParallelization = true)]
+public class LinkTestsCollection;
+
+[Collection(typeof(LinkTestsCollection))]
 public class LinkTests
 {
     [Fact]
