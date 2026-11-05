@@ -1,5 +1,5 @@
 # Builder stage: compile portablemc from source
-FROM rust:1.99-slim-trixie@sha256:ea0999ff67355d958b8799b6751c879a6d770076d26047dca66f6e51e77930d3 AS builder
+FROM rust:1.99-slim-trixie@sha256:59f72d5265cfcf281fcfa4d990e75f09c53f911def9913c47a4a89dca690a887 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -15,7 +15,7 @@ WORKDIR /native-packages
 RUN apt-get update && apt-get download liblwjgl-java-jni libjinput-jni
 
 # Runtime stage
-FROM debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1 AS runtime
+FROM debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS runtime
 
 ARG TARGETARCH
 
@@ -189,7 +189,7 @@ RUN portablemc-dry-run-with-retries "mojang:$MINECRAFT_VERSION"
 
 # Publish the API once during the image build. Runtime startup never restores or compiles source code.
 # The API and agent are platform independent, so they build once on the build machine instead of under emulation per platform.
-FROM --platform=$BUILDPLATFORM debian:13@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1 AS dotnet-builder
+FROM --platform=$BUILDPLATFORM debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS dotnet-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl default-jdk-headless libicu-dev maven \
  && rm -rf /var/lib/apt/lists/* \
