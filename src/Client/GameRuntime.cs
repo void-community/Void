@@ -89,9 +89,9 @@ internal sealed partial class GameRuntime(SessionDiagnostics? diagnostics = null
     private static readonly TimeSpan OutputSilenceLimit = TimeSpan.FromMinutes(minutes: 5);
     private static readonly TimeSpan PreparationScriptTimeLimit = TimeSpan.FromMinutes(minutes: 5);
     private static readonly JsonSerializerOptions TrackerJsonOptions = new(JsonSerializerDefaults.Web);
-    // Each retry of an upstream request waits this much longer than the one before, so an upstream that is down for less than a minute,
-    // as GitHub sometimes is, answers one of them.
-    private static readonly TimeSpan UpstreamRetryDelay = TimeSpan.FromSeconds(seconds: 15);
+    // Each retry of an upstream request waits this much longer than the one before, so an upstream that is down for a minute or more, as
+    // GitHub's release downloads sometimes are, answers one of them.
+    private static readonly TimeSpan UpstreamRetryDelay = TimeSpan.FromSeconds(seconds: 40);
     private readonly AsyncLock _windowOperations = new();
     private readonly ConcurrentDictionary<int, Task> _outputTasks = new();
     private readonly ConcurrentDictionary<int, ChannelReader<string>> _outputWarnings = new();
