@@ -149,16 +149,18 @@ public class SimpleMinecraftChannel(IMessageStreamBase head) : INetworkChannel
         // Underlying streams are often non-thread-safe during writes
         using var _ = await _writeLock.LockAsync(cancellationToken);
 
+        // A message goes out in several writes, and one cut short leaves the other side reading the rest of the connection from the middle of
+        // a message, so once it starts it is written whole. The network stream still gives up on a write that takes too long.
         switch (head)
         {
             case IMinecraftPacketMessageStream stream:
-                await stream.WritePacketAsync(message as IMinecraftPacket ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(IMinecraftPacket)}."), cancellationToken);
+                await stream.WritePacketAsync(message as IMinecraftPacket ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(IMinecraftPacket)}."), CancellationToken.None);
                 break;
             case ICompleteMessageStream stream:
-                await stream.WriteMessageAsync(message as CompleteBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(CompleteBinaryMessage)}."), cancellationToken);
+                await stream.WriteMessageAsync(message as CompleteBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(CompleteBinaryMessage)}."), CancellationToken.None);
                 break;
             case IBufferedMessageStream stream:
-                await stream.WriteAsMessageAsync(message as BufferedBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(BufferedBinaryMessage)}."), cancellationToken);
+                await stream.WriteAsMessageAsync(message as BufferedBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(BufferedBinaryMessage)}."), CancellationToken.None);
                 break;
             default:
                 throw new InvalidOperationException($"{head.GetType()} cannot be used to write messages");
