@@ -130,9 +130,8 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         throw new InvalidOperationException($"{serverDescription} startup attempts were exhausted without returning or throwing.");
     }
 
-    // A server logs that it is done before it has the status it answers, and closes each status request until then, as it closes those of
-    // the proxy it is behind. A server answers the status request of a game of its own release, while some, such as Paper's for 1.13, answer
-    // a newer one with another packet.
+    // A server logs that it is done before it has the status it answers. Until then it closes each status request, as it closes those of the
+    // proxy it is behind, or, as Paper for Minecraft 1.13 does, fails to build its answer and disconnects with a NullPointerException.
     private static async Task WaitForStatusAsync(IContainer container, ReleaseVersion release, CancellationToken cancellationToken)
     {
         var port = container.GetMappedPublicPort(containerPort: 25565);
@@ -149,7 +148,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             await ServerStatus.RequestAsync(port, protocolVersion, cancellationToken);
             return true;
         }
-        catch (Exception exception) when (exception is IOException or SocketException && !cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (exception is IOException or SocketException or IntegrationTestException && !cancellationToken.IsCancellationRequested)
         {
             return false;
         }
