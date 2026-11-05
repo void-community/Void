@@ -314,9 +314,12 @@ internal sealed partial class GameRuntime
     {
         var searchResult = await SearchAsync().ConfigureAwait(continueOnCapturedContext: false);
 
-        // The search reads the loader's repository, which fails now and then.
-        for (int attempt = 2; attempt <= UpstreamRequestAttempts && searchResult.ExitCode is not 0; attempt++)
+        // The search reads the loader's repository, which fails now and then, or doesn't answer until the search times out.
+        for (int attempt = 2; attempt <= UpstreamRequestAttempts && searchResult is not { ExitCode: 0 }; attempt++)
             searchResult = await SearchAsync().ConfigureAwait(continueOnCapturedContext: false);
+
+        if (searchResult is null)
+            throw MinecraftPreparationFailure($"{loader} {loaderVersion} could not be searched for: its repository didn't answer", unavailable: true);
 
         if (searchResult.ExitCode is not 0)
         {
@@ -333,13 +336,22 @@ internal sealed partial class GameRuntime
         return FindPortableMinecraftLoaderVersion(outputFields, minecraftVersion, loaderVersion)
                ?? throw MinecraftPreparationFailure($"{loader} has no build {loaderVersion} for Minecraft {minecraftVersion}");
 
-        Task<ProcessTextResult> SearchAsync()
+        async Task<ProcessTextResult?> SearchAsync()
         {
-            return RunProcessTextAsync(
-                CreateProcessStartInformation(PortableMinecraftPath, ["--output", "machine", "search", "--kind", loader, loaderVersion]),
-                TimeSpan.FromMinutes(minutes: 1),
-                cancellationToken
-            );
+            try
+            {
+                return await RunProcessTextAsync(
+                    CreateProcessStartInformation(PortableMinecraftPath, ["--output", "machine", "search", "--kind", loader, loaderVersion]),
+                    TimeSpan.FromMinutes(minutes: 1),
+                    cancellationToken
+                ).ConfigureAwait(continueOnCapturedContext: false);
+            }
+            catch (TimeoutException) when (!cancellationToken.IsCancellationRequested)
+            {
+                await Console.Error.WriteLineAsync($"Search for {loader} {loaderVersion} timed out").ConfigureAwait(continueOnCapturedContext: false);
+
+                return null;
+            }
         }
     }
 
