@@ -108,7 +108,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithEnvironment("JAVA_AGENTS", ModLoaderFixes.Url.ToString())
             .WithEnvironment("JVM_OPTS", jvmOptions);
 
-        return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", cancellationToken), logFileName, loader, release);
+        return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", release, cancellationToken), logFileName, loader, release);
     }
 
     /// <summary>Saves the server's debug log, with everything Forge and Minecraft logged at debug level and every packet, into a directory.</summary>

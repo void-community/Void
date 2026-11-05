@@ -10,6 +10,7 @@ using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Extensions;
+using Void.Minecraft;
 using Void.Minecraft.Network;
 
 namespace Void.IntegrationTests.Infrastructure.Harness.Sides;
@@ -93,7 +94,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     /// Starts a server container, retrying startups that failed because of a transient network error. Each attempt has the whole setup time,
     /// since a download that hangs until it times out, as Forge's Maven sometimes does, can take most of it.
     /// </summary>
-    protected static async Task<IContainer> StartContainerAsync(ContainerBuilder builder, string serverDescription, CancellationToken cancellationToken)
+    protected static async Task<IContainer> StartContainerAsync(ContainerBuilder builder, string serverDescription, ReleaseVersion release, CancellationToken cancellationToken)
     {
         for (var startupAttempt = 1; startupAttempt <= MaximumStartupAttempts; startupAttempt++)
         {
@@ -104,7 +105,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             try
             {
                 await container.StartAsync(attemptTimeout.Token);
-                await WaitForStatusAsync(container, attemptTimeout.Token);
+                await WaitForStatusAsync(container, release, attemptTimeout.Token);
                 return container;
             }
             catch (Exception exception) when (startupAttempt < MaximumStartupAttempts && IsTransientStartupFailure(exception))
@@ -130,20 +131,22 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     }
 
     // A server logs that it is done before it has the status it answers, and closes each status request until then, as it closes those of
-    // the proxy it is behind.
-    private static async Task WaitForStatusAsync(IContainer container, CancellationToken cancellationToken)
+    // the proxy it is behind. A server answers the status request of a game of its own release, while some, such as Paper's for 1.13, answer
+    // a newer one with another packet.
+    private static async Task WaitForStatusAsync(IContainer container, ReleaseVersion release, CancellationToken cancellationToken)
     {
         var port = container.GetMappedPublicPort(containerPort: 25565);
+        var protocolVersion = ProtocolVersion.Range().First(protocolVersion => protocolVersion.Releases.Contains(release));
 
-        while (!await IsStatusAnsweredAsync(port, cancellationToken))
+        while (!await IsStatusAnsweredAsync(port, protocolVersion, cancellationToken))
             await Task.Delay(StatusPollInterval, cancellationToken);
     }
 
-    private static async Task<bool> IsStatusAnsweredAsync(int port, CancellationToken cancellationToken)
+    private static async Task<bool> IsStatusAnsweredAsync(int port, ProtocolVersion protocolVersion, CancellationToken cancellationToken)
     {
         try
         {
-            await ServerStatus.RequestAsync(port, ProtocolVersion.Latest, cancellationToken);
+            await ServerStatus.RequestAsync(port, protocolVersion, cancellationToken);
             return true;
         }
         catch (Exception exception) when (exception is IOException or SocketException && !cancellationToken.IsCancellationRequested)

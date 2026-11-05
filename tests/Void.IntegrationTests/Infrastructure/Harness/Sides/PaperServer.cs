@@ -66,6 +66,6 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
         if (maximumPlayers is { } value)
             builder = builder.WithEnvironment("MAX_PLAYERS", value.ToString());
 
-        return new PaperServer(await StartContainerAsync(builder, $"{(vanilla ? "Vanilla" : "Paper")} server for Minecraft {release}", cancellationToken), logFileName);
+        return new PaperServer(await StartContainerAsync(builder, $"{(vanilla ? "Vanilla" : "Paper")} server for Minecraft {release}", release, cancellationToken), logFileName);
     }
 }
