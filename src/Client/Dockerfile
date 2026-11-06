@@ -148,6 +148,11 @@ ENV PATH="${DOTNET_ROOT}:${PATH}"
 # Fix sound errors by using the null audio driver
 RUN printf "pcm.!default { type null }\nctl.!default { type null }\n" > /etc/asound.conf
 
+# ALSA's null device takes sound as fast as it comes, so OpenAL would mix without pause and hold its device while games wait to play each
+# sound. Its own null device takes sound at the pace it plays.
+RUN mkdir -p /etc/openal && printf "[general]\ndrivers = null\n" > /etc/openal/alsoft.conf
+ENV ALSOFT_DRIVERS=null
+
 # Skip Minecraft accessibility screen
 RUN mkdir -p "$HOME/.minecraft" && touch "$HOME/.minecraft/options.txt"
 
