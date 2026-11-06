@@ -1,5 +1,5 @@
 # Builder stage: compile portablemc from source
-FROM rust:1.99-slim-trixie@sha256:4195a35184f0f4e8964c0208f3b2427b4b7581933878ef44344e6125cdc76269 AS builder
+FROM rust:1.99-slim-trixie@sha256:7eab7ce19273ce785e0ca7578bdf7bc1fcbae621775a8197379a04c9f6e03cd5 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -147,6 +147,11 @@ ENV PATH="${DOTNET_ROOT}:${PATH}"
 
 # Fix sound errors by using the null audio driver
 RUN printf "pcm.!default { type null }\nctl.!default { type null }\n" > /etc/asound.conf
+
+# ALSA's null device takes sound as fast as it comes, so OpenAL would mix without pause and hold its device while games wait to play each
+# sound. Its own null device takes sound at the pace it plays.
+RUN mkdir -p /etc/openal && printf "[general]\ndrivers = null\n" > /etc/openal/alsoft.conf
+ENV ALSOFT_DRIVERS=null
 
 # Skip Minecraft accessibility screen
 RUN mkdir -p "$HOME/.minecraft" && touch "$HOME/.minecraft/options.txt"
