@@ -314,9 +314,13 @@ internal sealed partial class GameRuntime
     {
         var searchResult = await SearchAsync().ConfigureAwait(continueOnCapturedContext: false);
 
-        // The search reads the loader's repository, which fails now and then, or doesn't answer until the search times out.
+        // The search reads the loader's repository, which fails now and then, or doesn't answer until the search times out, and can't even be
+        // looked up for a while, so each search waits longer than the one before.
         for (int attempt = 2; attempt <= UpstreamRequestAttempts && searchResult is not { ExitCode: 0 }; attempt++)
+        {
+            await Task.Delay(UpstreamRetryDelay * (attempt - 1), cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
             searchResult = await SearchAsync().ConfigureAwait(continueOnCapturedContext: false);
+        }
 
         if (searchResult is null)
             throw MinecraftPreparationFailure($"{loader} {loaderVersion} could not be searched for: its repository didn't answer", unavailable: true);
