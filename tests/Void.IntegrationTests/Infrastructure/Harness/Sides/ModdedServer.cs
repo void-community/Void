@@ -72,8 +72,6 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithEnvironment("MODRINTH_PROJECTS", contentMod)
             .WithEnvironment("MODRINTH_DOWNLOAD_DEPENDENCIES", "required")
             .WithEnvironment("MEMORY", release.CompareTo(LargerMemoryRelease) < 0 ? "1536M" : "2G")
-            .WithEnvironment("DIFFICULTY", "peaceful")
-            .WithEnvironment("MODE", "creative")
             .WithEnvironment("GENERATE_STRUCTURES", "FALSE")
             .WithEnvironment("SPAWN_ANIMALS", "FALSE")
             .WithEnvironment("SPAWN_MONSTERS", "FALSE")
@@ -87,6 +85,8 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             .WithEnvironment("CREATE_CONSOLE_IN_PIPE", "TRUE")
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
+
+        builder = WithCreativePeaceful(builder, release);
 
         if (loaderVersion is not null)
             builder = builder.WithEnvironment(loader is ModLoader.Forge ? "FORGE_VERSION" : "NEOFORGE_VERSION", loaderVersion);

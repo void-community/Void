@@ -132,6 +132,15 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         throw new InvalidOperationException($"{serverDescription} startup attempts were exhausted without returning or throwing.");
     }
 
+    // The image writes the game mode and difficulty by name from Minecraft 1.13, which servers read by name only from 1.14, so 1.13 servers
+    // fall back to survival and easy unless given the numbers.
+    protected static ContainerBuilder WithCreativePeaceful(ContainerBuilder builder, ReleaseVersion release)
+    {
+        return release is { Major: 1, Minor: 13 }
+            ? builder.WithEnvironment("CUSTOM_SERVER_PROPERTIES", "gamemode=1\ndifficulty=0")
+            : builder.WithEnvironment("DIFFICULTY", "peaceful").WithEnvironment("MODE", "creative");
+    }
+
     // A server logs that it is done before it has the status it answers. Until then it closes each status request, as it closes those of the
     // proxy it is behind, or, as Paper for Minecraft 1.13 does, fails to build its answer and disconnects with a NullPointerException.
     private static async Task WaitForStatusAsync(IContainer container, ReleaseVersion release, CancellationToken cancellationToken)

@@ -30,8 +30,6 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             .WithEnvironment("EULA", "TRUE")
             .WithEnvironment("TYPE", vanilla ? "VANILLA" : "PAPER")
             .WithEnvironment("VERSION", release.ToString())
-            .WithEnvironment("DIFFICULTY", "peaceful")
-            .WithEnvironment("MODE", "creative")
             .WithEnvironment("GENERATE_STRUCTURES", "FALSE")
             .WithEnvironment("SPAWN_ANIMALS", "FALSE")
             .WithEnvironment("SPAWN_MONSTERS", "FALSE")
@@ -46,6 +44,8 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             // Paper before Minecraft 1.17 patches Mojang's server on its first start, which takes minutes when servers start side by side.
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
+
+        builder = WithCreativePeaceful(builder, release);
 
         // Paper's own settings: a longer keep-alive, and no throttle on players that reconnect at once, which vanilla servers don't have.
         if (!vanilla)
