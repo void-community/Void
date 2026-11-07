@@ -213,8 +213,6 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
             if (!entry.IsCompatible(eventType))
                 continue;
 
-            await Task.Yield();
-
             if (!entry.BypassScopedFilter && @event is IScopedEvent scopedEvent)
             {
                 var serviceType = listener.GetType();
