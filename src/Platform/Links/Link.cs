@@ -169,6 +169,11 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
             }
             catch (Exception exception) when (exception is StreamException or ObjectDisposedException)
             {
+                // A listener that sent to a side that closed meanwhile, as one answering a server that kicks the player, failed rather than the read,
+                // and what the source sent before it closed, such as why, is still read
+                if (_states[direction] is State.MessageReceivedEventStart)
+                    continue;
+
                 _stopReason = direction switch
                 {
                     Direction.Serverbound => LinkStopReason.PlayerDisconnected, // source (player) disconnected

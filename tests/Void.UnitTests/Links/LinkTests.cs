@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Void.Proxy.Api.Events.Links;
+using Void.Proxy.Api.Events.Network;
 using Void.Proxy.Api.Events.Services;
 using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Network.Exceptions;
@@ -47,6 +49,62 @@ public class LinkTests
         }, TestContext.Current.CancellationToken));
 
         Assert.Equal(0, (await Task.WhenAll(links)).Count(stopped => !stopped));
+    }
+
+    [Fact]
+    public async Task ServerMessageAfterListenerFoundServerClosedIsStillRead()
+    {
+        // A server that kicks a player sends why and closes, while a listener may still be answering what the server sent before, such as a keep-alive
+        // that SlowJoin answers for the player. The answer finds the server closed, and the kick that follows is still read from the connection.
+        var keepAlive = StandIn.Create<INetworkMessage>((_, _) => null);
+        var kick = StandIn.Create<INetworkMessage>((_, _) => null);
+        var serverMessages = new Queue<INetworkMessage>([keepAlive, kick]);
+        var written = new List<INetworkMessage>();
+        var stopped = new TaskCompletionSource();
+
+        var events = StandIn.Create<IEventService>((_, arguments) => arguments switch
+        {
+            [MessageReceivedEvent { Message: var message }, ..] when message == keepAlive => ValueTask.FromException<bool>(new StreamClosedException()),
+            [LinkStoppedEvent, ..] => Stopped(),
+            _ => null
+        });
+
+        var serverChannel = StandIn.Create<INetworkChannel>((method, _) => method.Name switch
+        {
+            "get_CanRead" or "get_CanWrite" => true,
+            nameof(INetworkChannel.ReadMessageAsync) => serverMessages.TryDequeue(out var message) ? ValueTask.FromResult(message) : ValueTask.FromException<INetworkMessage>(new StreamClosedException()),
+            _ => null
+        });
+
+        var playerChannel = StandIn.Create<INetworkChannel>((method, arguments) => method.Name switch
+        {
+            "get_CanRead" or "get_CanWrite" => true,
+            nameof(INetworkChannel.ReadMessageAsync) => WaitForCancellationAsync(arguments.OfType<CancellationToken>().ToArray()),
+            nameof(INetworkChannel.WriteMessageAsync) when arguments is [INetworkMessage message, ..] => Write(message),
+            _ => null
+        });
+
+        var link = new Link(StandIn.Create<IPlayer>((_, _) => null), StandIn.Create<IServer>((_, _) => null), playerChannel, serverChannel, NullLogger.Instance, events,
+            CancellationToken.None);
+
+        await link.StartAsync(TestContext.Current.CancellationToken);
+        await stopped.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal([kick], written);
+
+        ValueTask Write(INetworkMessage message)
+        {
+            lock (written)
+                written.Add(message);
+
+            return ValueTask.CompletedTask;
+        }
+
+        object? Stopped()
+        {
+            stopped.TrySetResult();
+            return null;
+        }
     }
 
     private static INetworkChannel Channel(bool left)
