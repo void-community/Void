@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.NETCore.Client;
 
@@ -21,19 +21,19 @@ internal static class PluginRetentionInspector
     private const nint AnyPtracer = -1;
 
     /// <summary>Describes the chains of references that keep the plugin alive.</summary>
-    /// <param name="pluginType">A weak handle to a type of the plugin.</param>
+    /// <param name="plugin">A weak handle to a type of the plugin or to its load context.</param>
     /// <returns>The chains as code reads them, and the same chains as the runtime names their frames.</returns>
-    public static async ValueTask<(string Chains, string Frames)> DescribeAsync(GCHandle pluginType, CancellationToken cancellationToken)
+    public static async ValueTask<(string Chains, string Frames)> DescribeAsync(GCHandle plugin, CancellationToken cancellationToken)
     {
         if (!CarriesRuntimeDiagnostics(CreateDumpFileName) || !CarriesRuntimeDiagnostics(DacFileName))
-            return (await PluginRetentionSnapshot.DescribeAsync(pluginType, cancellationToken), string.Empty);
+            return (await PluginRetentionSnapshot.DescribeAsync(plugin, cancellationToken), string.Empty);
 
         var dumpPath = Path.Combine(Path.GetTempPath(), $"void-plugin-retention-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
 
         try
         {
             await WriteDumpAsync(dumpPath, cancellationToken);
-            var output = await AnalyzeAsync(dumpPath, (ulong)GCHandle.ToIntPtr(pluginType), cancellationToken);
+            var output = await AnalyzeAsync(dumpPath, (ulong)GCHandle.ToIntPtr(plugin), cancellationToken);
 
             return output.Split($"\n{PluginRetentionAnalyzer.FramesHeader}\n", 2) is [var chains, var frames] ? (chains.TrimEnd(), frames.TrimEnd()) : (output, string.Empty);
         }

@@ -308,6 +308,26 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public async ValueTask UnloadContainerAsync(string name, CancellationToken cancellationToken = default)
     {
+        var (context, count) = await UnloadPluginsAsync(name, cancellationToken);
+
+        try
+        {
+            // The context outlives the plugin's types while the plugin's other objects, or anything that kept the context, are alive
+            if (!await WaitForCollectionAsync(() => context.Target is null, cancellationToken))
+                throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, context, cancellationToken)}");
+        }
+        finally
+        {
+            context.Free();
+        }
+
+        logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
+    }
+
+    // Its own state machine, so the container it unloads, which keeps its load context, isn't kept by the one that waits for the context to be
+    // collected.
+    private async ValueTask<(GCHandle Context, int Count)> UnloadPluginsAsync(string name, CancellationToken cancellationToken)
+    {
         var container = _containers.Snapshot.FirstOrDefault(reference => reference.Context.Name == name) ??
                         throw new Exception($"Plugin container {name} not found");
 
@@ -336,20 +356,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             await container.CancellationTokenSource.CancelAsync();
             container.Context.Unload();
 
-            var collectionTime = Stopwatch.GetTimestamp();
-
-            do
-            {
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-                GC.WaitForPendingFinalizers();
-
-                if (IsCollected(container, pluginType))
-                    break;
-
-                await Task.Delay(_gcRate, cancellationToken);
-            } while (Stopwatch.GetElapsedTime(collectionTime) < _unloadTimeout);
-
-            if (!IsCollected(container, pluginType))
+            if (!await WaitForCollectionAsync(() => IsCollected(container, pluginType), cancellationToken))
                 throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, pluginType, cancellationToken)}");
         }
         finally
@@ -362,7 +369,25 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         // the unload is told of, so whoever reads of it finds it gone
         _containers.RemoveAll(reference => reference == container || !reference.IsAlive);
 
-        logger.LogInformation("Unloaded {ContextName} {Count} plugin(s)", name, count);
+        return (TrackContext(container), count);
+    }
+
+    private async ValueTask<bool> WaitForCollectionAsync(Func<bool> isCollected, CancellationToken cancellationToken)
+    {
+        var collectionTime = Stopwatch.GetTimestamp();
+
+        do
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+
+            if (isCollected())
+                return true;
+
+            await Task.Delay(_gcRate, cancellationToken);
+        } while (Stopwatch.GetElapsedTime(collectionTime) < _unloadTimeout);
+
+        return isCollected();
     }
 
     // Its own state machine, so the last plugin it throws the events for isn't kept by the one that waits for the plugin to be collected.
@@ -385,19 +410,25 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    private static GCHandle TrackContext(WeakPluginContainer container)
+    {
+        return GCHandle.Alloc(container.Context, GCHandleType.Weak);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool IsCollected(WeakPluginContainer container, GCHandle pluginType)
     {
         return pluginType.IsAllocated ? pluginType.Target is null : !container.IsAlive;
     }
 
-    private async ValueTask<string> DescribeRetentionAsync(string name, GCHandle pluginType, CancellationToken cancellationToken)
+    private async ValueTask<string> DescribeRetentionAsync(string name, GCHandle plugin, CancellationToken cancellationToken)
     {
-        if (!pluginType.IsAllocated)
+        if (!plugin.IsAllocated)
             return "It has no plugins to tell what keeps them alive";
 
         try
         {
-            var (chains, frames) = await PluginRetentionInspector.DescribeAsync(pluginType, cancellationToken);
+            var (chains, frames) = await PluginRetentionInspector.DescribeAsync(plugin, cancellationToken);
 
             if (frames.Length > 0)
                 logger.LogTrace("Plugins context {ContextName} is kept alive through these frames:\n\n{Frames}", name, frames);

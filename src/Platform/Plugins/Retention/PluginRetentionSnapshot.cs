@@ -1,7 +1,8 @@
-using System.Diagnostics.Tracing;
+﻿using System.Diagnostics.Tracing;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using System.Text;
 using Microsoft.Diagnostics.NETCore.Client;
 using Microsoft.Diagnostics.Tracing;
@@ -26,17 +27,22 @@ internal static class PluginRetentionSnapshot
     private static readonly TimeSpan SnapshotTimeout = TimeSpan.FromMinutes(1);
 
     /// <summary>Describes the chains of references that keep the plugin alive, as <see cref="PluginRetentionAnalyzer" /> writes them.</summary>
-    /// <param name="pluginType">A weak handle to a type of the plugin.</param>
-    public static async ValueTask<string> DescribeAsync(GCHandle pluginType, CancellationToken cancellationToken)
+    /// <param name="plugin">A weak handle to a type of the plugin or to its load context.</param>
+    public static async ValueTask<string> DescribeAsync(GCHandle plugin, CancellationToken cancellationToken)
     {
         var heap = await Task.Run(() => Collect(Environment.ProcessId), cancellationToken);
-        return Describe(heap, GetAssembly(pluginType));
+        return Describe(heap, GetAssembly(plugin));
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static Assembly GetAssembly(GCHandle pluginType)
+    private static Assembly GetAssembly(GCHandle plugin)
     {
-        return (pluginType.Target as Type)?.Assembly ?? throw new InvalidOperationException("The plugin was collected by the time its snapshot was taken");
+        return plugin.Target switch
+        {
+            Type type => type.Assembly,
+            AssemblyLoadContext context => context.Assemblies.FirstOrDefault() ?? throw new InvalidOperationException("The load context has no assembly left whose objects this runtime can tell"),
+            _ => throw new InvalidOperationException("The plugin was collected by the time its snapshot was taken")
+        };
     }
 
     private static string Describe(Heap heap, Assembly plugin)
