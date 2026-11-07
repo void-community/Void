@@ -85,15 +85,13 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
             for (var entryIndex = 0; entryIndex < entries.Length; entryIndex++)
             {
                 var entry = entries[entryIndex];
-                var invokedKey = new InvokedListenerMethod(entry.Listener, entry.Method);
 
-                if (invoked.Contains(invokedKey))
-                    continue;
-
+                // Most entries listen to other events, and the key holds weak references, which cost more than the check
                 if (!eventType.IsAssignableTo(entry.EventType))
                     continue;
 
-                invoked.Add(invokedKey);
+                if (!invoked.Add(new InvokedListenerMethod(entry.Listener, entry.Method)))
+                    continue;
 
                 candidates.Add(new InvocationCandidate(
                     entry.Order,
