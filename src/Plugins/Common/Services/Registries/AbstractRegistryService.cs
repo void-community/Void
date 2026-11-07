@@ -37,11 +37,16 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
     {
         foreach (var player in players.All)
         {
-            if (player.Link is not { } link)
-                continue;
+            // The player's own channel keeps what plugins registered on it while it joins or moves between servers, without a link
+            var pendingLink = links.TryGetWeakLink(player, out var weakLink) ? weakLink : null;
+            INetworkChannel?[] channels = [player.Context.Channel, player.Link?.PlayerChannel, player.Link?.ServerChannel, pendingLink?.ServerChannel];
 
-            link.PlayerChannel.MinecraftRegistries.ClearPlugin(@event.Plugin);
-            link.ServerChannel.MinecraftRegistries.ClearPlugin(@event.Plugin);
+            // A channel that carries no Minecraft packets, as one built while no protocol read its handshake does, keeps no registries
+            foreach (var channel in channels.OfType<INetworkChannel>().Distinct())
+            {
+                if (channel.TryGet<IMinecraftPacketMessageStream>(out var stream))
+                    stream.Registries.ClearPlugin(@event.Plugin);
+            }
         }
     }
 
@@ -198,25 +203,25 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
     }
 
     [Subscribe]
-    public async ValueTask OnPluginUnloading(PluginUnloadingEvent @event, CancellationToken cancellationToken)
+    public void OnPluginUnloading(PluginUnloadingEvent @event)
     {
         if (@event.Plugin != plugin)
             return;
 
         events.UnregisterListeners(this);
 
-        await players.ForEachAsync(async (player, eachCancellationToken) =>
+        players.ForEach(player =>
         {
-            var channel = await player.GetChannelAsync(eachCancellationToken);
-
-            if (!channel.TryGet<IMinecraftPacketMessageStream>(out _))
+            // A player still connecting has no channel to keep the plugin's registries yet, and building one here would build it for the
+            // player as it was before a protocol took it
+            if (player.Context.Channel is not { } channel || !channel.TryGet<IMinecraftPacketMessageStream>(out _))
                 return;
 
             if (links.TryGetLink(player, out var link))
                 link.ServerChannel.DisposeRegistries(plugin);
 
             channel.DisposeRegistries(plugin);
-        }, cancellationToken);
+        });
     }
 
     protected static IEnumerable<IMinecraftPacket> DecodeBinaryMessage(ILink link, Operation operation, IMinecraftPacketIdPluginsRegistry registries, IMinecraftPacketTransformationsPluginsRegistry transformationsMappings, IMinecraftBinaryMessage binaryMessage)
@@ -327,17 +332,22 @@ public abstract class AbstractRegistryService(ILogger<AbstractRegistryService> l
 
     internal static void ClearLinkTransformations(INetworkChannel playerChannel, INetworkChannel serverChannel, bool preservePlayerChannel)
     {
+        // The player still plays its protocol without a link, so the proxy's own packets to it, such as a kick as the proxy stops, still
+        // need the system transformations of its version. The next link registers them only where they are missing, and the protocol plugin
+        // releases them as it unloads.
         if (!preservePlayerChannel)
-            ClearTransformations(playerChannel);
+            ClearTransformations(playerChannel, system: false);
 
-        ClearTransformations(serverChannel);
+        ClearTransformations(serverChannel, system: true);
 
-        static void ClearTransformations(INetworkChannel channel)
+        static void ClearTransformations(INetworkChannel channel, bool system)
         {
             if (!channel.TryGet<IMinecraftPacketMessageStream>(out var packetStream))
                 return;
 
-            packetStream.Registries.PacketTransformationsSystem.Clear();
+            if (system)
+                packetStream.Registries.PacketTransformationsSystem.Clear();
+
             packetStream.Registries.PacketTransformationsPlugins.Clear();
         }
     }

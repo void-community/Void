@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Docker.DotNet;
@@ -8,15 +10,20 @@ using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Void.IntegrationTests.Infrastructure.Exceptions;
 using Void.IntegrationTests.Infrastructure.Extensions;
+using Void.Minecraft;
+using Void.Minecraft.Network;
 
 namespace Void.IntegrationTests.Infrastructure.Harness.Sides;
 
 public abstract record MinecraftServer(IContainer Container, string LogFileName) : IIntegrationSide
 {
-    private const int MaximumStartupAttempts = 3;
+    // A download origin that times out does so for a minute or more, such as PaperMC's, so the retries, waiting twice as long each time, span
+    // a few minutes
+    private const int MaximumStartupAttempts = 5;
     private const int StartupFailureLogLines = 200;
     // Where the image feeds the console from when it creates the console pipe
     private const string ConsolePipePath = "/tmp/minecraft-console-in";
+    private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(250);
     // The image downloads the server and its mods while it starts, and lookups and downloads can fail for a moment.
     private static readonly string[] TransientStartupFailureMarkers =
     [
@@ -29,8 +36,12 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "ReadTimeoutException",
         "PrematureCloseException",
         "Connection reset",
-        // Paper's launcher checks the server jar it downloads from Mojang
-        "Hash check failed for downloaded file"
+        // GitHub's release downloads, such as of the agent the servers load, time out at its gateway for minutes at times
+        "failed with 504 Gateway Timeout",
+        // Paper's launcher checks the server jar it downloads from Mojang, which launchers before Minecraft 1.18 report as not valid, and older ones as invalid
+        "Hash check failed for downloaded file",
+        "Downloaded vanilla jar is not valid",
+        "Invalid original jar"
     ];
     private readonly DateTime _readLogsSince = DateTime.UtcNow;
     public int Port => Container.GetMappedPublicPort(containerPort: 25565);
@@ -85,7 +96,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     /// Starts a server container, retrying startups that failed because of a transient network error. Each attempt has the whole setup time,
     /// since a download that hangs until it times out, as Forge's Maven sometimes does, can take most of it.
     /// </summary>
-    protected static async Task<IContainer> StartContainerAsync(ContainerBuilder builder, string serverDescription, CancellationToken cancellationToken)
+    protected static async Task<IContainer> StartContainerAsync(ContainerBuilder builder, string serverDescription, ReleaseVersion release, CancellationToken cancellationToken)
     {
         for (var startupAttempt = 1; startupAttempt <= MaximumStartupAttempts; startupAttempt++)
         {
@@ -96,6 +107,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             try
             {
                 await container.StartAsync(attemptTimeout.Token);
+                await WaitForStatusAsync(container, release, attemptTimeout.Token);
                 return container;
             }
             catch (Exception exception) when (startupAttempt < MaximumStartupAttempts && IsTransientStartupFailure(exception))
@@ -107,14 +119,50 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             }
             catch (Exception exception)
             {
-                // The server's own output says why it didn't start, such as a mod loader installer that failed.
+                // The server's own output says why it didn't start, such as a mod loader installer that failed, and its threads where one that hangs waits.
                 var logs = await TryReadLastLogsAsync(container);
+                if (exception is TimeoutException)
+                    await TryDumpThreadsAsync(container, serverDescription);
+
                 await DisposeFailedContainerAsync(container, serverDescription);
                 throw new IntegrationTestException($"{serverDescription} failed to start: {exception.Message}\nLast server logs:\n{logs}", exception);
             }
         }
 
         throw new InvalidOperationException($"{serverDescription} startup attempts were exhausted without returning or throwing.");
+    }
+
+    // The image writes the game mode and difficulty by name from Minecraft 1.13, which servers read by name only from 1.14, so 1.13 servers
+    // fall back to survival and easy unless given the numbers.
+    protected static ContainerBuilder WithCreativePeaceful(ContainerBuilder builder, ReleaseVersion release)
+    {
+        return release is { Major: 1, Minor: 13 }
+            ? builder.WithEnvironment("CUSTOM_SERVER_PROPERTIES", "gamemode=1\ndifficulty=0")
+            : builder.WithEnvironment("DIFFICULTY", "peaceful").WithEnvironment("MODE", "creative");
+    }
+
+    // A server logs that it is done before it has the status it answers. Until then it closes each status request, as it closes those of the
+    // proxy it is behind, or, as Paper for Minecraft 1.13 does, fails to build its answer and disconnects with a NullPointerException.
+    private static async Task WaitForStatusAsync(IContainer container, ReleaseVersion release, CancellationToken cancellationToken)
+    {
+        var port = container.GetMappedPublicPort(containerPort: 25565);
+        var protocolVersion = ProtocolVersion.Range().First(protocolVersion => protocolVersion.Releases.Contains(release));
+
+        while (!await IsStatusAnsweredAsync(port, protocolVersion, cancellationToken))
+            await Task.Delay(StatusPollInterval, cancellationToken);
+    }
+
+    private static async Task<bool> IsStatusAnsweredAsync(int port, ProtocolVersion protocolVersion, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ServerStatus.RequestAsync(port, protocolVersion, cancellationToken);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or IntegrationTestException && !cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private static bool IsTransientStartupFailure(Exception exception)
@@ -139,6 +187,24 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         catch (Exception exception)
         {
             return $"(the logs couldn't be read: {exception.Message})";
+        }
+    }
+
+    // A server that hangs as it starts logs nothing more, while Java prints where each of its threads is when it is sent SIGQUIT. The dump is written
+    // once to the test output, since every test of a collection whose servers failed to start repeats the failure.
+    private static async Task TryDumpThreadsAsync(IContainer container, string serverDescription)
+    {
+        try
+        {
+            var dumpedSince = DateTime.UtcNow;
+            await container.ExecAsync(["pkill", "-QUIT", "-x", "java"], CancellationToken.None);
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            var dump = await container.ReadLogsAsync(dumpedSince, CancellationToken.None);
+            Console.WriteLine($"[Void.IntegrationTests] Threads of the {serverDescription} that didn't start in time:\n{string.Join('\n', dump)}");
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"[Void.IntegrationTests] The threads of the {serverDescription} that didn't start in time couldn't be dumped: {exception.Message}");
         }
     }
 

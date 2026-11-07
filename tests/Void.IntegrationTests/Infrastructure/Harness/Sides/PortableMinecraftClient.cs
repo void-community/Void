@@ -97,7 +97,10 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         private const string ModsDirectory = "/root/.minecraft/mods/";
         private const string JvmOutputPath = "/root/jvm-output.log";
         private const string ThreadDumpHeader = "Full thread dump";
-        private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(5);
+        private const int ThreadDumps = 3;
+        private static readonly TimeSpan ThreadDumpInterval = TimeSpan.FromSeconds(5);
+        // Longer than the client's own limit of 5 minutes to install a game, so an install that stalls fails with the client's report of it
+        private static readonly TimeSpan ReadyTimeout = TimeSpan.FromMinutes(7);
 
         private ApiProblemDetails? _lastPlayersProblem;
         private Guid? _sessionId;
@@ -220,6 +223,23 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 throw new IntegrationTestException("The client image predates POST /api/game/disconnect");
 
             await EnsureSuccessAsync(response, $"Disconnecting {GameName}", cancellationToken);
+        }
+
+        /// <summary>Waits until the server the game plays on removes it, and fails unless the game shows <paramref name="expectedReason"/> as why.</summary>
+        public async Task ExpectKickAsync(string expectedReason, CancellationToken cancellationToken = default)
+        {
+            var status = await ReadStatusAsync(cancellationToken);
+
+            while (status.State is "connected")
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                status = await ReadStatusAsync(cancellationToken);
+            }
+
+            if (status.Disconnect is not { Code: "client.connection.lost" } disconnect || disconnect.Message?.Contains(expectedReason, StringComparison.Ordinal) is not true)
+                throw new IntegrationTestException($"{GameName} did not show the expected kick reason {expectedReason}: {JsonSerializer.Serialize(status)}");
+
+            await LogAsync($"{GameName} was kicked: {disconnect.Message}", cancellationToken);
         }
 
         public async Task SendChatAsync(string text, CancellationToken cancellationToken = default)
@@ -387,18 +407,27 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
         }
 
         // A JVM writes where each of its threads is, and which locks they hold, to its output on SIGQUIT, so a game that hangs shows where.
+        // Dumps some seconds apart tell a thread that is stuck, which stays where it was, from one that is only slow.
         internal async Task TryDumpThreadsAsync()
         {
             try
             {
-                await Container.RunCommandAsync(["pkill", "--signal", "QUIT", "--exact", "java"], Timeouts.StepTimeoutToken);
+                var dumpedBefore = (await TryReadJvmOutputAsync()).Length;
+
+                for (var signal = 0; signal < ThreadDumps; signal++)
+                {
+                    if (signal > 0)
+                        await Task.Delay(ThreadDumpInterval);
+
+                    await Container.RunCommandAsync(["pkill", "--signal", "QUIT", "--exact", "java"], Timeouts.StepTimeoutToken);
+                }
 
                 // The JVM writes the dump on a thread of its own after the signal.
                 await Task.Delay(TimeSpan.FromSeconds(2));
 
-                // The file starts with the game's command line, which holds the client agent's token, so only the dump is kept.
-                var output = Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken));
-                var dumpStart = output.LastIndexOf(ThreadDumpHeader, StringComparison.Ordinal);
+                // The file starts with the game's command line, which holds the client agent's token, so only the dumps are kept.
+                var output = await TryReadJvmOutputAsync();
+                var dumpStart = output.IndexOf(ThreadDumpHeader, Math.Min(dumpedBefore, output.Length), StringComparison.Ordinal);
 
                 if (dumpStart < 0)
                 {
@@ -417,6 +446,19 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
             catch (Exception exception)
             {
                 await LogAsync($"Dumping {GameName} threads failed: {exception.Message}", CancellationToken.None);
+            }
+        }
+
+        // A game that never started, such as one whose install stalled, has written no output
+        private async Task<string> TryReadJvmOutputAsync()
+        {
+            try
+            {
+                return Encoding.UTF8.GetString(await Container.ReadFileAsync(JvmOutputPath, Timeouts.StepTimeoutToken));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return string.Empty;
             }
         }
 
@@ -561,7 +603,9 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
 
         private record ApiProblemDetails(string? Title, int? Status, string? Detail, ApiFailure? Failure);
 
-        private record ApiStatus(string State, long OperationId, string? Operation, string OperationState, int? ProcessId, int? ExitCode, string? Message, string? Error, ApiFailure? Failure, DateTimeOffset UpdatedAt, Guid? SessionId = null);
+        private record ApiDisconnect(string Code, string? Stage, string? Message);
+
+        private record ApiStatus(string State, long OperationId, string? Operation, string OperationState, int? ProcessId, int? ExitCode, string? Message, string? Error, ApiFailure? Failure, DateTimeOffset UpdatedAt, Guid? SessionId = null, ApiDisconnect? Disconnect = null);
 
         private record StopGameResponse(string Mode, ApiStatus Status);
 

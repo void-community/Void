@@ -14,8 +14,8 @@ Use `/server [server-name]` to send yourself to another backend server. If no na
 ## Platform Commands
 
 - `/stop` — immediately stops the proxy.
-- `/plugins` — lists currently loaded plugins. Learn more about [**developing plugins**](/docs/developing-plugins/development-kit/).
-- `/unload <name>` — unloads a plugin container without restarting.
+
+The proxy itself provides [**`/plugins`**](/docs/configuration/in-file/#managing-plugins-at-runtime) to list, load, unload and reload plugins, so it stays available when Essentials is unloaded.
 
 ## Moderation
 

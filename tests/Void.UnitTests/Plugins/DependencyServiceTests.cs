@@ -38,7 +38,7 @@ public class DependencyServiceTests
                 dependencies.DisposePlayerScope(context);
         });
 
-        dependencies.OnPluginUnloading(new PluginUnloadingEvent(plugin));
+        dependencies.OnPluginUnloaded(new PluginUnloadedEvent(plugin));
     }
 
     private static IPlayerContext PlayerContext(int stableHashCode)

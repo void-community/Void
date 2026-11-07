@@ -34,6 +34,7 @@ public class IntegrationUnitBase
             Console.WriteLine($"Primary integration failure:\n{exception}");
             Console.WriteLine(await CollectLogsAsync(voidLogWindowStartedAt, sides));
             await SaveServerDebugLogsAsync(sides);
+            await SaveProxyLogsAsync(voidProxies);
             throw new IntegrationTestException($"Test execution failed: {exception.Message}", exception);
         }
         finally
@@ -47,8 +48,7 @@ public class IntegrationUnitBase
     // Modded servers log everything at debug level, every packet included, into a file, which a failed test keeps in its steps.
     private static async Task SaveServerDebugLogsAsync(IIntegrationSide[] sides)
     {
-        var testName = string.Join('_', (TestContext.Current.Test?.TestDisplayName ?? "Unknown").Split(Path.GetInvalidFileNameChars()));
-        var directory = Path.Combine(Directory.GetCurrentDirectory(), "steps", "ServerDebugLogs", testName, DateTime.UtcNow.ToString("HHmmss"));
+        var directory = GetFailureLogsDirectory("ServerDebugLogs");
 
         foreach (var server in sides.OfType<ModdedServer>().Distinct())
         {
@@ -61,6 +61,32 @@ public class IntegrationUnitBase
                 Console.WriteLine($"[Void.IntegrationTests] The debug log of {server.LogFileName} couldn't be saved: {exception.Message}");
             }
         }
+    }
+
+    // A proxy serves every test of its collection, and what an earlier test left behind, such as a connection that never ended, can fail a
+    // later one, so a failed test keeps all the proxy logged since it started.
+    private static async Task SaveProxyLogsAsync(VoidProxy[] voidProxies)
+    {
+        var directory = GetFailureLogsDirectory("ProxyLogs");
+
+        foreach (var voidProxy in voidProxies)
+        {
+            try
+            {
+                Directory.CreateDirectory(directory);
+                await File.WriteAllLinesAsync(Path.Combine(directory, voidProxy.LogFileName), await voidProxy.ReadLogsAsync(DateTime.MinValue, Timeouts.StepTimeoutToken), Timeouts.StepTimeoutToken);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine($"[Void.IntegrationTests] The log of {voidProxy} couldn't be saved: {exception.Message}");
+            }
+        }
+    }
+
+    private static string GetFailureLogsDirectory(string kind)
+    {
+        var testName = string.Join('_', (TestContext.Current.Test?.TestDisplayName ?? "Unknown").Split(Path.GetInvalidFileNameChars()));
+        return Path.Combine(Directory.GetCurrentDirectory(), "steps", kind, testName, DateTime.UtcNow.ToString("HHmmss"));
     }
 
     // Sides outlive the test, so only what they logged while it ran belongs to its failure.

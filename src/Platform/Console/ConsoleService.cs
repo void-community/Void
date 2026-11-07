@@ -1,11 +1,18 @@
 ﻿using System.CommandLine;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using Nito.AsyncEx;
 using Void.Proxy.Api;
 using Void.Proxy.Api.Commands;
 using Void.Proxy.Api.Console;
 using Void.Proxy.Api.Events;
+using Void.Proxy.Api.Events.Plugins;
 using Void.Proxy.Api.Events.Proxy;
+using Void.Proxy.Api.Plugins;
+using Void.Proxy.Plugins.Context;
 using Void.Terminal;
 using SystemConsole = System.Console;
 
@@ -14,6 +21,11 @@ namespace Void.Proxy.Console;
 public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration consoleConfiguration, IRunOptions runOptions, ICommandService commands) : IConsoleService, IEventListener
 {
     private readonly AsyncLock _optionDiscoveryLock = new();
+
+    // Options a plugin discovers belong to it and leave with it, so the plugin can discover them again when it loads again. They are kept by
+    // the name of the plugin's context rather than its assembly, which would keep the context alive for as long as an option is kept.
+    private readonly Dictionary<string, List<Option>> _pluginOptions = [];
+    private IPlugin? _loadingPlugin;
 
     private readonly PromptReader _reader = new();
     public static bool IsEnabled => !SystemConsole.IsInputRedirected && !SystemConsole.IsOutputRedirected;
@@ -49,6 +61,16 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         if (consoleConfiguration.RootCommand.Options.Contains(option))
             return;
 
+        // The plugin whose code asks for the option, which a player that joins can make it do while another plugin loads. A plugin that
+        // unloads takes no more options, which its unloading couldn't take away again.
+        var callingPlugin = FindCallingPluginAssembly();
+        var plugin = callingPlugin ?? _loadingPlugin?.GetType().Assembly;
+
+        var pluginContext = plugin is null ? null : AssemblyLoadContext.GetLoadContext(plugin) as PluginAssemblyLoadContext;
+
+        if (pluginContext is { IsUnloading: true })
+            return;
+
         foreach (var existingOption in consoleConfiguration.RootCommand.Options)
         {
             var existingAliases = existingOption.Aliases ?? [];
@@ -76,6 +98,75 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 
         var insertIndex = options.TakeWhile(existing => (-(existing.Aliases?.Count ?? 0), existing.Name?.ToLowerInvariant() ?? string.Empty).CompareTo((-(option.Aliases?.Count ?? 0), option.Name?.ToLowerInvariant() ?? string.Empty)) < 0).Count();
         options.Insert(insertIndex, option);
+
+        if (pluginContext?.Name is not { } pluginName)
+            return;
+
+        if (!_pluginOptions.TryGetValue(pluginName, out var pluginOptions))
+            _pluginOptions[pluginName] = pluginOptions = [];
+
+        pluginOptions.Add(option);
+        logger.LogTrace("Console option {Option} belongs to {Plugin}, which {How}", option.Name, pluginName, callingPlugin is null ? "was loading" : "asked for it");
+    }
+
+    // Plugins load into collectible contexts, which the proxy's own code isn't in
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Assembly? FindCallingPluginAssembly()
+    {
+        foreach (var frame in new StackTrace().GetFrames())
+        {
+            if (frame.GetMethod()?.DeclaringType?.Assembly is { IsCollectible: true } assembly)
+                return assembly;
+        }
+
+        return null;
+    }
+
+    // Plugins load one at a time, so the options discovered until a plugin has loaded are its own.
+    [Subscribe(PostOrder.First)]
+    public void OnPluginLoading(PluginLoadingEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+        _loadingPlugin = @event.Plugin;
+    }
+
+    [Subscribe]
+    public void OnPluginLoaded(PluginLoadedEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+
+        if (_loadingPlugin == @event.Plugin)
+            _loadingPlugin = null;
+    }
+
+    [Subscribe]
+    public void OnPluginUnloading(PluginUnloadingEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+
+        if (_loadingPlugin == @event.Plugin)
+            _loadingPlugin = null;
+
+        RemovePluginOptions(@event.Plugin);
+    }
+
+    // Again once the plugin's listeners are gone, as its code may still have asked for an option meanwhile
+    [Subscribe(PostOrder.Last)]
+    public void OnPluginUnloaded(PluginUnloadedEvent @event)
+    {
+        using var lockDisposable = _optionDiscoveryLock.Lock();
+        RemovePluginOptions(@event.Plugin);
+    }
+
+    private void RemovePluginOptions(IPlugin plugin)
+    {
+        if (AssemblyLoadContext.GetLoadContext(plugin.GetType().Assembly)?.Name is not { } pluginName || !_pluginOptions.Remove(pluginName, out var pluginOptions))
+            return;
+
+        logger.LogTrace("Console options {Options} leave with {Plugin}", string.Join(", ", pluginOptions.Select(option => option.Name)), pluginName);
+
+        foreach (var option in pluginOptions)
+            consoleConfiguration.RootCommand.Options.Remove(option);
     }
 
     public async ValueTask HandleCommandsAsync(CancellationToken cancellationToken = default)
@@ -133,6 +224,12 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 
         _reader.ResetStyle();
         _reader.ShowCursor();
+    }
+
+    public ValueTask SendMessageAsync(string message, CancellationToken cancellationToken = default)
+    {
+        logger.LogInformation("{Message}", message);
+        return ValueTask.CompletedTask;
     }
 
     public override string ToString()

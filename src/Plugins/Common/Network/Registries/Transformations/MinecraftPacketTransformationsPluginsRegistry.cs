@@ -15,22 +15,34 @@ public class MinecraftPacketTransformationsPluginsRegistry : IMinecraftPacketTra
     public bool IsEmpty => All.All(registry => registry.IsEmpty);
     public ProtocolVersion? ProtocolVersion { get; set; }
     public IPlugin? ManagedBy { get; set; }
-    public IReadOnlyCollection<IMinecraftPacketTransformationsRegistry> All => _map.Values;
+    // Links read the registries as plugins unload and phases change them, so each read takes a snapshot
+    public IReadOnlyCollection<IMinecraftPacketTransformationsRegistry> All
+    {
+        get
+        {
+            lock (this)
+                return [.. _map.Values];
+        }
+    }
 
     public IMinecraftPacketTransformationsRegistry Get(IPlugin plugin)
     {
-        if (ProtocolVersion is null)
-            throw new InvalidOperationException("Protocol version is not set yet");
+        lock (this)
+        {
+            if (ProtocolVersion is null)
+                throw new InvalidOperationException("Protocol version is not set yet");
 
-        if (!_map.TryGetValue(plugin, out var registry))
-            _map[plugin] = registry = new MinecraftPacketTransformationsRegistry();
+            if (!_map.TryGetValue(plugin, out var registry))
+                _map[plugin] = registry = new MinecraftPacketTransformationsRegistry();
 
-        return registry;
+            return registry;
+        }
     }
 
     public void Remove(IPlugin plugin)
     {
-        _map.Remove(plugin);
+        lock (this)
+            _map.Remove(plugin);
     }
 
     public bool Contains<T>(TransformationType type) where T : IMinecraftPacket
@@ -50,7 +62,8 @@ public class MinecraftPacketTransformationsPluginsRegistry : IMinecraftPacketTra
 
     public void Clear()
     {
-        _map = [];
+        lock (this)
+            _map = [];
     }
 
     public void Clear(Direction direction, Operation operation)
@@ -58,8 +71,11 @@ public class MinecraftPacketTransformationsPluginsRegistry : IMinecraftPacketTra
         // TODO: Transformations registry is not operation-based?
         // Decide if it should be so.
 
-        foreach (var (_, registry) in _map)
-            registry.Clear(direction);
+        lock (this)
+        {
+            foreach (var (_, registry) in _map)
+                registry.Clear(direction);
+        }
     }
 
     public void Reset()

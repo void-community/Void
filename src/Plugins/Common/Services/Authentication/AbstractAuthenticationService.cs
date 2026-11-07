@@ -1,6 +1,8 @@
 ﻿using System.CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Void.Minecraft.Buffers.Exceptions;
+using Void.Minecraft.Network.Streams.Packet;
 using Void.Minecraft.Links.Extensions;
 using Void.Minecraft.Mojang;
 using Void.Minecraft.Network;
@@ -174,7 +176,21 @@ public abstract class AbstractAuthenticationService(IEventService events, IPlaye
         if (channel.IsPausedRead)
             channel.Resume(Operation.Read);
 
-        var handshake = await channel.ReceivePacketAsync<HandshakePacket>(cancellationToken);
+        // The player's handshake may be read already, as the search for its protocol does, or its channel may not read one, and then the
+        // player is closed without why
+        if (!channel.TryGet<IMinecraftPacketMessageStream>(out var stream) || !stream.Registries.PacketIdSystem.Contains<HandshakePacket>())
+            return;
+
+        HandshakePacket handshake;
+
+        try
+        {
+            handshake = await channel.ReceivePacketAsync<HandshakePacket>(cancellationToken);
+        }
+        catch (EndOfBufferException)
+        {
+            return;
+        }
 
         if (!handshake.IsStatusQuery)
             await @event.Player.SetPhaseAsync(link: null, Side.Client, Phase.Login, await @event.Player.GetChannelAsync(cancellationToken), cancellationToken);

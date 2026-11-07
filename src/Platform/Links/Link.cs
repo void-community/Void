@@ -24,12 +24,14 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
     private readonly CancellationTokenSource _ctsServerToPlayerForce = new();
     private readonly AsyncLock _lock = new();
     private readonly ConcurrentDictionary<Direction, State> _states = [];
+    // Each direction stops the other one as it stops, which it can only once both are started
+    private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task<Task>? _onStoppingTask;
 
     private Task? _playerToServerTask;
-    private bool _playerToServerTaskDisposed;
+    private volatile bool _playerToServerTaskDisposed;
     private Task? _serverToPlayerTask;
-    private bool _serverToPlayerTaskDisposed;
+    private volatile bool _serverToPlayerTaskDisposed;
     private bool _stopping;
     private LinkStopReason? _stopReason;
 
@@ -53,6 +55,7 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
         _serverToPlayerTask = ExecuteAsync(ServerChannel, PlayerChannel, Direction.Clientbound, _ctsServerToPlayer.Token, _ctsServerToPlayerForce.Token);
 
         _onStoppingTask = Task.WhenAll(_playerToServerTask, _serverToPlayerTask).ContinueWith(task => OnStoppedAsync(task, cancellationToken).CatchExceptions(logger, $"{nameof(LinkStoppedEvent)} caused exception(s)"));
+        _started.SetResult();
 
         logger.LogTrace("Started forwarding {Link} traffic", this);
     }
@@ -132,7 +135,10 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
 
     protected async Task ExecuteAsync(INetworkChannel sourceChannel, INetworkChannel destinationChannel, Direction direction, CancellationToken cancellationToken, CancellationToken forceCancellationToken)
     {
-        await Task.Yield();
+        await _started.Task;
+
+        // A server that closes its connection may have sent something last, such as why it kicks the player, which the other direction reads
+        var serverClosed = false;
 
         while (sourceChannel is { CanRead: true } && destinationChannel is { CanWrite: true })
         {
@@ -163,6 +169,11 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
             }
             catch (Exception exception) when (exception is StreamException or ObjectDisposedException)
             {
+                // A listener that sent to a side that closed meanwhile, as one answering a server that kicks the player, failed rather than the read,
+                // and what the source sent before it closed, such as why, is still read
+                if (_states[direction] is State.MessageReceivedEventStart)
+                    continue;
+
                 _stopReason = direction switch
                 {
                     Direction.Serverbound => LinkStopReason.PlayerDisconnected, // source (player) disconnected
@@ -203,6 +214,7 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
                     _ => throw new ArgumentOutOfRangeException(nameof(direction), direction, null)
                 };
 
+                serverClosed = direction is Direction.Serverbound;
                 break;
             }
             catch (Exception exception)
@@ -244,12 +256,22 @@ public class Link(IPlayer player, IServer server, INetworkChannel playerChannel,
 
             switch (direction)
             {
+                // Each direction tells it stops before it reads whether the other does, and a full fence keeps the read after the write, so the
+                // two never both wait for each other
                 case Direction.Clientbound:
                     _serverToPlayerTaskDisposed = true;
+                    Interlocked.MemoryBarrier();
                     await DisposeServerboundAsync();
                     break;
                 case Direction.Serverbound:
                     _playerToServerTaskDisposed = true;
+                    Interlocked.MemoryBarrier();
+
+                    // The other direction reads what the server sent before it closed, until the connection ends, unless it stops already and
+                    // waits for this one
+                    if (serverClosed && !_serverToPlayerTaskDisposed && _serverToPlayerTask is not null)
+                        await WaitWithTimeout(_serverToPlayerTask);
+
                     await DisposeClientboundAsync();
                     break;
                 default:

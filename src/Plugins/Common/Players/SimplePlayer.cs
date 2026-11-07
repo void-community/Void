@@ -26,6 +26,12 @@ public class SimplePlayer : IPlayer
         return RemoteEndPoint;
     }
 
+    public ValueTask SendMessageAsync(string message, CancellationToken cancellationToken = default)
+    {
+        // A player whose game isn't known yet has nowhere to show a message.
+        return ValueTask.CompletedTask;
+    }
+
     public bool Equals(IPlayer? other)
     {
         return ((IPlayer)this).GetStableHashCode() == other?.GetStableHashCode();

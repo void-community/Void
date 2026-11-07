@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Void.Minecraft.Buffers;
 using Void.Minecraft.Network;
 using Void.Minecraft.Network.Definitions;
@@ -10,9 +13,12 @@ using Void.Minecraft.Network.Messages.Packets;
 using Void.Minecraft.Network.Registries.PacketId.Mappings;
 using Void.Minecraft.Network.Registries.Transformations.Extensions;
 using Void.Minecraft.Network.Registries.Transformations.Mappings;
+using Void.Minecraft.Players;
+using Void.Proxy.Api.Links;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Channels;
 using Void.Proxy.Api.Network.Streams.Recyclable;
+using Void.Proxy.Api.Players.Contexts;
 using Void.Proxy.Api.Plugins;
 using Void.Proxy.Plugins.Common.Network.Channels;
 using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
@@ -21,6 +27,7 @@ using Void.Proxy.Plugins.Common.Network.Packets.Transformations;
 using Void.Proxy.Plugins.Common.Network.Streams.Packet;
 using Void.Proxy.Plugins.Common.Services.Registries;
 using Xunit;
+using static Void.UnitTests.Players.PlayerServiceDisconnectTests;
 
 namespace Void.UnitTests.Network.Packets.Transformations;
 
@@ -76,7 +83,7 @@ public class NetworkTransformationsTests
     }
 
     [Fact]
-    public void ClearLinkTransformations_WithoutReplacement_ClearsBothChannelsAndAllowsRegistrationAgain()
+    public void ClearLinkTransformations_WithoutReplacement_KeepsPlayerSystemTransformationsAndAllowsRegistrationAgain()
     {
         var protocolVersion = ProtocolVersion.MINECRAFT_1_8;
         var plugin = new TestPlugin();
@@ -91,7 +98,7 @@ public class NetworkTransformationsTests
 
         ClearLinkTransformations(playerChannel, serverChannel, preservePlayerChannel: false);
 
-        Assert.True(playerPacketStream.Registries.PacketTransformationsSystem.IsEmpty);
+        Assert.False(playerPacketStream.Registries.PacketTransformationsSystem.IsEmpty);;
         Assert.True(playerPacketStream.Registries.PacketTransformationsPlugins.IsEmpty);
         Assert.True(serverPacketStream.Registries.PacketTransformationsSystem.IsEmpty);
         Assert.True(serverPacketStream.Registries.PacketTransformationsPlugins.IsEmpty);
@@ -172,6 +179,45 @@ public class NetworkTransformationsTests
         var packet = Assert.IsType<ChatMessagePacket>(packetStream.DecodePacket(stream));
 
         Assert.Equal("Welcome to the server!", packet.Message.AsText);
+    }
+
+    [Fact]
+    public void DecodePacket_ConfigurationDisconnectOf1_20_2_ReadsReasonWrittenAsJson()
+    {
+        // Servers of 1.20.2 write the reason they disconnect a configuring player for as JSON, as games read it as NBT only from 1.20.3
+        var protocolVersion = ProtocolVersion.MINECRAFT_1_20_2;
+        var serverPacketStream = new MinecraftPacketMessageStream();
+        using var serverChannel = new SimpleMinecraftChannel(serverPacketStream);
+        using var playerChannel = new SimpleMinecraftChannel(new MinecraftPacketMessageStream());
+        using var client = new TcpClient();
+
+        var services = StandIn.Create<IServiceProvider>((_, arguments) => arguments is [Type type] && type == typeof(ILoggerFactory) ? NullLoggerFactory.Instance : null);
+        var context = StandIn.Create<IPlayerContext>((method, _) => method.Name is "get_Services" ? services : null);
+        var player = new MinecraftPlayer(client, context, "player", DateTimeOffset.UtcNow, protocolVersion);
+        var link = StandIn.Create<ILink>((method, _) => method.Name switch
+        {
+            "get_Player" => player,
+            "get_PlayerChannel" => playerChannel,
+            "get_ServerChannel" => serverChannel,
+            _ => null
+        });
+
+        serverPacketStream.Registries.PacketIdSystem.ProtocolVersion = protocolVersion;
+        serverPacketStream.Registries.PacketIdSystem.ReplacePackets(Operation.Read, new Dictionary<MinecraftPacketIdMapping[], Type>
+        {
+            { PacketIdDefinitions.ClientboundConfigurationDisconnect, typeof(NbtDisconnectPacket) }
+        });
+
+        NetworkTransformations.Register(link, player, Phase.Configuration);
+
+        using var stream = RecyclableStream.RecyclableMemoryStreamManager.GetStream();
+        var buffer = new MinecraftBuffer(stream);
+        buffer.WriteVarInt(PacketIdDefinitions.ClientboundConfigurationDisconnect[0].Id);
+        buffer.WriteString("{\"text\":\"Server closed\"}");
+
+        var packet = Assert.IsType<NbtDisconnectPacket>(serverPacketStream.DecodePacket(stream));
+
+        Assert.Equal("Server closed", packet.Reason.AsText);
     }
 
     private static void RegisterTransformations(MinecraftPacketMessageStream packetStream, SimpleMinecraftChannel channel, IPlugin plugin, ProtocolVersion protocolVersion, IEnumerable<MinecraftPacketTransformationMapping> mappings)
