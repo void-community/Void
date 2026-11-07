@@ -69,8 +69,8 @@ internal static class PluginRetentionAnalyzer
                 links.Add(heap.GetObject(link.Object));
 
             // The plugin references itself, as its own static fields and types do, which unloading collects with it, and the runtime keeps the load
-            // context of a plugin it hasn't collected yet with a handle of its own.
-            if (ownStatics.Contains(links[0].Address) || links.SkipLast(1).All(link => IsOfPlugin(link, loaderAllocatorHandle, runtime)))
+            // context of a plugin it hasn't collected yet with a handle of its own. A thread keeps what its stack references, even the plugin's own.
+            if (ownStatics.Contains(links[0].Address) || root is not ClrStackRoot && links.SkipLast(1).All(link => IsOfPlugin(link, loaderAllocatorHandle, runtime)))
                 continue;
 
             var (origin, chain) = PluginRetentionChain.Describe(root, links, staticFields.Value, runtime);
