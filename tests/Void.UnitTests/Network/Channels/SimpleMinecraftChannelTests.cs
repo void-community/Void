@@ -3,11 +3,14 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.IO;
+using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Api.Network.Streams;
 using Void.Proxy.Api.Network.Streams.Manual;
 using Void.Proxy.Plugins.Common.Network.Channels;
 using Void.Proxy.Plugins.Common.Network.Messages.Binary;
+using Void.Proxy.Plugins.Common.Network.Packets.Clientbound;
 using Void.Proxy.Plugins.Common.Network.Streams.Compression;
+using Void.Proxy.Plugins.Common.Network.Streams.Packet;
 using Xunit;
 using static Void.UnitTests.Players.PlayerServiceDisconnectTests;
 
@@ -54,6 +57,23 @@ public class SimpleMinecraftChannelTests
             lock (written)
                 written.AddRange(bytes);
         }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PacketNoLongerRegisteredIsUnregisteredOnlyWhileChannelIsOpen(bool open)
+    {
+        // A player kicked as its protocol unloads is closed before the protocol takes its packets away, while a plugin may still send it one
+        var network = StandIn.Create<IStallingStream>((method, _) => method.Name is "get_CanWrite" ? open : null);
+        var channel = new SimpleMinecraftChannel(new MinecraftPacketMessageStream { BaseStream = network });
+
+        var write = channel.WriteMessageAsync(new KeepAliveRequestPacket { Id = 1 }, TestContext.Current.CancellationToken).AsTask();
+
+        if (open)
+            await Assert.ThrowsAsync<InvalidOperationException>(() => write);
+        else
+            await Assert.ThrowsAsync<StreamClosedException>(() => write);
     }
 
     public interface IStallingStream : IManualStream, IMessageStreamBase;
