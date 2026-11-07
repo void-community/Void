@@ -92,7 +92,8 @@ internal static class PluginRetentionAnalyzer
 
         if (chains.Count is 0)
         {
-            output.WriteLine("Nothing outside of the plugin references it");
+            // The runtime frees the code of a plugin nothing references any more a while after it collected the plugin's loader allocator
+            output.WriteLine(loaderAllocator is 0 ? "Nothing references the plugin any more, and the runtime hasn't freed its code yet" : "Nothing outside of the plugin references it");
             return;
         }
 
