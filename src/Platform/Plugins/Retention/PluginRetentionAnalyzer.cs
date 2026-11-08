@@ -149,7 +149,7 @@ internal static class PluginRetentionAnalyzer
                 continue;
 
             var owner = type is { IsCollectible: true } ? $", loader allocator {type.LoaderAllocatorHandle:x}{(type.LoaderAllocatorHandle == loaderAllocatorHandle ? " (the plugin's)" : string.Empty)}" : string.Empty;
-            modules.Add($"  {module.AssemblyName ?? module.Name ?? "?"}{(module.IsDynamic ? " (emitted)" : string.Empty)}{owner}");
+            modules.Add($"  {module.AssemblyName ?? module.Name ?? type?.Name ?? "?"}{(module.IsDynamic ? " (emitted)" : string.Empty)}{owner}");
         }
 
         output.WriteLine();

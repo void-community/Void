@@ -40,6 +40,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
+    private readonly AsyncLock _collectionLock = new();
 
     // A container that unloads keeps its plugins for their own unloading listeners, and lets them go as it is collected
     public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.AlivePlugins);
@@ -381,16 +382,22 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         do
         {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
+            // Containers unloading together collect in turns, as the collectible code one defines to have the runtime free unfreed code
+            // otherwise keeps the code another frees meanwhile from being freed
+            using (await _collectionLock.LockAsync(cancellationToken))
+            {
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
 
-            if (isCollected())
-                return true;
+                if (isCollected())
+                    return true;
+            }
 
             await Task.Delay(_gcRate, cancellationToken);
         } while (Stopwatch.GetElapsedTime(collectionTime) < timeout);
 
-        return isCollected();
+        using (await _collectionLock.LockAsync(cancellationToken))
+            return isCollected();
     }
 
     // Its own state machine, so the last plugin it throws the events for isn't kept by the one that waits for the plugin to be collected.
