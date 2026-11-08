@@ -40,7 +40,6 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
-    private readonly TimeSpan _lateUnloadTimeout = TimeSpan.FromSeconds(40);
 
     // A container that unloads keeps its plugins for their own unloading listeners, and lets them go as it is collected
     public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.AlivePlugins);
@@ -314,18 +313,11 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         try
         {
-            var collectionTime = Stopwatch.GetTimestamp();
-
             // The context outlives the plugin's types while the plugin's other objects, or anything that kept the context, are alive. The runtime
-            // may also free it late, which is told of apart from a context it never frees.
-            if (!await WaitForCollectionAsync(() => context.Target is null, _unloadTimeout, cancellationToken))
-            {
-                // The runtime can leave the code of a plugin it no longer references unfreed, which it frees as it frees any other collectible code
-                if (!await WaitForCollectionAsync(() => context.Target is null || FreeCollectibleCode(), _lateUnloadTimeout, cancellationToken))
-                    throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, context, cancellationToken)}");
-
-                logger.LogWarning("Plugins context {ContextName} was freed {Elapsed} after its plugins, once the runtime freed other collectible code", name, Stopwatch.GetElapsedTime(collectionTime));
-            }
+            // can also leave the code of a plugin nothing references any more unfreed, as a thread that lists the loaded assemblies meanwhile
+            // takes it, and frees it only as it frees other collectible code, so the wait has it free some.
+            if (!await WaitForCollectionAsync(() => context.Target is null || FreeCollectibleCode(), _unloadTimeout, cancellationToken))
+                throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, context, cancellationToken)}");
         }
         finally
         {
