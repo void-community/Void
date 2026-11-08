@@ -21,8 +21,6 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => _client?.Logs ?? [];
 
-    private static IReadOnlyList<Uri> JavaAgents => [ModLoaderFixes.Url];
-
     private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion.FirstRelease}";
 
     public async Task<IEnumerable<string>> ReadLogsAsync(DateTime since, CancellationToken cancellationToken = default)
@@ -43,7 +41,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         if (_session is not null)
             throw new InvalidOperationException($"{testName} can't play a game another test is still playing");
 
-        _client ??= await PortableMinecraftClient.CreateAsync(JavaAgents, cancellationToken);
+        _client ??= await PortableMinecraftClient.CreateAsync(cancellationToken);
 
         try
         {

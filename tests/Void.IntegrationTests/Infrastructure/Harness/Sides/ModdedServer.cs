@@ -104,9 +104,7 @@ public record ModdedServer(IContainer Container, string LogFileName, ModLoader M
             jvmOptions = "-Dforge.logging.mojang.level=debug -Dforge.logging.marker.networking=ACCEPT";
         }
 
-        builder = builder
-            .WithEnvironment("JAVA_AGENTS", ModLoaderFixes.Url.ToString())
-            .WithEnvironment("JVM_OPTS", jvmOptions);
+        builder = await ModLoaderFixes.AddToAsync(builder.WithEnvironment("JVM_OPTS", jvmOptions), cancellationToken);
 
         return new ModdedServer(await StartContainerAsync(builder, $"{loader} {loaderVersion ?? "stable"} server for Minecraft {release} with {contentMod}", release, cancellationToken), logFileName, loader, release);
     }

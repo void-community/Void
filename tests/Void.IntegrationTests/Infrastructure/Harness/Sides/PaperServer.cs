@@ -61,7 +61,7 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
                 .WithEnvironment("CFG_BUKKIT_CONNECTION_THROTTLE", "-1");
         }
 
-        builder = builder.WithEnvironment("JAVA_AGENTS", ModLoaderFixes.Url.ToString());
+        builder = await ModLoaderFixes.AddToAsync(builder, cancellationToken);
 
         if (maximumPlayers is { } value)
             builder = builder.WithEnvironment("MAX_PLAYERS", value.ToString());
