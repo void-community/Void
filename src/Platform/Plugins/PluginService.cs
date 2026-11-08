@@ -39,6 +39,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
+    private readonly TimeSpan _lateUnloadTimeout = TimeSpan.FromSeconds(40);
 
     // A container that unloads keeps its plugins for their own unloading listeners, and lets them go as it is collected
     public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.AlivePlugins);
@@ -312,9 +313,17 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         try
         {
-            // The context outlives the plugin's types while the plugin's other objects, or anything that kept the context, are alive
-            if (!await WaitForCollectionAsync(() => context.Target is null, cancellationToken))
-                throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, context, cancellationToken)}");
+            var collectionTime = Stopwatch.GetTimestamp();
+
+            // The context outlives the plugin's types while the plugin's other objects, or anything that kept the context, are alive. The runtime
+            // may also free it late, which is told of apart from a context it never frees.
+            if (!await WaitForCollectionAsync(() => context.Target is null, _unloadTimeout, cancellationToken))
+            {
+                if (!await WaitForCollectionAsync(() => context.Target is null, _lateUnloadTimeout, cancellationToken))
+                    throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, context, cancellationToken)}");
+
+                logger.LogWarning("Plugins context {ContextName} was freed {Elapsed} after its plugins", name, Stopwatch.GetElapsedTime(collectionTime));
+            }
         }
         finally
         {
@@ -356,7 +365,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             await container.CancellationTokenSource.CancelAsync();
             container.Context.Unload();
 
-            if (!await WaitForCollectionAsync(() => IsCollected(container, pluginType), cancellationToken))
+            if (!await WaitForCollectionAsync(() => IsCollected(container, pluginType), _unloadTimeout, cancellationToken))
                 throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, pluginType, cancellationToken)}");
         }
         finally
@@ -372,7 +381,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         return (TrackContext(container), count);
     }
 
-    private async ValueTask<bool> WaitForCollectionAsync(Func<bool> isCollected, CancellationToken cancellationToken)
+    private async ValueTask<bool> WaitForCollectionAsync(Func<bool> isCollected, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var collectionTime = Stopwatch.GetTimestamp();
 
@@ -385,7 +394,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
                 return true;
 
             await Task.Delay(_gcRate, cancellationToken);
-        } while (Stopwatch.GetElapsedTime(collectionTime) < _unloadTimeout);
+        } while (Stopwatch.GetElapsedTime(collectionTime) < timeout);
 
         return isCollected();
     }
