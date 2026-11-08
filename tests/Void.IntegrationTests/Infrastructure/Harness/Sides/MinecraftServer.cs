@@ -19,7 +19,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
 {
     // A download origin that times out does so for a minute or more, such as PaperMC's, so the retries, waiting twice as long each time, span
     // a few minutes
-    private const int MaximumStartupAttempts = 5;
+    private const int MaximumStartupAttempts = 7;
     private const int StartupFailureLogLines = 200;
     // Where the image feeds the console from when it creates the console pipe
     private const string ConsolePipePath = "/tmp/minecraft-console-in";
