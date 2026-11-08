@@ -92,8 +92,10 @@ internal static class PluginRetentionAnalyzer
 
         if (chains.Count is 0)
         {
-            // The runtime frees the code of a plugin nothing references any more a while after it collected the plugin's loader allocator
+            // The runtime frees the code of a plugin nothing references any more a while after it collected the plugin's loader allocator, once no
+            // other collectible code it was bound to is left
             output.WriteLine(loaderAllocator is 0 ? "Nothing references the plugin any more, and the runtime hasn't freed its code yet" : "Nothing outside of the plugin references it");
+            DescribeCollectibleModules(runtime, loaderAllocatorHandle, output);
             return;
         }
 
@@ -127,6 +129,26 @@ internal static class PluginRetentionAnalyzer
 
         // A type of the plugin, which its loader allocator keeps
         return type.Name is RuntimeTypeName && runtime.GetTypeByMethodTable(link.ReadField<ulong>("m_handle")) is { IsCollectible: true } runtimeType && runtimeType.LoaderAllocatorHandle == loaderAllocatorHandle;
+    }
+
+    // Other collectible code, such as of other plugins or assemblies emitted to be collected, that the plugin's code may still be bound to
+    private static void DescribeCollectibleModules(ClrRuntime runtime, ulong loaderAllocatorHandle, TextWriter output)
+    {
+        var modules = new List<string>();
+
+        foreach (var module in runtime.EnumerateModules())
+        {
+            var type = module.EnumerateTypeDefToMethodTableMap().Select(map => runtime.GetTypeByMethodTable(map.MethodTable)).FirstOrDefault(type => type is not null);
+
+            if (type is not { IsCollectible: true } && !module.IsDynamic)
+                continue;
+
+            var owner = type is { IsCollectible: true } ? $", loader allocator {type.LoaderAllocatorHandle:x}{(type.LoaderAllocatorHandle == loaderAllocatorHandle ? " (the plugin's)" : string.Empty)}" : string.Empty;
+            modules.Add($"  {module.AssemblyName ?? module.Name ?? "?"}{(module.IsDynamic ? " (emitted)" : string.Empty)}{owner}");
+        }
+
+        output.WriteLine();
+        output.WriteLine(modules.Count is 0 ? "No collectible code is loaded" : $"Collectible code still loaded:\n{string.Join("\n", modules)}");
     }
 
     // The types of the plugin tell their load context and loader allocator, which a module's first loaded type tells for all of its types. A context
