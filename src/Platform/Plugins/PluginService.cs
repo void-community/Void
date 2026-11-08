@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using System.Diagnostics;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Nito.AsyncEx;
@@ -319,10 +320,11 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             // may also free it late, which is told of apart from a context it never frees.
             if (!await WaitForCollectionAsync(() => context.Target is null, _unloadTimeout, cancellationToken))
             {
-                if (!await WaitForCollectionAsync(() => context.Target is null, _lateUnloadTimeout, cancellationToken))
+                // The runtime can leave the code of a plugin it no longer references unfreed, which it frees as it frees any other collectible code
+                if (!await WaitForCollectionAsync(() => context.Target is null || FreeCollectibleCode(), _lateUnloadTimeout, cancellationToken))
                     throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, context, cancellationToken)}");
 
-                logger.LogWarning("Plugins context {ContextName} was freed {Elapsed} after its plugins", name, Stopwatch.GetElapsedTime(collectionTime));
+                logger.LogWarning("Plugins context {ContextName} was freed {Elapsed} after its plugins, once the runtime freed other collectible code", name, Stopwatch.GetElapsedTime(collectionTime));
             }
         }
         finally
@@ -416,6 +418,15 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     private static GCHandle TrackPluginType(WeakPluginContainer container)
     {
         return container.Plugins.FirstOrDefault() is { } plugin ? GCHandle.Alloc(plugin.GetType(), GCHandleType.Weak) : default;
+    }
+
+    // Defines a collectible assembly nothing keeps, which the runtime frees with the next collections. Always false, to be told apart from a
+    // collection's result.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool FreeCollectibleCode()
+    {
+        AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(nameof(FreeCollectibleCode)), AssemblyBuilderAccess.RunAndCollect).DefineDynamicModule(nameof(FreeCollectibleCode)).DefineType(nameof(FreeCollectibleCode)).CreateType();
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
