@@ -10,6 +10,10 @@ namespace Void.Proxy.Plugins.Retention;
 internal static class PluginRetentionAnalyzer
 {
     private const int MaximumChains = 8;
+    private const int MaximumFrames = 12;
+
+    // Threads that wait for work, which tell nothing of what stops a plugin's code from being freed
+    private static readonly string[] IdleFrames = ["WaitHandle.", "LowLevelLifoSemaphore", "Monitor.Wait", "Thread.Sleep", "WaitForSocketEvents", "SpinThenBlockingWait", "ManualResetEventSlim.Wait", "SemaphoreSlim.Wait", "PortableThreadPool+GateThread", "WaitSubsystem", "LowLevelMonitor"];
     private const string RuntimeTypeName = "System.RuntimeType";
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromMinutes(1);
 
@@ -96,6 +100,7 @@ internal static class PluginRetentionAnalyzer
             // other collectible code it was bound to is left
             output.WriteLine(loaderAllocator is 0 ? "Nothing references the plugin any more, and the runtime hasn't freed its code yet" : "Nothing outside of the plugin references it");
             DescribeCollectibleModules(runtime, loaderAllocatorHandle, output);
+            DescribeThreads(runtime, output);
             return;
         }
 
@@ -149,6 +154,27 @@ internal static class PluginRetentionAnalyzer
 
         output.WriteLine();
         output.WriteLine(modules.Count is 0 ? "No collectible code is loaded" : $"Collectible code still loaded:\n{string.Join("\n", modules)}");
+    }
+
+    // The runtime doesn't free the code of an unloaded plugin while a thread lists the loaded assemblies, which takes every collectible one alive for
+    // as long as it lists them, so what the threads do tells what stops it
+    private static void DescribeThreads(ClrRuntime runtime, TextWriter output)
+    {
+        output.WriteLine();
+        output.WriteLine("Threads as the dump was written:");
+
+        foreach (var thread in runtime.Threads)
+        {
+            var frames = thread.EnumerateStackTrace().Where(frame => frame.Method is not null).Take(MaximumFrames).Select(frame => $"    {frame.Method!.Signature ?? frame.Method.Name}").ToArray();
+
+            if (frames.Length is 0 || IdleFrames.Any(frames[0].Contains))
+                continue;
+
+            output.WriteLine($"  Thread {thread.ManagedThreadId}:");
+
+            foreach (var frame in frames)
+                output.WriteLine(frame);
+        }
     }
 
     // The types of the plugin tell their load context and loader allocator, which a module's first loaded type tells for all of its types. A context
