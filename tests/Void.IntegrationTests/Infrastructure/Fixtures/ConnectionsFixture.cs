@@ -21,6 +21,7 @@ public abstract class ConnectionsFixture(ProtocolVersion protocolVersion) : IAsy
     private DateTime _voidLogWindowStartedAt;
     private ReusableGame? _game1;
     private ReusableGame? _game2;
+    private readonly MemorySampler _memory = new();
 
     public ProtocolVersion ProtocolVersion => protocolVersion;
 
@@ -91,6 +92,9 @@ public abstract class ConnectionsFixture(ProtocolVersion protocolVersion) : IAsy
     {
         try
         {
+            Console.WriteLine($"[Void.IntegrationTests] {GetType().Name} played with {_memory.Describe()}");
+            await _memory.DisposeAsync();
+
             await Task.WhenAll(new[] { _game1, _game2 }.OfType<ReusableGame>().Select(game => game.DisposeAsync().AsTask()));
         }
         finally
