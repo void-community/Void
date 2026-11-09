@@ -8,8 +8,10 @@ fi
 
 portablemc_version="$1"
 shift
-attempts="${PORTABLEMC_DRY_RUN_ATTEMPTS:-5}"
-retry_delay_seconds="${PORTABLEMC_DRY_RUN_RETRY_DELAY_SECONDS:-5}"
+# The retries span more than 3 minutes, as a CDN in front of a library repository can keep serving a 404 its origin returned once for
+# that long.
+attempts="${PORTABLEMC_DRY_RUN_ATTEMPTS:-6}"
+retry_delay_seconds="${PORTABLEMC_DRY_RUN_RETRY_DELAY_SECONDS:-12}"
 
 if [[ ! "$attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "PORTABLEMC_DRY_RUN_ATTEMPTS must be a positive integer." >&2

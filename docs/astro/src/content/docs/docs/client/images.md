@@ -177,6 +177,6 @@ docker run --name void-client --rm -d -p 8080:80 \
 
 ## Launcher Retry Configuration
 
-`PORTABLEMC_DRY_RUN_ATTEMPTS` controls preparation attempts and defaults to `5`. It must be a positive integer. `PORTABLEMC_DRY_RUN_RETRY_DELAY_SECONDS` sets the base retry delay, defaults to `5`, and accepts non-negative integers.
+`PORTABLEMC_DRY_RUN_ATTEMPTS` controls preparation attempts and defaults to `6`. It must be a positive integer. `PORTABLEMC_DRY_RUN_RETRY_DELAY_SECONDS` sets the base retry delay, defaults to `12`, and accepts non-negative integers.
 
 For diagnostic storage and retention variables, see the [**diagnostics configuration**](/docs/client/api/#retention).
