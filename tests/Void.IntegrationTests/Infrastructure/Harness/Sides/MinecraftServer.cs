@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
@@ -24,6 +25,8 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     // Where the image feeds the console from when it creates the console pipe
     private const string ConsolePipePath = "/tmp/minecraft-console-in";
     private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan StallCheckInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StalledDownloadTimeout = TimeSpan.FromMinutes(3);
     // The image downloads the server and its mods while it starts, and lookups and downloads can fail for a moment.
     private static readonly string[] TransientStartupFailureMarkers =
     [
@@ -147,9 +150,29 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     {
         var port = container.GetMappedPublicPort(containerPort: 25565);
         var protocolVersion = ProtocolVersion.Range().First(protocolVersion => protocolVersion.Releases.Contains(release));
+        var stallCheckedAt = Stopwatch.GetTimestamp();
 
         while (!await IsStatusAnsweredAsync(port, protocolVersion, cancellationToken))
+        {
+            if (Stopwatch.GetElapsedTime(stallCheckedAt) >= StallCheckInterval)
+            {
+                await ThrowIfDownloadStalledAsync(container, cancellationToken);
+                stallCheckedAt = Stopwatch.GetTimestamp();
+            }
+
             await Task.Delay(StatusPollInterval, cancellationToken);
+        }
+    }
+
+    // A download the image makes as the server starts can stop without failing, as one from Forge's Maven did for the whole of a start, and
+    // starting again downloads it anew
+    private static async Task ThrowIfDownloadStalledAsync(IContainer container, CancellationToken cancellationToken)
+    {
+        if ((await container.ReadLogsAsync(DateTime.UtcNow - StalledDownloadTimeout, cancellationToken)).Any())
+            return;
+
+        if ((await container.ReadLogsAsync(container.StartedTime, cancellationToken)).LastOrDefault() is { } line && line.Contains("Downloading", StringComparison.Ordinal))
+            throw new StalledDownloadException($"The server made no progress for {StalledDownloadTimeout.TotalMinutes:0} minutes after: {line}");
     }
 
     private static async Task<bool> IsStatusAnsweredAsync(int port, ProtocolVersion protocolVersion, CancellationToken cancellationToken)
@@ -173,6 +196,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
 
             // An image pull that a registry failed, such as with a 502, leaves no image to create the container from.
             DockerImageNotFoundException => true,
+            StalledDownloadException => true,
             _ => false
         };
     }
@@ -219,4 +243,6 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             Console.WriteLine($"[Void.IntegrationTests] Disposing a failed {serverDescription} container also failed: {exception.Message}");
         }
     }
+
+    private sealed class StalledDownloadException(string message) : Exception(message);
 }
