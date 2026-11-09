@@ -6,11 +6,11 @@
     <RootNamespace>Void.Client</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NetAgents.Analyzers" Version="26.11.3.2891">
+    <PackageReference Include="NetAgents.Analyzers" Version="26.11.9.2139">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
-    <PackageReference Include="Tomlyn" Version="2.10.2" />
+    <PackageReference Include="Tomlyn" Version="2.11.1" />
   </ItemGroup>
 </Project>
