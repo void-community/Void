@@ -65,12 +65,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public async Task ReleaseAsync()
     {
         await StopGameAsync();
-
-        if (_client is not { } client)
-            return;
-
-        _client = null;
-        await client.DisposeAsync();
+        await DisposeClientAsync();
     }
 
     internal async Task EndSessionAsync(GameSession session, bool discardGame)
@@ -117,6 +112,18 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         catch (Exception exception)
         {
             await PortableMinecraftClient.Game.LogAsync($"Stopping {game.GameName} failed: {exception.Message}", CancellationToken.None);
+
+            // A client that couldn't stop its game refuses to launch another, so the next test starts another client
+            await DisposeClientAsync();
         }
+    }
+
+    private async Task DisposeClientAsync()
+    {
+        if (_client is not { } client)
+            return;
+
+        _client = null;
+        await client.DisposeAsync();
     }
 }
