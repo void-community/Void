@@ -1,7 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Void.IntegrationTests.Infrastructure.Exceptions;
@@ -32,6 +36,7 @@ public class IntegrationUnitBase
         catch (Exception exception)
         {
             Console.WriteLine($"Primary integration failure:\n{exception}");
+            Console.WriteLine(await DescribeMemoryAsync());
             Console.WriteLine(await CollectLogsAsync(voidLogWindowStartedAt, sides));
             await SaveServerDebugLogsAsync(sides);
             await SaveProxyLogsAsync(voidProxies);
@@ -43,6 +48,39 @@ public class IntegrationUnitBase
             foreach (var voidProxy in voidProxies)
                 voidProxy.MarkChecked(voidLogWindowStartedAt, DateTime.UtcNow);
         }
+    }
+
+    // A runner that runs short of memory slows every game, server and process on it, which fails a test in whatever it waited on, so a failed
+    // test tells how much memory the runner had left and how much each container used
+    private static async Task<string> DescribeMemoryAsync()
+    {
+        if (!OperatingSystem.IsLinux())
+            return string.Empty;
+
+        var description = new StringBuilder("Memory:\n");
+
+        try
+        {
+            var memory = await File.ReadAllLinesAsync("/proc/meminfo");
+            description.AppendJoin('\n', memory.Where(line => line.StartsWith("MemTotal:") || line.StartsWith("MemAvailable:") || line.StartsWith("SwapTotal:") || line.StartsWith("SwapFree:"))).Append('\n');
+
+            if (File.Exists("/proc/pressure/memory"))
+                description.Append("Pressure: ").AppendJoin("; ", await File.ReadAllLinesAsync("/proc/pressure/memory")).Append('\n');
+
+            using var docker = Process.Start(new ProcessStartInfo("docker", ["stats", "--no-stream", "--format", "{{.Name}} {{.MemUsage}} {{.CPUPerc}}"]) { RedirectStandardOutput = true });
+
+            if (docker is not null)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                description.Append(await docker.StandardOutput.ReadToEndAsync(timeout.Token));
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or Win32Exception or OperationCanceledException)
+        {
+            description.Append($"Memory couldn't be told: {exception.Message}");
+        }
+
+        return description.ToString();
     }
 
     // Modded servers log everything at debug level, every packet included, into a file, which a failed test keeps in its steps.
