@@ -39,7 +39,10 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "ReadTimeoutException",
         "PrematureCloseException",
         "Connection reset",
-        // GitHub's release downloads, such as of the agent the servers load, time out at its gateway for minutes at times
+        // GitHub's release downloads, such as of the agent the servers load, time out at its gateway for minutes at times, and loader repositories,
+        // such as NeoForge's Maven that the image reads every NeoForge version from, fail at theirs
+        "failed with 502 Bad Gateway",
+        "failed with 503 Service Unavailable",
         "failed with 504 Gateway Timeout",
         // Paper's launcher checks the server jar it downloads from Mojang, which launchers before Minecraft 1.18 report as not valid, and older ones as invalid
         "Hash check failed for downloaded file",
