@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
@@ -112,7 +111,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
 
             try
             {
-                await container.StartAsync(attemptTimeout.Token);
+                await StartWatchingDownloadsAsync(container, attemptTimeout.Token);
                 await WaitForStatusAsync(container, release, attemptTimeout.Token);
                 return container;
             }
@@ -153,18 +152,34 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     {
         var port = container.GetMappedPublicPort(containerPort: 25565);
         var protocolVersion = ProtocolVersion.Range().First(protocolVersion => protocolVersion.Releases.Contains(release));
-        var stallCheckedAt = Stopwatch.GetTimestamp();
 
         while (!await IsStatusAnsweredAsync(port, protocolVersion, cancellationToken))
-        {
-            if (Stopwatch.GetElapsedTime(stallCheckedAt) >= StallCheckInterval)
-            {
-                await ThrowIfDownloadStalledAsync(container, cancellationToken);
-                stallCheckedAt = Stopwatch.GetTimestamp();
-            }
-
             await Task.Delay(StatusPollInterval, cancellationToken);
+    }
+
+    // Starting a server waits for it to log that it is ready, which the image has it do only after every download, so a download that stalls is
+    // watched for while it waits
+    private static async Task StartWatchingDownloadsAsync(IContainer container, CancellationToken cancellationToken)
+    {
+        using var startCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var start = container.StartAsync(startCancellation.Token);
+
+        try
+        {
+            while (await Task.WhenAny(start, Task.Delay(StallCheckInterval, cancellationToken)) != start)
+            {
+                if (container.State is TestcontainersStates.Running)
+                    await ThrowIfDownloadStalledAsync(container, cancellationToken);
+            }
         }
+        catch
+        {
+            await startCancellation.CancelAsync();
+            await start.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            throw;
+        }
+
+        await start;
     }
 
     // A download the image makes as the server starts can stop without failing, as one from Forge's Maven did for the whole of a start, and
