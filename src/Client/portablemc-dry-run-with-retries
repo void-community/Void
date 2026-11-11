@@ -12,6 +12,9 @@ shift
 # that long.
 attempts="${PORTABLEMC_DRY_RUN_ATTEMPTS:-6}"
 retry_delay_seconds="${PORTABLEMC_DRY_RUN_RETRY_DELAY_SECONDS:-12}"
+# A repository's CDN sometimes serves one connection at a few kilobytes per second, which a new attempt gets past, as it connects again.
+minimum_download_speed="${PORTABLEMC_DRY_RUN_MINIMUM_DOWNLOAD_SPEED:-131072}"
+download_speed_window_seconds=30
 
 if [[ ! "$attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "PORTABLEMC_DRY_RUN_ATTEMPTS must be a positive integer." >&2
@@ -22,6 +25,72 @@ if [[ ! "$retry_delay_seconds" =~ ^[0-9]+$ ]]; then
   echo "PORTABLEMC_DRY_RUN_RETRY_DELAY_SECONDS must be a non-negative integer." >&2
   exit 1
 fi
+
+if [[ ! "$minimum_download_speed" =~ ^[0-9]+$ ]]; then
+  echo "PORTABLEMC_DRY_RUN_MINIMUM_DOWNLOAD_SPEED must be a non-negative integer." >&2
+  exit 1
+fi
+
+# Passes portablemc's output through, and fails once a download, which machine output reports as "download", done/count, bytes/total and
+# its seconds so far, received less than the minimum speed over the window. It reads each line as it comes, which awk doesn't from a pipe.
+watch_downloads() {
+  local line rest bytes elapsed watching=false since_bytes=0 since_elapsed=0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "$line"
+
+    if [[ "$line" != download$'\t'* ]]; then
+      watching=false
+      continue
+    fi
+
+    rest="${line#*$'\t'*$'\t'}"
+    bytes="${rest%%/*}"
+    rest="${rest#*$'\t'}"
+    elapsed="${rest%%[.$'\t']*}"
+
+    [[ "$bytes" =~ ^[0-9]+$ && "$elapsed" =~ ^[0-9]+$ ]] || continue
+
+    if [[ "$watching" == false ]] || ((elapsed < since_elapsed || bytes < since_bytes)); then
+      watching=true
+      since_bytes="$bytes"
+      since_elapsed="$elapsed"
+    elif ((elapsed - since_elapsed >= download_speed_window_seconds)); then
+      if ((bytes - since_bytes < minimum_download_speed * (elapsed - since_elapsed))); then
+        echo "portablemc downloaded $((bytes - since_bytes)) bytes in $((elapsed - since_elapsed)) seconds, slower than $minimum_download_speed bytes per second." >&2
+        return 75
+      fi
+
+      since_bytes="$bytes"
+      since_elapsed="$elapsed"
+    fi
+  done
+}
+
+# Runs portablemc and stops it when a download is too slow. It ignores a closed output, so it is stopped by its process.
+run_portablemc() {
+  if ((minimum_download_speed == 0)); then
+    portablemc "${portablemc_start_arguments[@]}"
+    return
+  fi
+
+  local output watch_exit_code=0
+  output="$(mktemp -u)"
+  mkfifo "$output"
+  portablemc "${portablemc_start_arguments[@]}" > "$output" &
+  local portablemc_pid=$!
+
+  watch_downloads < "$output" || watch_exit_code=$?
+  rm -f "$output"
+
+  if ((watch_exit_code != 0)); then
+    kill "$portablemc_pid" 2> /dev/null || true
+    wait "$portablemc_pid" 2> /dev/null || true
+    return "$watch_exit_code"
+  fi
+
+  wait "$portablemc_pid"
+}
 
 last_exit_code=0
 portablemc_start_arguments=(start --dry "$portablemc_version" "$@")
@@ -90,7 +159,7 @@ fi
 for ((attempt = 1; attempt <= attempts; attempt++)); do
   echo "Running portablemc dry-run for $portablemc_version (attempt $attempt/$attempts)."
 
-  if portablemc "${portablemc_start_arguments[@]}"; then
+  if run_portablemc; then
     exit 0
   else
     last_exit_code="$?"
