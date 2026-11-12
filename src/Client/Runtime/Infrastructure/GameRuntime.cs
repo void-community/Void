@@ -399,6 +399,42 @@ internal sealed partial class GameRuntime
         return [.. failures.OfType<CandidateFailure>().Select(static failure => failure.Message)];
     }
 
+    /// <summary>
+    /// Tells where a process that timed out waits in the kernel, and where every other process waits meanwhile, such as an X client that holds the
+    /// X server the process waits for.
+    /// </summary>
+    private static async Task DescribeTimedOutProcessAsync(Process process, string processName)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        List<string> processes = [];
+
+        foreach (string directory in Directory.EnumerateDirectories(path: "/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(directory), NumberStyles.None, CultureInfo.InvariantCulture, out int processId))
+                continue;
+
+            try
+            {
+                string status = await File.ReadAllTextAsync(Path.Combine(directory, path2: "stat")).ConfigureAwait(continueOnCapturedContext: false);
+                string waitChannel = await File.ReadAllTextAsync(Path.Combine(directory, path2: "wchan")).ConfigureAwait(continueOnCapturedContext: false);
+                string commandLine = (await File.ReadAllTextAsync(Path.Combine(directory, path2: "cmdline")).ConfigureAwait(continueOnCapturedContext: false)).Replace(oldChar: '\0', newChar: ' ').Trim();
+
+                // The state follows the parenthesized command name, which may itself contain spaces and parentheses
+                string state = status[(status.LastIndexOf(value: ')') + 2)..].Split(separator: ' ')[0];
+
+                processes.Add($"  {processId} {state} {(waitChannel is "" or "0" ? "-" : waitChannel)} {commandLine}");
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentOutOfRangeException)
+            {
+                processes.Add($"  {processId} unreadable: {exception.Message}");
+            }
+        }
+
+        await Console.Error.WriteLineAsync($"{processName} (process {process.Id}) timed out; processes and where they wait:\n{string.Join(separator: '\n', processes)}").ConfigureAwait(continueOnCapturedContext: false);
+    }
+
     private static async Task<string> InstallModpack(
         HttpClient httpClient,
         string slug,
@@ -880,6 +916,8 @@ internal sealed partial class GameRuntime
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
+            await DescribeTimedOutProcessAsync(process, processName).ConfigureAwait(continueOnCapturedContext: false);
+
             if (killOnTimeout)
             {
                 KillProcess(process);
