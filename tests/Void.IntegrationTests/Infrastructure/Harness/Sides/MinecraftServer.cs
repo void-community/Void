@@ -43,6 +43,8 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "failed with 502 Bad Gateway",
         "failed with 503 Service Unavailable",
         "failed with 504 Gateway Timeout",
+        // Cloudflare's answer when it can't reach the origin behind it, as PaperMC's download API's did
+        "failed with 530",
         // Paper's launcher checks the server jar it downloads from Mojang, which launchers before Minecraft 1.18 report as not valid, and older ones as invalid
         "Hash check failed for downloaded file",
         "Downloaded vanilla jar is not valid",
