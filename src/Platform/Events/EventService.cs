@@ -40,7 +40,8 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
     {
         var eventType = @event.GetType();
 
-        var invoked = new HashSet<InvokedListenerMethod>(InvokedListenerMethodComparer.Instance);
+        var invoked = new HashSet<WeakEntry>(InvokedEntryComparer.Instance);
+        var invokedEntries = invoked.GetAlternateLookup<Entry>();
 
         // Listeners are often registered while the event is invoked, such as by the listeners it invokes, so the entries are read again until
         // they have no more candidates
@@ -90,18 +91,14 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
                 if (!eventType.IsAssignableTo(entry.EventType))
                     continue;
 
-                if (!invoked.Add(new InvokedListenerMethod(entry.Listener, entry.Method)))
+                // Found by the entry itself, so an entry already invoked, as every one is on the last pass, costs no weak references
+                if (invokedEntries.Contains(entry))
                     continue;
 
-                candidates.Add(new InvocationCandidate(
-                    entry.Order,
-                    entryIndex,
-                    new WeakEntry(
-                        new WeakReference<IEventListener>(entry.Listener),
-                        new WeakReference<MethodInfo>(entry.Method),
-                        entry.Order,
-                        entry.BypassScopedFilter,
-                        entry.CancellationToken)));
+                var weakEntry = InvokedEntryComparer.Instance.Create(entry);
+
+                invoked.Add(weakEntry);
+                candidates.Add(new InvocationCandidate(entry.Order, entryIndex, weakEntry));
             }
 
             return candidates;
@@ -267,7 +264,7 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
     [LoggerMessage(LogLevel.Error, "Failed to resolve {ServiceType} for scoped event {EventType}. Reason:")]
     partial void LogFailedToResolveServiceTypeForScopedEventEventTypeReason(string? serviceType, string? eventType, Exception exception);
 
-    private record WeakEntry(WeakReference<IEventListener> ListenerReference, WeakReference<MethodInfo> MethodReference, PostOrder Order, bool BypassScopedFilter, CancellationToken CancellationToken)
+    private record WeakEntry(WeakReference<IEventListener> ListenerReference, WeakReference<MethodInfo> MethodReference, int IdentityHashCode, PostOrder Order, bool BypassScopedFilter, CancellationToken CancellationToken)
     {
         public IEventListener? Listener => ListenerReference.TryGetTarget(out var listener) ? listener : null;
         public MethodInfo? Method => MethodReference.TryGetTarget(out var method) ? method : null;
@@ -279,34 +276,42 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
 
     private readonly record struct InvocationCandidate(PostOrder Order, int Sequence, WeakEntry WeakEntry);
 
-    // Weak, as an event can take long to invoke, such as the one a player connects with while it waits for the player, and the plugins of the
-    // listeners it already invoked may unload meanwhile
-    private sealed class InvokedListenerMethod(IEventListener listener, MethodInfo method)
+    // The invoked entries are kept weakly, as an event can take long to invoke, such as the one a player connects with while it waits for the
+    // player, and the plugins of the listeners it already invoked may unload meanwhile. They are the weak entries the event invokes anyway,
+    // told apart by the listener and method they were made of.
+    private sealed class InvokedEntryComparer : IEqualityComparer<WeakEntry>, IAlternateEqualityComparer<Entry, WeakEntry>
     {
-        public WeakReference<IEventListener> Listener { get; } = new(listener);
-        public WeakReference<MethodInfo> Method { get; } = new(method);
-        public int HashCode { get; } = System.HashCode.Combine(RuntimeHelpers.GetHashCode(listener), RuntimeHelpers.GetHashCode(method));
-    }
+        public static readonly InvokedEntryComparer Instance = new();
 
-    private sealed class InvokedListenerMethodComparer : IEqualityComparer<InvokedListenerMethod>
-    {
-        public static readonly InvokedListenerMethodComparer Instance = new();
-
-        public bool Equals(InvokedListenerMethod? left, InvokedListenerMethod? right)
+        public bool Equals(WeakEntry? left, WeakEntry? right)
         {
             if (ReferenceEquals(left, right))
                 return true;
 
-            if (left is null || right is null || left.HashCode != right.HashCode)
+            if (left is null || right is null || left.IdentityHashCode != right.IdentityHashCode)
                 return false;
 
-            return left.Listener.TryGetTarget(out var leftListener) && right.Listener.TryGetTarget(out var rightListener) && ReferenceEquals(leftListener, rightListener)
-                   && left.Method.TryGetTarget(out var leftMethod) && right.Method.TryGetTarget(out var rightMethod) && ReferenceEquals(leftMethod, rightMethod);
+            return left.Listener is { } listener && ReferenceEquals(listener, right.Listener) && left.Method is { } method && ReferenceEquals(method, right.Method);
         }
 
-        public int GetHashCode(InvokedListenerMethod value)
+        public int GetHashCode(WeakEntry value)
         {
-            return value.HashCode;
+            return value.IdentityHashCode;
+        }
+
+        public bool Equals(Entry entry, WeakEntry other)
+        {
+            return ReferenceEquals(entry.Listener, other.Listener) && ReferenceEquals(entry.Method, other.Method);
+        }
+
+        public int GetHashCode(Entry entry)
+        {
+            return HashCode.Combine(RuntimeHelpers.GetHashCode(entry.Listener), RuntimeHelpers.GetHashCode(entry.Method));
+        }
+
+        public WeakEntry Create(Entry entry)
+        {
+            return new WeakEntry(new WeakReference<IEventListener>(entry.Listener), new WeakReference<MethodInfo>(entry.Method), GetHashCode(entry), entry.Order, entry.BypassScopedFilter, entry.CancellationToken);
         }
     }
 }
