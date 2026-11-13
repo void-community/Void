@@ -128,12 +128,12 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
             var linked = links.TryGetLink(player, out var playingLink) && playingLink.IsAlive;
             logger.LogTrace("Kick of {Player} handled: {Kicked}, through a live link: {Linked}", player, kicked, linked);
 
-            if (kicked && linked)
+            if (kicked && linked && playingLink is not null)
             {
                 var timestamp = Stopwatch.GetTimestamp();
 
                 // A link that stops meanwhile, as all do as the proxy stops, no longer reads what the player sent, which then keeps its channel alive
-                while (channel.IsAlive && playingLink!.IsAlive)
+                while (channel.IsAlive && playingLink.IsAlive)
                 {
                     if (Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds > settings.KickTimeout)
                         break;
@@ -146,7 +146,7 @@ public class PlayerService(ILogger<PlayerService> logger, IDependencyService dep
 
                 if (!channel.IsAlive)
                     logger.LogTrace("Player {Player} left {Elapsed}ms after its kick", player, (int)Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds);
-                else if (playingLink!.IsAlive)
+                else if (playingLink.IsAlive)
                     logger.LogWarning("Plugins didn't handle graceful {Player} player kick in {Timeout}ms", player, settings.KickTimeout);
                 else
                     linked = false;

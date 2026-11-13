@@ -190,8 +190,8 @@ internal static class PluginRetentionInspector
         if (Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } hostPath)
             return hostPath;
 
-        if (Path.GetFileName(Environment.ProcessPath) == hostName)
-            return Environment.ProcessPath!;
+        if (Environment.ProcessPath is { } processPath && Path.GetFileName(processPath) == hostName)
+            return processPath;
 
         // The runtime lives in shared/Microsoft.NETCore.App/<version> of the installation the host is in.
         return Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", hostName));

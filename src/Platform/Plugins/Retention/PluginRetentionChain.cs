@@ -135,19 +135,19 @@ internal static partial class PluginRetentionChain
                     writer.Line(stateMachineType.Module?.Name, $"{arrival}{method}, through its {MemberName(reference?.Field?.Name ?? "?")}", next.Type);
                 }
             }
-            else if (IsStateMachine(link.Type?.Name))
+            else if (link.Type?.Name is { } stateMachineName && IsStateMachine(stateMachineName))
             {
                 var local = MemberName(reference?.Field?.Name ?? "?");
-                writer.Line(assembly, $"{arrival}{DescribeStateMachine(link.Type!.Name!)}, which holds {local}", next.Type);
+                writer.Line(assembly, $"{arrival}{DescribeStateMachine(stateMachineName)}, which holds {local}", next.Type);
                 writer.Receiver = local;
             }
-            else if (IsTask(link.Type))
+            else if (link.Type is { } taskType && IsTask(taskType))
             {
                 // The continuation a task runs is told by the line after it
                 if (reference?.Field?.Name is "m_continuationObject" or null)
-                    writer.Line(assembly, $"{arrival}{DescribeTask(link.Type!.Name ?? "?")}");
+                    writer.Line(assembly, $"{arrival}{DescribeTask(taskType.Name ?? "?")}");
                 else
-                    writer.Line(assembly, $"{arrival}{DescribeTask(link.Type!.Name ?? "?")}, through its {MemberName(reference.Value.Field.Name ?? "?")}", next.Type);
+                    writer.Line(assembly, $"{arrival}{DescribeTask(taskType.Name ?? "?")}, through its {MemberName(reference.Value.Field.Name ?? "?")}", next.Type);
             }
             else if (link.Type?.Name is { } typeName && DisplayClassPattern().IsMatch(typeName))
             {

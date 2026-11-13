@@ -101,8 +101,8 @@ internal static class PluginRetentionSnapshot
     // Names a type as the runtime names it, the way the analyzer of a dump reads the names, which nests a type in its generic declaring type.
     private static string RuntimeName(Type type)
     {
-        if (type.IsArray)
-            return $"{RuntimeName(type.GetElementType()!)}[{new string(',', type.GetArrayRank() - 1)}]";
+        if (type.IsArray && type.GetElementType() is { } elementType)
+            return $"{RuntimeName(elementType)}[{new string(',', type.GetArrayRank() - 1)}]";
 
         if (type.IsGenericParameter)
             return type.Name;
@@ -138,7 +138,7 @@ internal static class PluginRetentionSnapshot
 
         using var session = client.StartEventPipeSession(providers, requestRundown: false, circularBufferMB: 1024);
         using var source = new EventPipeEventSource(session.EventStream);
-        using var timeout = new Timer(state => ((EventPipeSession)state!).Stop(), session, SnapshotTimeout, Timeout.InfiniteTimeSpan);
+        using var timeout = new Timer(state => (state as EventPipeSession)?.Stop(), session, SnapshotTimeout, Timeout.InfiniteTimeSpan);
 
         var heap = new Heap();
         var collection = (int?)null;

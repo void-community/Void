@@ -165,7 +165,7 @@ internal static class PluginRetentionAnalyzer
 
         foreach (var thread in runtime.Threads)
         {
-            var frames = thread.EnumerateStackTrace().Where(frame => frame.Method is not null).Take(MaximumFrames).Select(frame => $"    {frame.Method!.Signature ?? frame.Method.Name}").ToArray();
+            var frames = thread.EnumerateStackTrace().Select(frame => frame.Method).OfType<ClrMethod>().Take(MaximumFrames).Select(method => $"    {method.Signature ?? method.Name}").ToArray();
 
             if (frames.Length is 0 || IdleFrames.Any(frames[0].Contains))
                 continue;
