@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Reflection;
+using System.Runtime.Loader;
 using DryIoc;
 using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Plugins;
@@ -52,6 +53,8 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         {
             logger.LogTrace("Injecting {PluginType}", serviceType);
 
+            // The first plugin of an assembly brings its container, which leaves as a plugin of the assembly unloads
+            var bringsContainer = !_plugins.ContainsKey(assembly);
             var pluginContainers = GetPluginContainer(assembly);
 
             // Plugin => Plugin
@@ -59,7 +62,18 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
             pluginContainers.Root.Add(ServiceDescriptor.Singleton(provider => (IPlugin)provider.GetRequiredService(serviceType)));
             pluginContainers.Root.Add(ServiceDescriptor.Singleton(provider => GetEntryPoint(assembly).GetRequiredService<ILoggerFactory>().CreateLogger(serviceType.Name)));
 
-            GetEntryPoint(preferredAssembly: assembly).GetRequiredService(serviceType);
+            try
+            {
+                GetEntryPoint(preferredAssembly: assembly).GetRequiredService(serviceType);
+            }
+            catch
+            {
+                // A plugin that couldn't be created never unloads, so what it brought leaves now, and doesn't keep its context alive
+                if (bringsContainer)
+                    RemovePlugin(assembly);
+
+                throw;
+            }
         }
 
         var composite = GetEntryPoint(preferredAssembly: assembly);
@@ -252,13 +266,19 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
     [Subscribe(PostOrder.First)]
     public void OnPluginUnloaded(PluginUnloadedEvent @event)
     {
-        var assembly = @event.Plugin.GetType().Assembly;
+        RemovePlugin(@event.Plugin.GetType().Assembly);
+    }
 
+    private void RemovePlugin(Assembly assembly)
+    {
         // Removed before its listeners, as a listener its container resolves meanwhile unregisters itself once its plugin is gone
         var removed = _plugins.TryRemove(assembly, out var container);
 
+        // The listeners of the assemblies the plugin depends on leave with it too, as those load into its context and unload with it
+        var context = AssemblyLoadContext.GetLoadContext(assembly) is { IsCollectible: true } pluginContext ? pluginContext : null;
+
         var events = rootContainer.GetRequiredService<IEventService>();
-        events.UnregisterListeners(events.Listeners.Where(listener => listener.GetType().Assembly == assembly));
+        events.UnregisterListeners(events.Listeners.Where(listener => IsOfPlugin(listener.GetType().Assembly)));
 
         if (!removed || container is null)
             return;
@@ -272,6 +292,10 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         EmptyRequestStackField.SetValue(Request.Empty, null);
         PooledRequestField.SetValue(null, null);
         DropDisposedScopeMaps();
+
+        return;
+
+        bool IsOfPlugin(Assembly listenerAssembly) => listenerAssembly == assembly || (context is not null && AssemblyLoadContext.GetLoadContext(listenerAssembly) == context);
     }
 
     // Scopes opened from now on start from empty maps of their own, while late services go to the maps only the disposed scopes keep
@@ -360,6 +384,15 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
         }
 
         return playerScope;
+    }
+
+    // A plugin's listeners also come from the assemblies it depends on, which load into its context, next to its own
+    private bool IsOfLoadedPlugin(Assembly assembly)
+    {
+        if (_plugins.ContainsKey(assembly))
+            return true;
+
+        return AssemblyLoadContext.GetLoadContext(assembly) is { } context && _plugins.Keys.Any(pluginAssembly => AssemblyLoadContext.GetLoadContext(pluginAssembly) == context);
     }
 
     private PluginContainer GetPluginContainer(Assembly pluginAssembly)
@@ -456,7 +489,7 @@ public class DependencyService(ILogger<DependencyService> logger, IContainer roo
 
                     // A player that connects as a plugin unloads resolves the plugin's services after its listeners were unregistered, and a player
                     // that leaves as its services activate has its scopes, and their listeners, disposed meanwhile
-                    if ((listener.GetType().Assembly is { IsCollectible: true } listenerAssembly && !_plugins.ContainsKey(listenerAssembly)) || (playerContext is { IsDisposed: true } && !IsSingletonService(serviceType)))
+                    if ((listener.GetType().Assembly is { IsCollectible: true } listenerAssembly && !IsOfLoadedPlugin(listenerAssembly)) || (playerContext is { IsDisposed: true } && !IsSingletonService(serviceType)))
                         events.UnregisterListeners(listener);
                 }
 
