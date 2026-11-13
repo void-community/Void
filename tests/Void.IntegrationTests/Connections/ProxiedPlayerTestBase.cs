@@ -82,6 +82,9 @@ public abstract class ProxiedPlayerTestBase(ConnectionsFixture fixture) : Integr
         {
             // Client-side player readiness is authoritative when visual confirmation exceeds its step timeout.
             Console.WriteLine($"Connection request detached; background client diagnostics:\n{await game.ReadDiagnosticsAsync()}");
+
+            // A game that joins this late waits for something before or as it connects, which its threads show while it still does
+            await game.DumpThreadsAsync();
         }
 
         await WaitForLocalPlayerAsync(game, Timeouts.StepTimeoutToken);

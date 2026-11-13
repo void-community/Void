@@ -109,6 +109,12 @@ public sealed class GameSession(ReusableGame owner, PortableMinecraftClient.Game
         return await game.ReadDiagnosticsAsync();
     }
 
+    /// <summary>Writes where the game's threads are into its steps, which tells what a game that takes long waits for.</summary>
+    public async Task DumpThreadsAsync()
+    {
+        await game.TryDumpThreadsAsync();
+    }
+
     /// <summary>
     /// Ends the test by leaving the server the game is on, and waits until that server has seen the player leave, so the next test can join
     /// as the same player. A game that is no longer on that server, such as one that crashed or was kicked, fails the test.

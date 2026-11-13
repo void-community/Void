@@ -438,8 +438,9 @@ public record PortableMinecraftClient(IContainer Container, HttpClient HttpClien
                 var dump = WebUtility.HtmlDecode(string.Join('\n', output[dumpStart..].Split('\n').Where(line => !line.StartsWith('<'))));
                 var dumpPath = Path.Combine(WorkingDirectory, "threads.log");
 
+                // The dumps of a game add up, as one taken while the game took long tells more than the one taken once its test failed
                 Directory.CreateDirectory(WorkingDirectory);
-                await File.WriteAllTextAsync(dumpPath, dump, Timeouts.StepTimeoutToken);
+                await File.AppendAllTextAsync(dumpPath, $"Dumped at {DateTime.UtcNow:HH:mm:ss}:\n{dump}\n", Timeouts.StepTimeoutToken);
                 await LogAsync($"Dumped {GameName} threads into {dumpPath}", CancellationToken.None);
             }
             catch (Exception exception)
