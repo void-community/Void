@@ -15,7 +15,7 @@ Use `/server [server-name]` to send yourself to another backend server. If no na
 
 - `/stop` — immediately stops the proxy.
 
-The proxy itself provides [**`/plugins`**](/docs/configuration/in-file/#managing-plugins-at-runtime) to list, load, unload and reload plugins, so it stays available when Essentials is unloaded.
+The proxy itself provides `/plugins` to list, load, unload and reload plugins, so it stays available when Essentials is unloaded. See [**managing plugins at runtime**](/docs/configuration/in-file/#managing-plugins-at-runtime).
 
 ## Moderation
 
