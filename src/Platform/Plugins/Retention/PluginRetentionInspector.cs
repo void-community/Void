@@ -28,18 +28,21 @@ internal static class PluginRetentionInspector
         if (!CarriesRuntimeDiagnostics(CreateDumpFileName) || !CarriesRuntimeDiagnostics(DacFileName))
             return (await PluginRetentionSnapshot.DescribeAsync(plugin, cancellationToken), string.Empty);
 
-        var dumpPath = Path.Combine(Path.GetTempPath(), $"void-plugin-retention-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
+        // The dump holds the proxy's memory, and a single-file build runs the createdump it carries from next to it, so both go to a directory
+        // made for this one description, which only the proxy's user can read or write
+        var directory = Directory.CreateTempSubdirectory("void-plugin-retention-").FullName;
+        var dumpPath = Path.Combine(directory, $"{Environment.ProcessId}.dmp");
 
         try
         {
-            await WriteDumpAsync(dumpPath, cancellationToken);
-            var output = await AnalyzeAsync(dumpPath, (ulong)GCHandle.ToIntPtr(plugin), cancellationToken);
+            await WriteDumpAsync(dumpPath, directory, cancellationToken);
+            var output = await AnalyzeAsync(dumpPath, (ulong)GCHandle.ToIntPtr(plugin), directory, cancellationToken);
 
             return output.Split($"\n{PluginRetentionAnalyzer.FramesHeader}\n", 2) is [var chains, var frames] ? (chains.TrimEnd(), frames.TrimEnd()) : (output, string.Empty);
         }
         finally
         {
-            File.Delete(dumpPath);
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -65,7 +68,7 @@ internal static class PluginRetentionInspector
 
     // The runtime writes the dump itself, with the createdump next to it, on every system. A single-file build has none there, so it runs the
     // one it carries on itself.
-    private static async ValueTask WriteDumpAsync(string dumpPath, CancellationToken cancellationToken)
+    private static async ValueTask WriteDumpAsync(string dumpPath, string directory, CancellationToken cancellationToken)
     {
         if (File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), CreateDumpFileName)))
         {
@@ -74,7 +77,7 @@ internal static class PluginRetentionInspector
             return;
         }
 
-        var startInfo = new ProcessStartInfo(GetRuntimeDiagnosticsFile(CreateDumpFileName))
+        var startInfo = new ProcessStartInfo(ExtractRuntimeDiagnosticsFile(CreateDumpFileName, directory))
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true
@@ -119,9 +122,9 @@ internal static class PluginRetentionInspector
 
     private delegate int SetProcessOption(int option, nint argument2, nint argument3, nint argument4, nint argument5);
 
-    private static ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, CancellationToken cancellationToken)
+    private static ValueTask<string> AnalyzeAsync(string dumpPath, ulong handle, string directory, CancellationToken cancellationToken)
     {
-        var dacPath = File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName)) ? Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName) : GetRuntimeDiagnosticsFile(DacFileName);
+        var dacPath = File.Exists(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName)) ? Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), DacFileName) : ExtractRuntimeDiagnosticsFile(DacFileName, directory);
         return RunAnalyzerAsync([AnalyzeArgument, dumpPath, handle.ToString(), dacPath], cancellationToken);
     }
 
@@ -147,10 +150,15 @@ internal static class PluginRetentionInspector
         {
             await process.WaitForExitAsync(timeout.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             process.Kill(entireProcessTree: true);
-            throw;
+
+            if (cancellationToken.IsCancellationRequested)
+                throw;
+
+            // The analyzer ran out of the time it has, which nobody cancelled
+            throw new TimeoutException($"The analyzer took longer than {AnalysisTimeout.TotalMinutes:0} minutes", exception);
         }
 
         var output = await outputTask;
@@ -198,30 +206,20 @@ internal static class PluginRetentionInspector
 
     private static string CreateDumpFileName => OperatingSystem.IsWindows() ? "createdump.exe" : "createdump";
 
-    // A single-file build carries the createdump and DAC of its runtime as resources, which run from a directory of their runtime's version.
-    private static string GetRuntimeDiagnosticsFile(string fileName)
+    // A single-file build carries the createdump and DAC of its runtime as resources, which it writes to a directory of its own to run them.
+    private static string ExtractRuntimeDiagnosticsFile(string fileName, string directory)
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"void-runtime-diagnostics-{RuntimeInformation.RuntimeIdentifier}-{Environment.Version}");
-        var path = Path.Combine(directory, fileName);
-
-        if (File.Exists(path))
-            return path;
-
         using var resource = typeof(PluginRetentionInspector).Assembly.GetManifestResourceStream($"RuntimeDiagnostics/{fileName}")
             ?? throw new FileNotFoundException($"The proxy carries no {fileName} of its runtime", fileName);
 
-        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, fileName);
 
-        // Written aside and moved, so another proxy extracting it at once never runs a file half written.
-        var temporaryPath = $"{path}.{Guid.NewGuid():N}";
-
-        using (var file = File.Create(temporaryPath))
+        using (var file = File.Create(path))
             resource.CopyTo(file);
 
         if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(temporaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-        File.Move(temporaryPath, path, overwrite: true);
         return path;
     }
 }
