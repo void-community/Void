@@ -87,6 +87,10 @@ public class PromptWriter(PromptReader reader, StreamWriter writer) : TextWriter
         // This width is not safe when the console is resized.
         var width = PromptReader.Width;
 
+        // A terminal that tells no width, as a pseudo-terminal nobody sized does, has no line to wrap the buffer at
+        if (width <= 0)
+            return 1;
+
         if (length is 0)
             length = reader.Buffer.Length + reader.Prompt.Length;
 
