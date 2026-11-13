@@ -38,6 +38,9 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "ReadTimeoutException",
         "PrematureCloseException",
         "Connection reset",
+        // Java's own sockets, which Forge's installer and Paper's launcher download Mojang's server through, tell a server they can't reach so
+        "connect timed out",
+        "Connection timed out",
         // GitHub's release downloads, such as of the agent the servers load, time out at its gateway for minutes at times, and loader repositories,
         // such as NeoForge's Maven that the image reads every NeoForge version from, fail at theirs
         "failed with 502 Bad Gateway",
