@@ -38,6 +38,11 @@ public class WeakPluginContainer
     /// Gets whether the container started to unload, and is still referenced, as a container that refused to unload is.
     /// </summary>
     public bool IsUnloading => _state is State.Unloading;
+
+    /// <summary>
+    /// Gets whether the container started to unload and none of its plugins is alive any more, whether or not anything waited to see it.
+    /// </summary>
+    public bool IsUnloaded => IsUnloading && !AlivePlugins.Any();
     public CancellationTokenSource CancellationTokenSource { get; } = new();
 
     /// <summary>

@@ -67,6 +67,10 @@ public interface IPluginService
     /// <exception cref="InvalidOperationException">
     ///     The container is already loaded, or no container has that name. Of concurrent loads of one name, all but one throw.
     /// </exception>
+    /// <exception cref="Exception">
+    ///     The container's assembly couldn't be read, or one of its plugins failed to load. The container isn't kept then, and can
+    ///     be loaded again.
+    /// </exception>
     ValueTask LoadContainerAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -109,7 +113,9 @@ public interface IPluginService
     /// <summary>
     ///     Unloads all active plugin containers, firing unload events for every plugin in each container.
     /// </summary>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <param name="cancellationToken">
+    ///     A token to cancel the wait for the containers to be collected. Containers that began to unload unload regardless.
+    /// </param>
     ValueTask UnloadContainersAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -119,10 +125,14 @@ public interface IPluginService
     /// </summary>
     /// <remarks>
     ///     A container that something still references after that refuses to unload, and the exception tells what references
-    ///     it: each chain of references, by type and field, from a static field, a thread or a handle to the container.
+    ///     it: each chain of references, by type and field, from a static field, a thread or a handle to the container. It
+    ///     leaves <see cref="Containers" /> once nothing references it any more. A listener that fails one of the events is
+    ///     logged, and doesn't stop the unload.
     /// </remarks>
     /// <param name="name">The name of the container to unload, as returned by <see cref="Containers" />.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <param name="cancellationToken">
+    ///     A token to cancel the wait for the container to be collected. A container that began to unload unloads regardless.
+    /// </param>
     /// <exception cref="Exception">
     ///     Thrown when the container is not found, is still loading, is already unloading or unloaded, or refuses to unload within the
     ///     timeout. Of concurrent unloads of one container, all but one throw.

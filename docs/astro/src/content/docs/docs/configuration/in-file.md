@@ -155,9 +155,9 @@ $ VOID_PLUGINS="https://example.org/download/YourPlugin1.dll;/home/YourPlugin2.d
 The `/plugins` command manages plugins while the proxy runs, from the console or from a player's chat, and answers whoever ran it.
 
 - `/plugins` lists the loaded plugin containers.
-- `/plugins load <name>` loads a plugin from the `plugins` directory or one of those built into the proxy. A file in `plugins` is loaded in place of the built-in plugin of the same name.
+- `/plugins load <name>` loads a plugin from the `plugins` directory or one of those built into the proxy. A file in `plugins` is loaded in place of the built-in plugin of the same name. A plugin that fails to load isn't kept, and can be loaded again once it's fixed.
 - `/plugins unload <name>` unloads a loaded plugin container.
-- `/plugins reload <name>` unloads a loaded plugin container and loads it again.
+- `/plugins reload <name>` unloads a loaded plugin container and loads it again. It refuses a plugin that `/plugins load` can't load, such as one given with `--plugin` or `VOID_PLUGINS`, rather than only unload it.
 
 A name matches the container named exactly so, ignoring case, or else the only container whose name contains it, so `/plugins reload essentials` reloads `Void.Proxy.Plugins.Essentials.dll`. Pressing Tab suggests the names each subcommand takes.
 

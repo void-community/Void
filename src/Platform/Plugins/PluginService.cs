@@ -41,11 +41,14 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     private readonly AsyncLock _lock = new();
     private readonly TimeSpan _unloadTimeout = TimeSpan.FromSeconds(10);
     private readonly AsyncLock _collectionLock = new();
+    private readonly AsyncLock _retentionLock = new();
 
     // A container that unloads keeps its plugins for their own unloading listeners, and lets them go as it is collected
     public IEnumerable<IPlugin> All => _containers.Snapshot.SelectMany(container => container.AlivePlugins);
 
+    // A container whose unload nobody waited out, or that refused to unload and was let go later, is gone once its plugins are collected
     public IEnumerable<string> Containers => _containers.Snapshot
+        .Where(container => !container.IsUnloaded)
         .Select(container => container.Context.Name)
         .WhereNotNull();
 
@@ -232,7 +235,32 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         if (!loaded)
             throw new InvalidOperationException($"Plugin container {name} is already loaded");
 
-        await LoadPluginsAsync(plugins, cancellationToken);
+        try
+        {
+            await LoadPluginsAsync(plugins, cancellationToken);
+        }
+        catch
+        {
+            await UnloadFailedContainerAsync(name);
+            throw;
+        }
+    }
+
+    // A container whose plugins didn't all load isn't kept half loaded, which would also keep its name from loading again. Nothing waits to
+    // see it collected, as the failure the load throws on, and the load itself, still hold the plugin's code meanwhile.
+    private async ValueTask UnloadFailedContainerAsync(string name)
+    {
+        try
+        {
+            var (context, count) = await UnloadPluginsAsync(name, awaitCollection: false, CancellationToken.None);
+            context.Free();
+
+            logger.LogDebug("Unloaded {ContextName} {Count} plugin(s), as the container failed to load", name, count);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Plugin container {ContainerName} failed to load, and couldn't be unloaded", name);
+        }
     }
 
     public async ValueTask LoadPluginsAsync(IEnumerable<Type> plugins, CancellationToken cancellationToken = default)
@@ -310,7 +338,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public async ValueTask UnloadContainerAsync(string name, CancellationToken cancellationToken = default)
     {
-        var (context, count) = await UnloadPluginsAsync(name, cancellationToken);
+        var (context, count) = await UnloadPluginsAsync(name, awaitCollection: true, cancellationToken);
 
         try
         {
@@ -330,7 +358,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     // Its own state machine, so the container it unloads, which keeps its load context, isn't kept by the one that waits for the context to be
     // collected.
-    private async ValueTask<(GCHandle Context, int Count)> UnloadPluginsAsync(string name, CancellationToken cancellationToken)
+    private async ValueTask<(GCHandle Context, int Count)> UnloadPluginsAsync(string name, bool awaitCollection, CancellationToken cancellationToken)
     {
         var container = _containers.Snapshot.FirstOrDefault(reference => reference.Context.Name == name) ??
                         throw new Exception($"Plugin container {name} not found");
@@ -351,7 +379,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
         try
         {
-            await ThrowUnloadEventsAsync(container, cancellationToken);
+            await ThrowUnloadEventsAsync(container);
 
             // The plugin's own listeners are gone by now, so a collection that other containers unloading meanwhile force may already have
             // collected it, and left nothing of it to unregister
@@ -360,7 +388,7 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
             await container.CancellationTokenSource.CancelAsync();
             container.Context.Unload();
 
-            if (!await WaitForCollectionAsync(() => IsCollected(container, pluginType), _unloadTimeout, cancellationToken))
+            if (awaitCollection && !await WaitForCollectionAsync(() => IsCollected(pluginType), _unloadTimeout, cancellationToken))
                 throw new Exception($"Plugins context {name} refuses to unload. {await DescribeRetentionAsync(name, pluginType, cancellationToken)}");
         }
         finally
@@ -401,15 +429,29 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     }
 
     // Its own state machine, so the last plugin it throws the events for isn't kept by the one that waits for the plugin to be collected.
-    private async ValueTask ThrowUnloadEventsAsync(WeakPluginContainer container, CancellationToken cancellationToken)
+    // An unload that began isn't taken back, as the listeners it has told already let the plugin go, so nothing cancels it, and it goes on
+    // past a listener that fails.
+    private async ValueTask ThrowUnloadEventsAsync(WeakPluginContainer container)
     {
-        using var _ = await _lock.LockAsync(cancellationToken);
+        using var _ = await _lock.LockAsync();
 
         foreach (var plugin in container.Plugins)
         {
             logger.LogTrace("Unloading {PluginName} plugin", plugin.Name);
-            await events.ThrowAsync(new PluginUnloadingEvent(plugin), cancellationToken);
-            await events.ThrowAsync(new PluginUnloadedEvent(plugin), cancellationToken);
+            await ThrowUnloadEventAsync(new PluginUnloadingEvent(plugin), plugin.Name);
+            await ThrowUnloadEventAsync(new PluginUnloadedEvent(plugin), plugin.Name);
+        }
+    }
+
+    private async ValueTask ThrowUnloadEventAsync<TEvent>(TEvent @event, string pluginName) where TEvent : IEvent
+    {
+        try
+        {
+            await events.ThrowAsync(@event);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "A listener of {EventName} failed, and {PluginName} plugin unloads regardless", typeof(TEvent).Name, pluginName);
         }
     }
 
@@ -434,19 +476,21 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
         return GCHandle.Alloc(container.Context, GCHandleType.Weak);
     }
 
+    // A container whose plugins all failed to load has none to wait for.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static bool IsCollected(WeakPluginContainer container, GCHandle pluginType)
+    private static bool IsCollected(GCHandle pluginType)
     {
-        return pluginType.IsAllocated ? pluginType.Target is null : !container.IsAlive;
+        return !pluginType.IsAllocated || pluginType.Target is null;
     }
 
     private async ValueTask<string> DescribeRetentionAsync(string name, GCHandle plugin, CancellationToken cancellationToken)
     {
-        if (!plugin.IsAllocated)
-            return "It has no plugins to tell what keeps them alive";
-
         try
         {
+            // Each description dumps the whole process and reads the dump in a process of its own, so containers that refuse to unload
+            // together, as at a stop, are described in turns
+            using var _ = await _retentionLock.LockAsync(cancellationToken);
+
             var (chains, frames) = await PluginRetentionInspector.DescribeAsync(plugin, cancellationToken);
 
             if (frames.Length > 0)
@@ -463,8 +507,16 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
 
     public IEnumerable<Type> LoadContainer(string name, Stream stream, bool ignoreEmpty = false)
     {
-        if (TryLoadContainer(name, stream, ignoreEmpty, out var plugins))
-            return plugins;
+        try
+        {
+            if (TryLoadContainer(name, stream, ignoreEmpty, out var plugins))
+                return plugins;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Plugin {Name} couldn't be loaded", name);
+            return [];
+        }
 
         logger.LogWarning("Plugin container {Name} is already loaded", name);
         return [];
@@ -478,25 +530,17 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     {
         logger.LogTrace("Loading {Name} plugins", name);
 
-        PluginAssemblyLoadContext context;
-
-        try
-        {
-            context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers);
-            plugins = GetPlugins(context.PluginAssembly ?? throw new InvalidOperationException($"Plugin context {name} unloaded as it loaded"));
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "Plugin {Name} couldn't be loaded", name);
-            plugins = [];
-            return true;
-        }
+        var context = dependencies.CreateInstance<PluginAssemblyLoadContext>(CancellationToken.None, name, stream, _containers);
+        plugins = GetPlugins(context.PluginAssembly ?? throw new InvalidOperationException($"Plugin context {name} unloaded as it loaded"));
 
         if (plugins.Count is 0)
         {
             logger.Log(ignoreEmpty ? LogLevel.Trace : LogLevel.Warning, "Plugin {ContextName} has no IPlugin implementations", context.Name);
             return true;
         }
+
+        // A container that unloaded unseen leaves the list here, so the name it had is free
+        _containers.RemoveAll(static reference => reference.IsUnloaded);
 
         if (_containers.TryAdd(new WeakPluginContainer(context), static (existing, added) => existing.Context.Name == added.Context.Name))
             return true;
@@ -614,6 +658,13 @@ public class PluginService(ILogger<PluginService> logger, IRunOptions runOptions
     {
         if (await FindContainerAsync(context, Containers, cancellationToken) is not { } name)
             return 1;
+
+        // A container that came from elsewhere, such as a file the arguments name, has nowhere to load from again, and would only unload
+        if (!LoadableContainers.Contains(name))
+        {
+            await context.Source.SendMessageAsync($"Plugin container {name} can't be reloaded, as it is neither in the plugins directory nor embedded", cancellationToken);
+            return 1;
+        }
 
         logger.LogInformation("Reloading {ContainerName} container requested by {Source}", name, context.Source);
 
