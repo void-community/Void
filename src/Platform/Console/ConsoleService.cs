@@ -63,8 +63,7 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
 
         // The plugin whose code asks for the option, which a player that joins can make it do while another plugin loads. A plugin that
         // unloads takes no more options, which its unloading couldn't take away again.
-        var callingPlugin = FindCallingPluginAssembly();
-        var plugin = callingPlugin ?? _loadingPlugin?.GetType().Assembly;
+        var plugin = TryFindCaller(out var callingPlugin) ? callingPlugin : _loadingPlugin?.GetType().Assembly;
 
         var pluginContext = plugin is null ? null : AssemblyLoadContext.GetLoadContext(plugin) as PluginAssemblyLoadContext;
 
@@ -109,17 +108,26 @@ public class ConsoleService(ILogger<ConsoleService> logger, ConsoleConfiguration
         logger.LogTrace("Console option {Option} belongs to {Plugin}, which {How}", option.Name, pluginName, callingPlugin is null ? "was loading" : "asked for it");
     }
 
-    // Plugins load into collectible contexts, which the proxy's own code isn't in
+    // Tells whether Void's own code asks, and the plugin it is in, if any: plugins load into collectible contexts, which the proxy's own code
+    // isn't in. The nearest of Void's code decides, as the proxy's code can run beneath a plugin's frames, such as a continuation that a
+    // plugin's listener completes inline, and its options are the proxy's.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static Assembly? FindCallingPluginAssembly()
+    private static bool TryFindCaller(out Assembly? plugin)
     {
         foreach (var frame in new StackTrace().GetFrames())
         {
-            if (frame.GetMethod()?.DeclaringType?.Assembly is { IsCollectible: true } assembly)
-                return assembly;
+            if (frame.GetMethod()?.DeclaringType is not { } type || type == typeof(ConsoleService) || type.DeclaringType == typeof(ConsoleService))
+                continue;
+
+            plugin = type.Assembly.IsCollectible ? type.Assembly : null;
+
+            // Framework and library code passes the request on, and the API only declares it
+            if (plugin is not null || (type.Assembly.GetName().Name is { } name && name.StartsWith("Void.", StringComparison.Ordinal) && name != typeof(IConsoleService).Assembly.GetName().Name))
+                return true;
         }
 
-        return null;
+        plugin = null;
+        return false;
     }
 
     // Plugins load one at a time, so the options discovered until a plugin has loaded are its own.
