@@ -24,6 +24,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     // Where the image feeds the console from when it creates the console pipe
     private const string ConsolePipePath = "/tmp/minecraft-console-in";
     private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan LogPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan StallCheckInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StalledDownloadTimeout = TimeSpan.FromMinutes(3);
     // The image downloads the server and its mods while it starts, and lookups and downloads can fail for a moment.
@@ -54,6 +55,8 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         "Invalid original jar"
     ];
     private readonly DateTime _readLogsSince = DateTime.UtcNow;
+    // Completes once the server's container stops, as it does when the server crashes
+    private readonly Task<long> _exit = Container.GetExitCodeAsync();
     public int Port => Container.GetMappedPublicPort(containerPort: 25565);
 
     public IEnumerable<string> Logs => ReadLogsAsync(_readLogsSince).GetAwaiter().GetResult();
@@ -76,7 +79,7 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
     /// </summary>
     public async Task ExpectLoginAsync(string username, DateTime since, CancellationToken cancellationToken = default)
     {
-        await Container.ExpectTextAsync($"{username}[/", since, cancellationToken);
+        await ExpectLogAsync($"{username}[/", since, cancellationToken);
     }
 
     /// <summary>
@@ -91,15 +94,28 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
         // The pipe belongs to the server's user in /tmp, where kernels that protect FIFOs refuse anyone else who opens it to create it, as a
         // shell redirect does, so it's opened without creating it.
         await Container.RunCommandAsync(["sh", "-c", $"printf '%s\\n' \"$0\" \"$1\" | dd of={ConsolePipePath} conv=nocreat,notrunc status=none", command, $"say {marker}"], cancellationToken);
-        await Container.ExpectTextAsync(marker, sentAt, cancellationToken);
+        await ExpectLogAsync(marker, sentAt, cancellationToken);
     }
 
     public async Task ExpectTextAsync(string text, bool lookupHistory = false, CancellationToken cancellationToken = default)
     {
-        if (lookupHistory)
-            await Container.ExpectTextAsync(text, since: _readLogsSince, cancellationToken);
-        else
-            await Container.ExpectTextAsync(text, cancellationToken);
+        await ExpectLogAsync(text, lookupHistory ? _readLogsSince : DateTime.UtcNow, cancellationToken);
+    }
+
+    // A server that stopped, as one that crashed did, logs nothing more, which a wait for its log tells at once rather than when it times out
+    private async Task ExpectLogAsync(string text, DateTime since, CancellationToken cancellationToken)
+    {
+        var stopped = false;
+
+        while (!(await Container.ReadLogsAsync(since, cancellationToken)).Any(line => line.Contains(text, StringComparison.Ordinal)))
+        {
+            // It was found stopped before its log was read, so that log was all of it
+            if (stopped)
+                throw new IntegrationTestException($"The server stopped before it logged \"{text}\". Its last logs:\n{await TryReadLastLogsAsync(Container)}");
+
+            await Task.Delay(LogPollInterval, cancellationToken);
+            stopped = _exit.IsCompletedSuccessfully;
+        }
     }
 
     /// <summary>
