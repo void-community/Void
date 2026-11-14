@@ -13,8 +13,24 @@ public class MinecraftPacketTransformationsRegistry : IMinecraftPacketTransforma
     private readonly Dictionary<Type, MinecraftPacketTransformation[]> _upgradeMappings = [];
     private readonly Dictionary<Type, MinecraftPacketTransformation[]> _downgradeMappings = [];
 
-    public IEnumerable<Type> PacketTypes => _upgradeMappings.Keys;
-    public bool IsEmpty => this is { _upgradeMappings.Count: 0, _downgradeMappings.Count: 0 };
+    // Links read the mappings as plugins unload and phases change them, so every access takes the registry's lock
+    public IEnumerable<Type> PacketTypes
+    {
+        get
+        {
+            lock (this)
+                return [.. _upgradeMappings.Keys];
+        }
+    }
+
+    public bool IsEmpty
+    {
+        get
+        {
+            lock (this)
+                return this is { _upgradeMappings.Count: 0, _downgradeMappings.Count: 0 };
+        }
+    }
 
     public bool Contains<T>(TransformationType type) where T : IMinecraftPacket
     {
@@ -28,23 +44,36 @@ public class MinecraftPacketTransformationsRegistry : IMinecraftPacketTransforma
 
     public bool Contains(Type packetType, TransformationType transformationType)
     {
-        return GetMappings(transformationType).Keys.Any(packetType.IsAssignableFrom);
+        lock (this)
+            return GetMappings(transformationType).Keys.Any(packetType.IsAssignableFrom);
     }
 
     public bool TryGetFor(Type packetType, TransformationType type, [MaybeNullWhen(false)] out MinecraftPacketTransformation[] transformation)
     {
-        return GetMappings(type).TryGetValue(packetType, out transformation);
+        lock (this)
+            return GetMappings(type).TryGetValue(packetType, out transformation);
     }
 
     public IMinecraftPacketTransformationsRegistry Replace(IReadOnlyDictionary<IEnumerable<MinecraftPacketTransformationMapping>, Type> transformations, ProtocolVersion protocolVersion)
     {
-        Clear();
-        Add(transformations, protocolVersion);
+        lock (this)
+        {
+            Clear();
+            Add(transformations, protocolVersion);
+        }
 
         return this;
     }
 
     public IMinecraftPacketTransformationsRegistry Add(IReadOnlyDictionary<IEnumerable<MinecraftPacketTransformationMapping>, Type> transformationMappings, ProtocolVersion protocolVersion)
+    {
+        lock (this)
+            AddMappings(transformationMappings, protocolVersion);
+
+        return this;
+    }
+
+    private void AddMappings(IReadOnlyDictionary<IEnumerable<MinecraftPacketTransformationMapping>, Type> transformationMappings, ProtocolVersion protocolVersion)
     {
         foreach (var (mappings, type) in transformationMappings)
         {
@@ -77,20 +106,24 @@ public class MinecraftPacketTransformationsRegistry : IMinecraftPacketTransforma
             if (!_downgradeMappings.TryAdd(type, [.. downgradeTransformers]))
                 throw new ArgumentException($"Downgrade transformations for {type} are already registered");
         }
-
-        return this;
     }
 
     public void Clear()
     {
-        _upgradeMappings.Clear();
-        _downgradeMappings.Clear();
+        lock (this)
+        {
+            _upgradeMappings.Clear();
+            _downgradeMappings.Clear();
+        }
     }
 
     public void Clear(Direction direction)
     {
-        Clear(direction, _upgradeMappings);
-        Clear(direction, _downgradeMappings);
+        lock (this)
+        {
+            Clear(direction, _upgradeMappings);
+            Clear(direction, _downgradeMappings);
+        }
     }
 
     private static void Clear(Direction direction, Dictionary<Type, MinecraftPacketTransformation[]> mappings)

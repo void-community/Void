@@ -137,14 +137,15 @@ jobs:
         shell: bash
         if: ${{ matrix.test-kind == 'integration' }}
         run: |
-          # The registry sometimes resets a layer download, which a new pull gets past.
-          for (( attempt = 1; attempt <= 3; attempt++ )); do
+          # The registry sometimes resets a layer download, which a new pull gets past, and a runner's resolver sometimes stops answering for a
+          # minute or so as the job starts, which a few minutes of pulls ride out.
+          for (( attempt = 1; attempt <= 6; attempt++ )); do
             if docker pull "$VOID_CLIENT_IMAGE"; then
               exit 0
             fi
 
-            if (( attempt == 3 )); then
-              echo "Failed to pull $VOID_CLIENT_IMAGE after 3 attempts."
+            if (( attempt == 6 )); then
+              echo "Failed to pull $VOID_CLIENT_IMAGE after 6 attempts."
               exit 1
             fi
 
@@ -342,6 +343,9 @@ jobs:
 
       - name: Upload integration steps
         if: ${{ always() && matrix.test-kind == 'integration' }}
+        # The steps only tell what a shard did, and GitHub's artifact service sometimes times out, which shouldn't fail a shard whose tests
+        # passed; a shard whose tests failed fails on its own
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: integration-steps-${{ matrix.os }}-${{ matrix.shard }}

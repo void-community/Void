@@ -80,13 +80,13 @@ public class AuthenticationService(ILogger<AuthenticationService> logger, IEvent
     protected override async ValueTask FinishPlayingAsync(ILink link, CancellationToken cancellationToken)
     {
         // IPlayer might be in middle of Bundle when client is not handling packets until closing bundle received
-        var bundles = link.Player.Context.Services.GetRequiredService<IBundleService>();
+        var bundles = link.Player.GetBundles(GetType().Assembly);
 
         if (bundles.IsActivated)
             await link.SendPacketAsync<BundleDelimiterPacket>(cancellationToken);
 
         // tell IPlayer client to switch to Configuration state
-        await link.SendTerminalPacketAsync<StartConfigurationPacket>(cancellationToken);
+        await link.SendTerminalPacketAsync<StartConfigurationPacket>(bundles, cancellationToken);
 
         // IPlayer might still be sending Play state packets; read them all until configuration is acknowledged
         var playPacketsLimit = 256;

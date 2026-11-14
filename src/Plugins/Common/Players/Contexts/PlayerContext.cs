@@ -12,12 +12,14 @@ internal record PlayerContext(Func<IPlayer, IServiceProvider> GetServices) : IPl
     public required IPlayer Player { get; internal set; }
     public ILogger Logger => Player.Logger;
     public INetworkChannel? Channel { get; set; }
+    public IChannelBuilderService? ChannelBuilder { get; set; }
     public bool IsDisposed { get; private set; }
     public IServiceProvider Services => GetServices(Player);
 
     public void Dispose()
     {
         IsDisposed = true;
+        ChannelBuilder = null;
         Channel?.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -25,6 +27,7 @@ internal record PlayerContext(Func<IPlayer, IServiceProvider> GetServices) : IPl
     public async ValueTask DisposeAsync()
     {
         IsDisposed = true;
+        ChannelBuilder = null;
 
         if (Channel is not null)
             await Channel.DisposeAsync();

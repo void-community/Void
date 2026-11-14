@@ -22,8 +22,40 @@ public sealed class CopyOnWriteCollection<T>
         ImmutableInterlocked.Update(ref _items, static (items, item) => items.Add(item), item);
     }
 
-    public void RemoveAll(Predicate<T> match)
+    /// <summary>
+    /// Adds an item unless the collection holds one that conflicts with it, checked and added as one change.
+    /// </summary>
+    /// <param name="item">The item to add.</param>
+    /// <param name="conflicts">Whether an item of the collection, the first argument, conflicts with the added one.</param>
+    /// <returns><see langword="true" /> when the item was added; <see langword="false" /> when a conflicting item kept it out.</returns>
+    public bool TryAdd(T item, Func<T, T, bool> conflicts)
     {
-        ImmutableInterlocked.Update(ref _items, static (items, match) => items.RemoveAll(match), match);
+        var added = false;
+
+        ImmutableInterlocked.Update(ref _items, (items, item) =>
+        {
+            added = !items.Any(existing => conflicts(existing, item));
+            return added ? items.Add(item) : items;
+        }, item);
+
+        return added;
+    }
+
+    /// <summary>
+    /// Removes the items that match, as one change.
+    /// </summary>
+    /// <returns>How many items this change removed, which concurrent removals of the same item never count twice.</returns>
+    public int RemoveAll(Predicate<T> match)
+    {
+        var removed = 0;
+
+        ImmutableInterlocked.Update(ref _items, (items, match) =>
+        {
+            var remaining = items.RemoveAll(match);
+            removed = items.Length - remaining.Length;
+            return remaining;
+        }, match);
+
+        return removed;
     }
 }

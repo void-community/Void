@@ -18,6 +18,9 @@ namespace Void.Minecraft.Commands.Brigadier.Tree;
 /// <param name="isForks">Whether redirection forks execution.</param>
 public abstract class CommandNode(CommandExecutor? executor = null, CommandRequirement? requirement = null, CommandNode? redirectTarget = null, RedirectModifier? redirectModifier = null, bool isForks = false) : ICommandNode
 {
+    // Plugins add and remove commands as they load and unload, while players' commands are parsed and copied, so the children change under a
+    // lock and are read as they were at one moment, in the order they were added
+    private readonly Lock _lock = new();
     private readonly Dictionary<string, CommandNode> _children = [];
     private readonly Dictionary<string, ArgumentCommandNode> _arguments = [];
     private readonly Dictionary<string, LiteralCommandNode> _literals = [];
@@ -33,7 +36,14 @@ public abstract class CommandNode(CommandExecutor? executor = null, CommandRequi
     /// <summary>Gets or sets the redirected-source modifier.</summary>
     public RedirectModifier? RedirectModifier { get; set; } = redirectModifier;
     /// <summary>Gets the child nodes in dictionary enumeration order.</summary>
-    public IEnumerable<CommandNode> Children => _children.Values;
+    public IEnumerable<CommandNode> Children
+    {
+        get
+        {
+            lock (_lock)
+                return [.. _children.Values];
+        }
+    }
     /// <summary>Gets the name used to index this node under its parent.</summary>
     public abstract string Name { get; }
     /// <summary>Gets the fragment displayed in command usage.</summary>
@@ -52,23 +62,28 @@ public abstract class CommandNode(CommandExecutor? executor = null, CommandRequi
         if (node is RootCommandNode)
             throw new InvalidOperationException("Cannot add root node as child.");
 
-        if (_children.TryGetValue(node.Name, out var child))
-        {
-            if (node.Executor is not null)
-                child.Executor = node.Executor;
+        CommandNode? child;
 
-            foreach (var grandChild in node.Children)
-                child.AddChild(grandChild);
-        }
-        else
+        lock (_lock)
         {
-            _children[node.Name] = node;
+            if (!_children.TryGetValue(node.Name, out child))
+            {
+                _children[node.Name] = node;
 
-            if (node is LiteralCommandNode literal)
-                _literals[node.Name] = literal;
-            else if (node is ArgumentCommandNode argument)
-                _arguments[node.Name] = argument;
+                if (node is LiteralCommandNode literal)
+                    _literals[node.Name] = literal;
+                else if (node is ArgumentCommandNode argument)
+                    _arguments[node.Name] = argument;
+
+                return;
+            }
         }
+
+        if (node.Executor is not null)
+            child.Executor = node.Executor;
+
+        foreach (var grandChild in node.Children)
+            child.AddChild(grandChild);
     }
 
     /// <summary>Evaluates this node's access requirement.</summary>
@@ -119,16 +134,22 @@ public abstract class CommandNode(CommandExecutor? executor = null, CommandRequi
     /// <exception cref="KeyNotFoundException">No child has that name.</exception>
     public CommandNode GetChild(string name)
     {
-        return _children[name];
+        lock (_lock)
+            return _children[name];
     }
 
-    /// <summary>Removes a child from the general child map.</summary>
+    /// <summary>Removes a child, which parsing then no longer matches.</summary>
     /// <param name="name">The child name.</param>
-    /// <returns>Whether the general child map contained the name.</returns>
-    /// <remarks>The specialized literal and argument lookup maps are not updated.</remarks>
+    /// <returns>Whether the node had a child of that name.</returns>
     public bool RemoveChild(string name)
     {
-        return _children.Remove(name);
+        lock (_lock)
+        {
+            _literals.Remove(name);
+            _arguments.Remove(name);
+
+            return _children.Remove(name);
+        }
     }
 
     /// <summary>Selects a same-text literal when present, otherwise returns argument children.</summary>
@@ -136,24 +157,23 @@ public abstract class CommandNode(CommandExecutor? executor = null, CommandRequi
     /// <returns>The literal singleton or all argument nodes.</returns>
     public IEnumerable<CommandNode> GetRelevantNodes(StringReader reader)
     {
-        if (_literals.Count > 0)
+        lock (_lock)
         {
-            var cursor = reader.Cursor;
+            if (_literals.Count > 0)
+            {
+                var cursor = reader.Cursor;
 
-            while (reader.CanRead && reader.Peek != ' ')
-                reader.Skip();
+                while (reader.CanRead && reader.Peek != ' ')
+                    reader.Skip();
 
-            var text = reader.Source[cursor..reader.Cursor];
-            reader.Cursor = cursor;
+                var text = reader.Source[cursor..reader.Cursor];
+                reader.Cursor = cursor;
 
-            if (_literals.TryGetValue(text, out var literal))
-                return [literal];
-            else
-                return _arguments.Values;
-        }
-        else
-        {
-            return _arguments.Values;
+                if (_literals.TryGetValue(text, out var literal))
+                    return [literal];
+            }
+
+            return [.. _arguments.Values];
         }
     }
 

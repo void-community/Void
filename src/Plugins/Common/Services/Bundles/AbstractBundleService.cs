@@ -1,8 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Void.Proxy.Api.Events;
+﻿using Void.Proxy.Api.Events;
 using Void.Proxy.Api.Events.Network;
 using Void.Proxy.Api.Network.Messages;
-using Void.Proxy.Plugins.Common.Network.Bundles;
+using Void.Proxy.Plugins.Common.Extensions;
 
 namespace Void.Proxy.Plugins.Common.Services.Bundles;
 
@@ -14,7 +13,7 @@ public abstract class AbstractBundleService : IPluginCommonService
         if (!IsBundlePacket(@event.Message))
             return;
 
-        var bundles = @event.Player.Context.Services.GetRequiredService<IBundleService>();
+        var bundles = @event.Player.GetBundles(GetType().Assembly);
         bundles.ToggleBundle();
     }
 

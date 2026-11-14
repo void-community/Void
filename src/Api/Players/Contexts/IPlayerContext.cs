@@ -29,6 +29,12 @@ public interface IPlayerContext : IDisposable, IAsyncDisposable
     public INetworkChannel? Channel { get; set; }
 
     /// <summary>
+    /// Gets or sets the channel builder that read the handshake of the player, and builds the channels of the player and of the servers
+    /// it joins, for as long as the player stays connected.
+    /// </summary>
+    public IChannelBuilderService? ChannelBuilder { get; set; }
+
+    /// <summary>
     /// Gets the current state of the player context.
     /// </summary>
     public bool IsDisposed { get; }
