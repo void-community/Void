@@ -146,8 +146,9 @@ public abstract record MinecraftServer(IContainer Container, string LogFileName)
             catch (Exception exception)
             {
                 // The server's own output says why it didn't start, such as a mod loader installer that failed, and its threads where one that hangs waits.
+                // A start runs out of time in the wait for its ready line or in the attempt's own, whichever ends first.
                 var logs = await TryReadLastLogsAsync(container);
-                if (exception is TimeoutException)
+                if (exception is TimeoutException || attemptTimeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                     await TryDumpThreadsAsync(container, serverDescription);
 
                 await DisposeFailedContainerAsync(container, serverDescription);
