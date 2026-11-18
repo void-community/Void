@@ -45,7 +45,7 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.15" />
 		<PackageReference Include="NuGet.PackageManagement" Version="7.9.0" />
 		<PackageReference Include="Samboy063.Tomlet" Version="6.2.0" />
-		<PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+		<PackageReference Include="Serilog.Extensions.Hosting" Version="11.0.0" />
 		<PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
 		<PackageReference Include="Serilog.Sinks.TextWriter" Version="3.0.0" />
 		<PackageReference Include="ZLinq" Version="1.6.1" />
