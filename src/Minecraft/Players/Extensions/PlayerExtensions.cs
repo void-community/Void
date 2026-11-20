@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.Loader;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -198,7 +199,8 @@ public static class PlayerExtensions
         /// <exception cref="ArgumentOutOfRangeException">A linked player is supplied a direction other than clientbound or serverbound.</exception>
         public void RegisterPacket<T>(Direction direction, Operation operation, params MinecraftPacketIdMapping[] mappings) where T : IMinecraftPacket
         {
-            var plugin = player.Context.Services.GetRequiredService<IPluginService>().GetPluginFromType<T>();
+            if (FindPlugin<T>(player) is null)
+                return;
 
             if (player.WeakLink is { } link)
             {
@@ -256,13 +258,10 @@ public static class PlayerExtensions
         /// </remarks>
         public void RegisterPacket<T>(INetworkChannel channel, Operation operation, params MinecraftPacketIdMapping[] mappings) where T : IMinecraftPacket
         {
-            channel
-                .MinecraftRegistries.PacketIdPlugins
-                .Get(operation, player
-                    .Context.Services
-                    .GetRequiredService<IPluginService>()
-                    .GetPluginFromType<T>())
-                .RegisterPacket<T>(player.AsMinecraft.ProtocolVersion, mappings);
+            if (FindPlugin<T>(player) is not { } plugin)
+                return;
+
+            channel.MinecraftRegistries.PacketIdPlugins.Get(operation, plugin).RegisterPacket<T>(player.AsMinecraft.ProtocolVersion, mappings);
         }
 
         /// <summary>
@@ -274,7 +273,9 @@ public static class PlayerExtensions
         [Obsolete($"Use {nameof(RegisterTransformations)}<T>({nameof(INetworkChannel)}, {nameof(MinecraftPacketTransformationMapping)}[]) instead.")]
         public void RegisterTransformations<T>(params MinecraftPacketTransformationMapping[] mappings) where T : IMinecraftPacket
         {
-            var plugin = player.Context.Services.GetRequiredService<IPluginService>().GetPluginFromType<T>();
+            if (FindPlugin<T>(player) is not { } plugin)
+                return;
+
             var link = player.Link ?? throw new InvalidOperationException("Cannot register packet transformations without an established link.");
 
             link.PlayerChannel.MinecraftRegistries.PacketTransformationsPlugins.Get(plugin).RegisterTransformations<T>(player.AsMinecraft.ProtocolVersion, mappings);
@@ -289,7 +290,9 @@ public static class PlayerExtensions
         /// <param name="mappings">The protocol-version-specific transformation mappings.</param>
         public void RegisterTransformations<T>(INetworkChannel channel, params MinecraftPacketTransformationMapping[] mappings) where T : IMinecraftPacket
         {
-            var plugin = player.Context.Services.GetRequiredService<IPluginService>().GetPluginFromType<T>();
+            if (FindPlugin<T>(player) is not { } plugin)
+                return;
+
             channel.MinecraftRegistries.PacketTransformationsPlugins.Get(plugin).RegisterTransformations<T>(player.AsMinecraft.ProtocolVersion, mappings);
         }
 
@@ -298,5 +301,17 @@ public static class PlayerExtensions
             minecraftPlayer = player as MinecraftPlayer;
             return minecraftPlayer is not null;
         }
+    }
+
+    // A listener that an event invoked as its plugin unloaded registers the plugin's packets once the plugin is gone, which then go nowhere, as
+    // the plugin's registries went with it. A type of no plugin is still told of.
+    private static IPlugin? FindPlugin<T>(IPlayer player)
+    {
+        var plugins = player.Context.Services.GetRequiredService<IPluginService>();
+
+        if (plugins.TryGetPluginFromType(typeof(T), out var plugin))
+            return plugin;
+
+        return AssemblyLoadContext.GetLoadContext(typeof(T).Assembly) is { IsCollectible: true } ? null : plugins.GetPluginFromType<T>();
     }
 }

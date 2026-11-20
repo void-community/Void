@@ -38,6 +38,7 @@ public abstract class ModdedConnectionsFixture(ModLoader loader, ProtocolVersion
     private static readonly TimeSpan CatchUpPeriod = TimeSpan.FromDays(183);
 
     private static readonly ConcurrentDictionary<string, bool> AnnotatedSkipReasons = new();
+    private const int FailureLogLines = 20;
 
     // The image rejects a release its loader has no build for, or a mod has no build for, before the server starts.
     private const string ModMissingMessage = "Invalid parameter provided for 'modrinth' command";
@@ -150,7 +151,10 @@ public abstract class ModdedConnectionsFixture(ModLoader loader, ProtocolVersion
                 // A mod can declare nothing wrong and still crash its server, such as one built against another loader build. Anything else
                 // that stops a server, such as a timeout, fails with its cause rather than trying the next mod.
                 failures.Add(exception);
-                Console.WriteLine($"[Void.IntegrationTests] {loader} servers for Minecraft {release} with {contentMod} didn't start");
+
+                // The end of the server's log tells a mod that crashed it from a download that failed meanwhile, which the next mod would hit too
+                var lastLines = string.Join('\n', exception.Message.Split('\n').TakeLast(FailureLogLines));
+                Console.WriteLine($"[Void.IntegrationTests] {loader} servers for Minecraft {release} with {contentMod} didn't start:\n{lastLines}");
             }
         }
 

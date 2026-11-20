@@ -62,10 +62,14 @@ public static class NetworkTransformations
                 RegisterMappings<SystemChatMessagePacket>(link, SystemChatMessage.SelectMany(systemChatMessage => systemChatMessage.Mappings));
                 RegisterMappings<NbtDisconnectPacket>(link, PlayDisconnect.SelectMany(playDisconnect => playDisconnect.Mappings));
                 break;
+            case Phase.Configuration:
+                // Players are disconnected while they configure too, with the reason as JSON before 1.20.3
+                ArgumentNullException.ThrowIfNull(link);
+                RegisterMappings<NbtDisconnectPacket>(link, PlayDisconnect.SelectMany(playDisconnect => playDisconnect.Mappings));
+                break;
             case Phase.Handshake:
             case Phase.Status:
             case Phase.Login:
-            case Phase.Configuration:
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(phase), phase, null);

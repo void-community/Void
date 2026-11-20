@@ -30,8 +30,6 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             .WithEnvironment("EULA", "TRUE")
             .WithEnvironment("TYPE", vanilla ? "VANILLA" : "PAPER")
             .WithEnvironment("VERSION", release.ToString())
-            .WithEnvironment("DIFFICULTY", "peaceful")
-            .WithEnvironment("MODE", "creative")
             .WithEnvironment("GENERATE_STRUCTURES", "FALSE")
             .WithEnvironment("SPAWN_ANIMALS", "FALSE")
             .WithEnvironment("SPAWN_MONSTERS", "FALSE")
@@ -47,6 +45,8 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
             .WithWaitStrategy(Wait.ForUnixContainer()
                 .UntilMessageIsLogged("For help, type \"help\"", options => options.WithTimeout(TimeSpan.FromMinutes(10))));
 
+        builder = WithCreativePeaceful(builder, release);
+
         // Paper's own settings: a longer keep-alive, and no throttle on players that reconnect at once, which vanilla servers don't have.
         if (!vanilla)
         {
@@ -61,11 +61,11 @@ public record PaperServer(IContainer Container, string LogFileName) : MinecraftS
                 .WithEnvironment("CFG_BUKKIT_CONNECTION_THROTTLE", "-1");
         }
 
-        builder = builder.WithEnvironment("JAVA_AGENTS", ModLoaderFixes.Url.ToString());
+        builder = await ModLoaderFixes.AddToAsync(builder, cancellationToken);
 
         if (maximumPlayers is { } value)
             builder = builder.WithEnvironment("MAX_PLAYERS", value.ToString());
 
-        return new PaperServer(await StartContainerAsync(builder, $"{(vanilla ? "Vanilla" : "Paper")} server for Minecraft {release}", cancellationToken), logFileName);
+        return new PaperServer(await StartContainerAsync(builder, $"{(vanilla ? "Vanilla" : "Paper")} server for Minecraft {release}", release, cancellationToken), logFileName);
     }
 }

@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using System.Threading;
 using Void.Minecraft.Network;
+using Void.Minecraft.Players.Extensions;
 using Void.Minecraft.Profiles;
 using Void.Proxy.Api.Players;
 using Void.Proxy.Api.Players.Contexts;
@@ -76,6 +78,17 @@ public class MinecraftPlayer(TcpClient client, IPlayerContext context, string re
     public override string ToString()
     {
         return Profile?.Username ?? RemoteEndPoint;
+    }
+
+    /// <summary>
+    /// Sends a message to the player's chat, with the legacy <c>&amp;</c> formatting codes it contains.
+    /// </summary>
+    /// <param name="message">The message to send.</param>
+    /// <param name="cancellationToken">A token used to cancel sending.</param>
+    /// <returns>A task that completes when chat-send event handlers have processed the message.</returns>
+    public async ValueTask SendMessageAsync(string message, CancellationToken cancellationToken = default)
+    {
+        await this.SendChatMessageAsync(message, cancellationToken);
     }
 
     /// <summary>

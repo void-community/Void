@@ -24,7 +24,8 @@ public class FailoverService(IServerService servers) : IEventListener
     [Subscribe]
     public void OnMessageReceived(MessageReceivedEvent @event)
     {
-        if (@event.Message is not DisconnectPacket disconnect || @event.Result || !@event.Link.IsAlive || @event.Player.Phase is not Phase.Play)
+        // A link stops as its server closes the connection, and still reads what the server sent last, such as this kick
+        if (@event.Message is not DisconnectPacket disconnect || @event.Result || @event.Link is null || @event.Player.Phase is not Phase.Play)
             return;
 
         if (!servers.All.Any(server => server != @event.Link.Server))

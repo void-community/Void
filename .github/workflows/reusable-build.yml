@@ -90,6 +90,8 @@ jobs:
         if: ${{ steps.restore.outcome == 'failure' }}
         shell: bash
         run: |
+          # A runner that can't reach nuget.org can't for a minute or so, so the second try waits for it
+          sleep 60
           dotnet restore ${{ matrix.parameters }}
           dotnet restore src/Platform --runtime ${{ matrix.runtime-identifier }} -p:SelfContained=true -p:PublishSingleFile=true ${{ matrix.parameters }}
 

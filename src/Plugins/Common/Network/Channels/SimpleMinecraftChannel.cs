@@ -4,6 +4,7 @@ using Void.Minecraft.Network.Messages.Packets;
 using Void.Minecraft.Network.Streams.Packet;
 using Void.Proxy.Api.Network;
 using Void.Proxy.Api.Network.Channels;
+using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Api.Network.Messages;
 using Void.Proxy.Api.Network.Streams;
 using Void.Proxy.Api.Network.Streams.Manual.Binary;
@@ -149,19 +150,30 @@ public class SimpleMinecraftChannel(IMessageStreamBase head) : INetworkChannel
         // Underlying streams are often non-thread-safe during writes
         using var _ = await _writeLock.LockAsync(cancellationToken);
 
-        switch (head)
+        // A message goes out in several writes, and one cut short leaves the other side reading the rest of the connection from the middle of
+        // a message, so once it starts it is written whole. The network stream still gives up on a write that takes too long.
+        try
         {
-            case IMinecraftPacketMessageStream stream:
-                await stream.WritePacketAsync(message as IMinecraftPacket ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(IMinecraftPacket)}."), cancellationToken);
-                break;
-            case ICompleteMessageStream stream:
-                await stream.WriteMessageAsync(message as CompleteBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(CompleteBinaryMessage)}."), cancellationToken);
-                break;
-            case IBufferedMessageStream stream:
-                await stream.WriteAsMessageAsync(message as BufferedBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(BufferedBinaryMessage)}."), cancellationToken);
-                break;
-            default:
-                throw new InvalidOperationException($"{head.GetType()} cannot be used to write messages");
+            switch (head)
+            {
+                case IMinecraftPacketMessageStream stream:
+                    await stream.WritePacketAsync(message as IMinecraftPacket ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(IMinecraftPacket)}."), CancellationToken.None);
+                    break;
+                case ICompleteMessageStream stream:
+                    await stream.WriteMessageAsync(message as CompleteBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(CompleteBinaryMessage)}."), CancellationToken.None);
+                    break;
+                case IBufferedMessageStream stream:
+                    await stream.WriteAsMessageAsync(message as BufferedBinaryMessage ?? throw new InvalidCastException($"Unable to cast object of type {message.GetType()} to type {typeof(BufferedBinaryMessage)}."), CancellationToken.None);
+                    break;
+                default:
+                    throw new InvalidOperationException($"{head.GetType()} cannot be used to write messages");
+            }
+        }
+        catch (InvalidOperationException) when (!CanWrite)
+        {
+            // A player kicked as its protocol unloads is closed before the protocol takes its packets away, so a packet that is no longer
+            // registered on a closed channel goes nowhere either
+            throw new StreamClosedException();
         }
     }
 

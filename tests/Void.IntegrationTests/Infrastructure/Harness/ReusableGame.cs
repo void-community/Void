@@ -21,8 +21,6 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public string LogFileName => "client.log";
     public IEnumerable<string> Logs => _client?.Logs ?? [];
 
-    private static IReadOnlyList<Uri> JavaAgents => [ModLoaderFixes.Url];
-
     private string GameName => setup?.ToString() ?? $"Minecraft {protocolVersion.FirstRelease}";
 
     public async Task<IEnumerable<string>> ReadLogsAsync(DateTime since, CancellationToken cancellationToken = default)
@@ -43,7 +41,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         if (_session is not null)
             throw new InvalidOperationException($"{testName} can't play a game another test is still playing");
 
-        _client ??= await PortableMinecraftClient.CreateAsync(JavaAgents, cancellationToken);
+        _client ??= await PortableMinecraftClient.CreateAsync(cancellationToken);
 
         try
         {
@@ -67,12 +65,7 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
     public async Task ReleaseAsync()
     {
         await StopGameAsync();
-
-        if (_client is not { } client)
-            return;
-
-        _client = null;
-        await client.DisposeAsync();
+        await DisposeClientAsync();
     }
 
     internal async Task EndSessionAsync(GameSession session, bool discardGame)
@@ -119,6 +112,18 @@ public sealed class ReusableGame(ProtocolVersion protocolVersion, GameSetup? set
         catch (Exception exception)
         {
             await PortableMinecraftClient.Game.LogAsync($"Stopping {game.GameName} failed: {exception.Message}", CancellationToken.None);
+
+            // A client that couldn't stop its game refuses to launch another, so the next test starts another client
+            await DisposeClientAsync();
         }
+    }
+
+    private async Task DisposeClientAsync()
+    {
+        if (_client is not { } client)
+            return;
+
+        _client = null;
+        await client.DisposeAsync();
     }
 }

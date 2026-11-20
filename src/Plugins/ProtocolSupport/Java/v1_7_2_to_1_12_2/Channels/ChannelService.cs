@@ -58,24 +58,16 @@ public class ChannelService : AbstractChannelService
 
     protected override bool IsSupportedHandshake(Memory<byte> memory, [MaybeNullWhen(false)] out ProtocolVersion protocolVersion)
     {
-        try
-        {
-            var buffer = new MinecraftBuffer(memory.Span);
-            var length = buffer.ReadVarInt();
-            var packet = buffer.Read(length);
+        var buffer = new MinecraftBuffer(memory.Span);
+        var length = buffer.ReadVarInt();
+        var packet = buffer.Read(length);
 
-            buffer = new MinecraftBuffer(packet);
-            var packetId = buffer.ReadVarInt();
+        buffer = new MinecraftBuffer(packet);
+        var packetId = buffer.ReadVarInt();
 
-            var decoded = HandshakePacket.Decode(ref buffer, Plugin.SupportedVersions.First());
-            protocolVersion = ProtocolVersion.Get(decoded.ProtocolVersion);
+        var decoded = HandshakePacket.Decode(ref buffer, Plugin.SupportedVersions.First());
+        protocolVersion = ProtocolVersion.Get(decoded.ProtocolVersion);
 
-            return packetId == 0 && Plugin.SupportedVersions.Contains(protocolVersion) && !buffer.HasData;
-        }
-        catch
-        {
-            protocolVersion = null;
-            return false;
-        }
+        return packetId == 0 && Plugin.SupportedVersions.Contains(protocolVersion) && !buffer.HasData;
     }
 }

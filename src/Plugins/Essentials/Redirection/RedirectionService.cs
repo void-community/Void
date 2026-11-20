@@ -14,7 +14,7 @@ using Void.Proxy.Plugins.Common.Services;
 
 namespace Void.Proxy.Plugins.Essentials.Redirection;
 
-public class RedirectionService(ILogger<RedirectionService> logger, Plugin plugin, IServerService servers, ICommandService commands, ILinkService links) : IPluginCommonService
+public class RedirectionService(Plugin plugin, IServerService servers, ICommandService commands, ILinkService links) : IPluginCommonService
 {
     [Subscribe]
     public void OnPluginLoading(PluginLoadingEvent @event)
@@ -35,7 +35,7 @@ public class RedirectionService(ILogger<RedirectionService> logger, Plugin plugi
     {
         if (context.Source is not IPlayer player)
         {
-            logger.LogInformation("This command can be executed only by a player");
+            await context.Source.SendMessageAsync("This command can be executed only by a player", cancellationToken);
             return 1;
         }
 

@@ -40,8 +40,8 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
     {
         var eventType = @event.GetType();
 
-        var invoked = new HashSet<InvokedListenerMethod>(InvokedListenerMethodComparer.Instance);
-        var firstParameterTypeCache = new Dictionary<MethodInfo, Type>(ReferenceEqualityComparer.Instance);
+        var invoked = new HashSet<WeakEntry>(InvokedEntryComparer.Instance);
+        var invokedEntries = invoked.GetAlternateLookup<Entry>();
 
         // Listeners are often registered while the event is invoked, such as by the listeners it invokes, so the entries are read again until
         // they have no more candidates
@@ -86,31 +86,19 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
             for (var entryIndex = 0; entryIndex < entries.Length; entryIndex++)
             {
                 var entry = entries[entryIndex];
-                var invokedKey = new InvokedListenerMethod(entry.Listener, entry.Method);
 
-                if (invoked.Contains(invokedKey))
+                // Most entries listen to other events, and the key holds weak references, which cost more than the check
+                if (!eventType.IsAssignableTo(entry.EventType))
                     continue;
 
-                if (!firstParameterTypeCache.TryGetValue(entry.Method, out var firstParameterType))
-                {
-                    firstParameterType = entry.Method.GetParameters()[0].ParameterType;
-                    firstParameterTypeCache.Add(entry.Method, firstParameterType);
-                }
-
-                if (!eventType.IsAssignableTo(firstParameterType))
+                // Found by the entry itself, so an entry already invoked, as every one is on the last pass, costs no weak references
+                if (invokedEntries.Contains(entry))
                     continue;
 
-                invoked.Add(invokedKey);
+                var weakEntry = InvokedEntryComparer.Instance.Create(entry);
 
-                candidates.Add(new InvocationCandidate(
-                    entry.Order,
-                    entryIndex,
-                    new WeakEntry(
-                        new WeakReference<IEventListener>(entry.Listener),
-                        new WeakReference<MethodInfo>(entry.Method),
-                        entry.Order,
-                        entry.BypassScopedFilter,
-                        entry.CancellationToken)));
+                invoked.Add(weakEntry);
+                candidates.Add(new InvocationCandidate(entry.Order, entryIndex, weakEntry));
             }
 
             return candidates;
@@ -174,7 +162,7 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
 
                     var attribute = method.GetCustomAttribute<SubscribeAttribute>()
                                     ?? throw new InvalidOperationException($"Method {method.Name} does not define {nameof(SubscribeAttribute)}.");
-                    listenerEntries.Add(new Entry(listener, method, attribute.Order, attribute.BypassScopedFilter, cancellationToken));
+                    listenerEntries.Add(new Entry(listener, method, method.GetParameters()[0].ParameterType, attribute.Order, attribute.BypassScopedFilter, cancellationToken));
                 }
 
                 type = type.BaseType;
@@ -221,8 +209,6 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
 
             if (!entry.IsCompatible(eventType))
                 continue;
-
-            await Task.Yield();
 
             if (!entry.BypassScopedFilter && @event is IScopedEvent scopedEvent)
             {
@@ -278,7 +264,7 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
     [LoggerMessage(LogLevel.Error, "Failed to resolve {ServiceType} for scoped event {EventType}. Reason:")]
     partial void LogFailedToResolveServiceTypeForScopedEventEventTypeReason(string? serviceType, string? eventType, Exception exception);
 
-    private record WeakEntry(WeakReference<IEventListener> ListenerReference, WeakReference<MethodInfo> MethodReference, PostOrder Order, bool BypassScopedFilter, CancellationToken CancellationToken)
+    private record WeakEntry(WeakReference<IEventListener> ListenerReference, WeakReference<MethodInfo> MethodReference, int IdentityHashCode, PostOrder Order, bool BypassScopedFilter, CancellationToken CancellationToken)
     {
         public IEventListener? Listener => ListenerReference.TryGetTarget(out var listener) ? listener : null;
         public MethodInfo? Method => MethodReference.TryGetTarget(out var method) ? method : null;
@@ -286,24 +272,46 @@ public partial class EventService(ILogger<EventService> logger, IContainer conta
         public bool IsCompatible(Type eventType) => MethodReference.TryGetTarget(out var method) && eventType.IsAssignableTo(method.GetParameters()[0].ParameterType);
     }
 
-    private record Entry(IEventListener Listener, MethodInfo Method, PostOrder Order, bool BypassScopedFilter, CancellationToken CancellationToken);
+    private record Entry(IEventListener Listener, MethodInfo Method, Type EventType, PostOrder Order, bool BypassScopedFilter, CancellationToken CancellationToken);
 
     private readonly record struct InvocationCandidate(PostOrder Order, int Sequence, WeakEntry WeakEntry);
 
-    private readonly record struct InvokedListenerMethod(IEventListener Listener, MethodInfo Method);
-
-    private sealed class InvokedListenerMethodComparer : IEqualityComparer<InvokedListenerMethod>
+    // The invoked entries are kept weakly, as an event can take long to invoke, such as the one a player connects with while it waits for the
+    // player, and the plugins of the listeners it already invoked may unload meanwhile. They are the weak entries the event invokes anyway,
+    // told apart by the listener and method they were made of.
+    private sealed class InvokedEntryComparer : IEqualityComparer<WeakEntry>, IAlternateEqualityComparer<Entry, WeakEntry>
     {
-        public static readonly InvokedListenerMethodComparer Instance = new();
+        public static readonly InvokedEntryComparer Instance = new();
 
-        public bool Equals(InvokedListenerMethod left, InvokedListenerMethod right)
+        public bool Equals(WeakEntry? left, WeakEntry? right)
         {
-            return ReferenceEquals(left.Listener, right.Listener) && ReferenceEquals(left.Method, right.Method);
+            if (ReferenceEquals(left, right))
+                return true;
+
+            if (left is null || right is null || left.IdentityHashCode != right.IdentityHashCode)
+                return false;
+
+            return left.Listener is { } listener && ReferenceEquals(listener, right.Listener) && left.Method is { } method && ReferenceEquals(method, right.Method);
         }
 
-        public int GetHashCode(InvokedListenerMethod value)
+        public int GetHashCode(WeakEntry value)
         {
-            return HashCode.Combine(RuntimeHelpers.GetHashCode(value.Listener), RuntimeHelpers.GetHashCode(value.Method));
+            return value.IdentityHashCode;
+        }
+
+        public bool Equals(Entry entry, WeakEntry other)
+        {
+            return ReferenceEquals(entry.Listener, other.Listener) && ReferenceEquals(entry.Method, other.Method);
+        }
+
+        public int GetHashCode(Entry entry)
+        {
+            return HashCode.Combine(RuntimeHelpers.GetHashCode(entry.Listener), RuntimeHelpers.GetHashCode(entry.Method));
+        }
+
+        public WeakEntry Create(Entry entry)
+        {
+            return new WeakEntry(new WeakReference<IEventListener>(entry.Listener), new WeakReference<MethodInfo>(entry.Method), GetHashCode(entry), entry.Order, entry.BypassScopedFilter, entry.CancellationToken);
         }
     }
 }

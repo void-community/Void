@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using Void.Proxy.Api.Network.Exceptions;
 using Void.Proxy.Plugins.Common.Network.Streams.Network;
 using Xunit;
 
@@ -31,6 +32,34 @@ public class SimpleNetworkStreamTests
         var actualBytes = new byte[expectedBytes.Length];
         await stream.ReadExactlyAsync(actualBytes, cancellationToken);
         Assert.Equal(expectedBytes, actualBytes);
+    }
+
+    [Fact]
+    public async Task WaitForDataAsync_WithClosedPeer_ReturnsAndReadTellsClosedAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (receivingClient, sendingClient) = await CreateConnectedClientsAsync(cancellationToken);
+        using var receivingClientScope = receivingClient;
+        using var stream = new SimpleNetworkStream(receivingClient.GetStream());
+
+        var waitTask = stream.WaitForDataAsync(cancellationToken).AsTask();
+        sendingClient.Dispose();
+        await waitTask.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        await Assert.ThrowsAsync<StreamClosedException>(async () => await stream.ReadExactlyAsync(new byte[1], cancellationToken));
+    }
+
+    [Fact]
+    public async Task WaitForDataAsync_WithPrependedBytes_ReturnsAtOnceAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (receivingClient, sendingClient) = await CreateConnectedClientsAsync(cancellationToken);
+        using var receivingClientScope = receivingClient;
+        using var sendingClientScope = sendingClient;
+        using var stream = new SimpleNetworkStream(receivingClient.GetStream());
+        stream.PrependBuffer(new byte[] { 1 });
+
+        await stream.WaitForDataAsync(cancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
     }
 
     [Fact]
