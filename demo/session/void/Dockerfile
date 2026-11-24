@@ -1,6 +1,6 @@
 FROM tsl0922/ttyd@sha256:974d056ecba8d000395a5971123640adf58b3bb300f643ff2abba190a0c19637 AS ttyd_source
 
-FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS tmux_source
+FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e AS tmux_source
 RUN apt-get update && apt-get install -y --no-install-recommends tmux && rm -rf /var/lib/apt/lists/*
 RUN set -e; \
   mkdir -p /out/usr/local/tmux/bin /out/usr/local/tmux/lib; \
